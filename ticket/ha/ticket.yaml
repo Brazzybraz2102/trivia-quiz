@@ -1,0 +1,55 @@
+# Home Assistant package for ticket.
+# 1. In configuration.yaml:   homeassistant: { packages: !include_dir_named packages }
+# 2. Copy this file to <config>/packages/ticket.yaml
+# 3. In secrets.yaml add:
+#      ticket_print_today_url: http://<desktop-ip>:8787/print/today
+#      ticket_key: <same TICKET_KEY as ticket/.env>
+# 4. Replace the two CHANGEME entity IDs below, then reload YAML.
+#
+# The office-entry automation is the ONLY automatic print. The server guards it: a second
+# source="auto" call on the same day returns {"status": "skipped"}, so HA retries,
+# presence flapping or a restart can never print twice.
+
+rest_command:
+  ticket_today_auto:
+    url: !secret ticket_print_today_url   # e.g. http://<desktop-ip>:8787/print/today
+    method: POST
+    headers:
+      X-Ticket-Key: !secret ticket_key
+    content_type: application/json
+    payload: '{"source": "auto"}'
+    timeout: 30
+  ticket_today_manual:
+    url: !secret ticket_print_today_url
+    method: POST
+    headers:
+      X-Ticket-Key: !secret ticket_key
+    content_type: application/json
+    payload: '{"source": "manual"}'
+    timeout: 30
+
+automation:
+  - id: ticket_auto_today_on_office_entry
+    alias: "ticket: print today when I enter the office (once a day)"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.CHANGEME_office_presence
+        from: "off"
+        to: "on"
+    condition:
+      - condition: time
+        after: "05:00:00"
+        before: "20:00:00"
+    action:
+      - service: rest_command.ticket_today_auto
+
+  - id: ticket_button_print_today
+    alias: "ticket: button prints today"
+    mode: single
+    trigger:
+      # For a physical button exposed as an event entity or input_button, use a state trigger:
+      - platform: state
+        entity_id: input_button.CHANGEME_ticket_button
+    action:
+      - service: rest_command.ticket_today_manual

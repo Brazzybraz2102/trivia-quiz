@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ticket</title>
+<style>
+  :root { --bg:#fafaf7; --fg:#1b1b1b; --muted:#6b6b6b; --line:#dcdcd4; --accent:#1f5eff; --warn:#b3261e; --ok:#1d7a3a; --card:#fff; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141414; --fg:#eee; --muted:#a0a0a0; --line:#333; --accent:#7ea2ff; --warn:#ff8a80; --ok:#7bd88f; --card:#1d1d1d; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:20px; margin:0; }
+  #status { font-size:13px; color:var(--muted); margin-left:auto; }
+  nav { display:flex; gap:4px; padding:8px 16px; border-bottom:1px solid var(--line); overflow-x:auto; }
+  nav button { background:none; border:0; padding:8px 12px; border-radius:8px; color:var(--fg); font:inherit; cursor:pointer; }
+  nav button.on { background:var(--accent); color:#fff; }
+  main { max-width:720px; margin:0 auto; padding:16px; }
+  section { display:none; } section.on { display:block; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+  .card h2 { font-size:16px; margin:0 0 8px; }
+  input[type=text], input[type=password], textarea { width:100%; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  textarea { min-height:80px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+  button.go { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:10px 14px; font:inherit; cursor:pointer; }
+  button.go.warn { background:var(--warn); }
+  button.plain { background:none; border:1px solid var(--line); color:var(--fg); border-radius:8px; padding:9px 13px; font:inherit; cursor:pointer; }
+  .dry { font-size:14px; }
+  .muted { color:var(--muted); font-size:14px; }
+  .result img, .hist img { max-width:100%; border:1px solid var(--line); border-radius:6px; background:#fff; margin-top:8px; }
+  .pending { border-left:4px solid var(--warn); padding-left:10px; margin:10px 0; }
+  .applied { color:var(--ok); }
+  .hist .item { display:flex; justify-content:space-between; gap:8px; }
+  .err { color:var(--warn); }
+</style>
+</head>
+<body>
+<header><h1>ticket</h1><span id="status">…</span></header>
+<nav>
+  <button data-tab="print" class="on">Print</button>
+  <button data-tab="scan">Read back</button>
+  <button data-tab="printed">Printed</button>
+  <button data-tab="settings">Settings</button>
+</nav>
+<main>
+  <section id="print" class="on">
+    <label class="dry"><input type="checkbox" id="dry" checked> Dry run (render only, don't print)</label>
+    <div class="card"><h2>Today</h2>
+      <p class="muted">Today + overdue from Todoist.</p>
+      <button class="go" data-act="today">Print today</button></div>
+    <div class="card"><h2>List from a filter</h2>
+      <input type="text" id="query" placeholder="#Groceries, p1, @errands, tomorrow…">
+      <div class="row"><button class="go" data-act="list">Print list</button></div></div>
+    <div class="card"><h2>Note or new task</h2>
+      <textarea id="text" placeholder="First line becomes the title if you add it to Todoist"></textarea>
+      <div class="row"><button class="go" data-act="text">Print note</button>
+        <button class="plain" data-act="todo">Add to Todoist + print</button></div></div>
+    <div class="card"><h2>One task</h2>
+      <input type="text" id="taskid" placeholder="Todoist task ID">
+      <div class="row"><button class="go" data-act="task">Print task</button></div></div>
+    <div class="card result" id="printResult" hidden></div>
+  </section>
+
+  <section id="scan">
+    <div class="card"><h2>Photo read-back</h2>
+      <p class="muted">Mark the label ✓ done, → tomorrow, ✗ drop, then take a photo. Drops and anything uncertain wait for you here.</p>
+      <input type="file" id="photo" accept="image/*" capture="environment">
+      <div class="row"><input type="text" id="scanLabel" placeholder="Label code (optional, e.g. a3f29c)"></div>
+      <div class="row"><button class="go" id="scanGo">Read back</button></div></div>
+    <div id="scanResult"></div>
+  </section>
+
+  <section id="printed"><div id="hist" class="hist"></div></section>
+
+  <section id="settings">
+    <div class="card"><h2>Server key</h2>
+      <p class="muted">The TICKET_KEY from the server's .env. Stored in this browser only.</p>
+      <input type="password" id="key">
+      <div class="row"><button class="go" id="saveKey">Save</button></div></div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
