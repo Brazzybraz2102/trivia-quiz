@@ -1,18 +1,39 @@
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
-function getKey() { try { return localStorage.getItem("ticketKey") || ""; } catch { return ""; } }
-function setKey(k) { try { localStorage.setItem("ticketKey", k); } catch {} }
-
 async function api(path, opts = {}) {
-  const headers = { "X-Ticket-Key": getKey(), ...(opts.headers || {}) };
+  const headers = { ...(opts.headers || {}) };
   if (opts.json) { headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(opts.json); }
-  const r = await fetch(path, { ...opts, headers });
+  const r = await fetch(path, { ...opts, headers, credentials: "same-origin" });
   const body = await r.json().catch(() => ({}));
+  if (r.status === 401 && !path.startsWith("/auth/")) { showLogin("Your session ended. Sign in again."); }
   if (!r.ok) throw new Error(body.detail || `${r.status}`);
   return body;
 }
-const png = (id) => `/printed/${id}/png?k=${encodeURIComponent(getKey())}&t=${Date.now()}`;
+const png = (id) => `/printed/${id}/png?t=${Date.now()}`;
+
+function showLogin(msg = "") {
+  $("#appShell").hidden = true;
+  $("#login").hidden = false;
+  $("#loginMsg").textContent = msg;
+  $("#user").focus();
+}
+function showApp(username) {
+  $("#who").textContent = username;
+  $("#login").hidden = true;
+  $("#appShell").hidden = false;
+  refreshStatus();
+}
+
+$("#loginForm").onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api("/auth/login", { method: "POST", json: { username: $("#user").value, password: $("#pass").value } });
+    $("#pass").value = "";
+    showApp(r.username);
+  } catch (err) { $("#loginMsg").textContent = err.message; }
+};
+$("#logout").onclick = async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); showLogin("Signed out."); };
 
 // tabs
 document.querySelectorAll("nav button").forEach((b) => b.onclick = () => {
@@ -22,7 +43,6 @@ document.querySelectorAll("nav button").forEach((b) => b.onclick = () => {
 });
 
 async function refreshStatus() {
-  if (!getKey()) { $("#status").textContent = "Set your key in Settings"; return; }
   try {
     const s = await api("/status");
     $("#status").textContent = `printer ${s.printer_reachable ? "online" : "offline"}${s.dry_run_forced ? " · server dry-run" : ""}`;
@@ -100,6 +120,4 @@ async function loadHistory() {
   } catch (e) { $("#hist").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
 
-$("#key").value = getKey();
-$("#saveKey").onclick = () => { setKey($("#key").value.trim()); refreshStatus(); };
-refreshStatus();
+api("/auth/me").then((r) => showApp(r.username)).catch((e) => showLogin(e.message === "sign in required" ? "" : e.message));

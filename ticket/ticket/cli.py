@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import mimetypes
 import shutil
@@ -10,6 +11,7 @@ import sys
 from pathlib import Path
 
 from . import jobs, printer, scan
+from .auth import Accounts, AuthError
 from .config import load_settings
 from .jobs import Context
 from .store import Store
@@ -27,6 +29,30 @@ def _show(result: dict) -> None:
         return
     print(f"{status}: {result.get('kind')} #{result.get('id')} ({len(result.get('manifest', []))} rows)")
     print(f"png: {result.get('png')}")
+
+
+def _user(accounts: Accounts, action: str, username: str | None) -> int:
+    if action == "list":
+        print("\n".join(accounts.list_users()) or "(no accounts)")
+        return 0
+    if not username:
+        print("username required", file=sys.stderr)
+        return 2
+    try:
+        if action == "remove":
+            accounts.remove_user(username)
+            print(f"removed {username}; their sessions are signed out")
+            return 0
+        pw = getpass.getpass(f"password for {username}: ")
+        if pw != getpass.getpass("again: "):
+            print("passwords don't match", file=sys.stderr)
+            return 1
+        accounts.set_password(username, pw, create=action == "add")
+        print(f"{'created' if action == 'add' else 'updated'} {username}")
+        return 0
+    except AuthError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -57,6 +83,9 @@ def main(argv: list[str] | None = None) -> int:
     cf = sub.add_parser("confirm", help="review a scan's pending items one by one")
     cf.add_argument("scan_id")
     sub.add_parser("serve", help="run the HTTP server")
+    us = sub.add_parser("user", help="manage web sign-in accounts")
+    us.add_argument("action", choices=["add", "passwd", "remove", "list"])
+    us.add_argument("username", nargs="?")
 
     args = ap.parse_args(argv)
     settings = load_settings()
@@ -68,6 +97,8 @@ def main(argv: list[str] | None = None) -> int:
             out = {"printer_reachable": printer.is_reachable(settings.printer_ip), **settings.redacted()}
             print(json.dumps(out, indent=2))
             return 0 if out["printer_reachable"] else 1
+        if args.cmd == "user":
+            return _user(Accounts(settings.data_dir), args.action, args.username)
         if args.cmd == "serve":
             import uvicorn
 

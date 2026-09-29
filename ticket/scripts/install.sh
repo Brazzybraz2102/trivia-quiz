@@ -56,3 +56,6 @@ systemctl --user --no-pager status ticket.service | head -5
 IP="$(hostname -I | awk '{print $1}')"
 echo
 echo "Web app: http://$IP:8787/app"
+if .venv/bin/ticket user list | grep -q '(no accounts)'; then
+  echo "No sign-in accounts yet. Create yours with: .venv/bin/ticket user add <name>"
+fi

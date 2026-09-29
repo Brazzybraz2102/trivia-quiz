@@ -7,7 +7,7 @@ Read SPEC.md first. Its §1 rules override everything:
 - Never add an automatic print, cron or retry. The only automatic print is HA's `source="auto"`, guarded by `Store.claim_auto`.
 - Deleting a Todoist task always needs Mike's explicit confirmation.
 - Never print, echo or log `.env` values. `Settings.redacted()` is the only thing that's safe to show.
-- LAN only.
+- LAN only. People sign in with local accounts (`ticket/auth.py`). Don't add web sign-up or a cloud login.
 
 Dev loop:
 ```

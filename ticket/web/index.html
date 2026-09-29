@@ -32,15 +32,28 @@
   .applied { color:var(--ok); }
   .hist .item { display:flex; justify-content:space-between; gap:8px; }
   .err { color:var(--warn); }
+  #login { max-width:380px; margin:12vh auto 0; padding:0 16px; }
+  #login label { display:block; margin-top:10px; font-size:14px; }
+  #login input { margin-top:4px; }
 </style>
 </head>
 <body>
+<div id="login" hidden>
+  <form class="card" id="loginForm" autocomplete="on">
+    <h2>Sign in</h2>
+    <p class="muted" id="loginMsg"></p>
+    <label>Username<input type="text" id="user" name="username" autocomplete="username" autocapitalize="none" required></label>
+    <label>Password<input type="password" id="pass" name="password" autocomplete="current-password" required></label>
+    <div class="row"><button class="go" type="submit">Sign in</button></div>
+  </form>
+</div>
+<div id="appShell" hidden>
 <header><h1>ticket</h1><span id="status">…</span></header>
 <nav>
   <button data-tab="print" class="on">Print</button>
   <button data-tab="scan">Read back</button>
   <button data-tab="printed">Printed</button>
-  <button data-tab="settings">Settings</button>
+  <button data-tab="settings">Account</button>
 </nav>
 <main>
   <section id="print" class="on">
@@ -73,12 +86,13 @@
   <section id="printed"><div id="hist" class="hist"></div></section>
 
   <section id="settings">
-    <div class="card"><h2>Server key</h2>
-      <p class="muted">The TICKET_KEY from the server's .env. Stored in this browser only.</p>
-      <input type="password" id="key">
-      <div class="row"><button class="go" id="saveKey">Save</button></div></div>
+    <div class="card"><h2>Account</h2>
+      <p>Signed in as <b id="who"></b></p>
+      <p class="muted">Change a password on the desktop: <code>ticket user passwd &lt;name&gt;</code> (signs out every device).</p>
+      <div class="row"><button class="plain" id="logout">Sign out</button></div></div>
   </section>
 </main>
+</div>
 <script src="app.js"></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from ticket.auth import Accounts
 from ticket.scan import ReadBack, RowMark
 from ticket.server import create_app
 
@@ -9,7 +10,7 @@ H = {"X-Ticket-Key": "k"}
 def client(ctx, rows=None):
     def vision(image, media_type, manifest):
         return ReadBack(label_code=None, rows=[RowMark(**r) for r in rows or []])
-    return TestClient(create_app(ctx, vision=vision))
+    return TestClient(create_app(ctx, vision=vision), base_url="http://testserver")
 
 
 def test_auth_required(ctx):
@@ -37,7 +38,8 @@ def test_print_types_and_history(ctx):
     c.post("/print/list", json={"query": "p1"}, headers=H)
     c.post("/print/task", json={"task_id": "1"}, headers=H)
     r = c.post("/print/text", json={"text": "hello"}, headers=H).json()
-    assert c.get(f"/printed/{r['id']}/png", params={"k": "k"}).headers["content-type"] == "image/png"
+    assert c.get(f"/printed/{r['id']}/png", headers=H).headers["content-type"] == "image/png"
+    assert c.get(f"/printed/{r['id']}/png", params={"k": "k"}).status_code == 401  # no keys in URLs
     assert len(c.get("/printed", headers=H).json()) == 3
 
 
@@ -56,3 +58,68 @@ def test_scan_multipart_then_confirm(ctx, todo):
 def test_scan_rejects_non_images(ctx):
     r = client(ctx).post("/scan", headers=H, files={"photo": ("a.txt", b"x", "text/plain")})
     assert r.status_code == 415
+
+
+def signed_in(ctx):
+    Accounts(ctx.settings.data_dir).set_password("mike", "correct horse", create=True)
+    c = client(ctx)
+    r = c.post("/auth/login", json={"username": "Mike", "password": "correct horse"})
+    assert r.status_code == 200 and r.json() == {"username": "mike"}
+    return c
+
+
+def test_me_explains_when_no_accounts(ctx):
+    r = client(ctx).get("/auth/me")
+    assert r.status_code == 401 and "ticket user add" in r.json()["detail"]
+
+
+def test_sign_in_with_cookie(ctx):
+    c = signed_in(ctx)
+    cookie = c.cookies.get("ticket_session")
+    assert cookie
+    assert c.get("/auth/me").json() == {"username": "mike"}
+    assert c.post("/print/today", json={}).json()["status"] == "dry_run"
+    # the session file never holds the raw token
+    assert cookie not in (ctx.settings.data_dir / "sessions.json").read_text()
+
+
+def test_wrong_password_and_rate_limit(ctx):
+    Accounts(ctx.settings.data_dir).set_password("mike", "correct horse", create=True)
+    c = client(ctx)
+    for _ in range(5):
+        assert c.post("/auth/login", json={"username": "mike", "password": "nope"}).status_code == 401
+    assert c.post("/auth/login", json={"username": "mike", "password": "correct horse"}).status_code == 429
+
+
+def test_logout_ends_session(ctx):
+    c = signed_in(ctx)
+    c.post("/auth/logout")
+    assert c.get("/auth/me").status_code == 401
+    assert c.post("/print/today", json={}).status_code == 401
+
+
+def test_cross_site_write_refused(ctx):
+    c = signed_in(ctx)
+    r = c.post("/print/today", json={}, headers={"Origin": "http://evil.example"})
+    assert r.status_code == 403
+    assert c.post("/print/today", json={}, headers={"Origin": "http://testserver"}).status_code == 200
+
+
+def test_bearer_token_for_native_apps(ctx):
+    Accounts(ctx.settings.data_dir).set_password("mike", "correct horse", create=True)
+    c = client(ctx)
+    tok = c.post("/auth/login", json={"username": "mike", "password": "correct horse",
+                                      "want_token": True}).json()["token"]
+    assert "ticket_session" not in c.cookies
+    assert c.get("/auth/me", headers={"Authorization": f"Bearer {tok}"}).json()["username"] == "mike"
+
+
+def test_password_change_and_removal_sign_out(ctx):
+    c = signed_in(ctx)
+    accts = Accounts(ctx.settings.data_dir)
+    accts.set_password("mike", "new password!")
+    assert c.get("/auth/me").status_code == 401
+    c = signed_in_again = client(ctx)
+    signed_in_again.post("/auth/login", json={"username": "mike", "password": "new password!"})
+    accts.remove_user("mike")
+    assert c.get("/auth/me").status_code == 401

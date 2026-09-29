@@ -13,8 +13,10 @@ Todoist ↔ Brother QL-1110NWB label printer, running on Mike's desktop and reac
 4. **Dry-run for development**: `--dry-run`, `TICKET_DRY_RUN=1`, or `dry_run: true` in the API.
 5. **Secrets live only in `.env`** (chmod 600). `/status` and `ticket status` show whether each
    one is set, never its value.
-6. **LAN only**: no cloud relay, accounts or remote access. The server binds to 0.0.0.0:8787 and
-   every endpoint except `/health` and the static `/app` requires `X-Ticket-Key`.
+6. **LAN only**: no cloud relay and no remote access. The server binds to 0.0.0.0:8787.
+7. **Sign-in**: people sign in to the web app with local accounts that live only on the desktop
+   (`ticket user add/passwd/remove/list`). There's no web sign-up and no cloud identity provider.
+   Home Assistant and scripts use the shared `X-Ticket-Key` header instead.
 
 ## 2. Hardware
 - Brother QL-1110NWB on Wi-Fi, raw TCP port 9100.
@@ -43,7 +45,19 @@ The code is the label ID that read-back uses to find the manifest.
 `GET /scans` · `GET /scan/{id}` · `POST /scan/{id}/confirm {decisions:{row:"confirm"|"skip"}}` ·
 `/app` (web app) · `/docs` (OpenAPI).
 
-Auth uses the `X-Ticket-Key` header, or `?k=` for `<img>` URLs. CORS is open because the key is the gate.
+Auth: `POST /auth/login {username,password}` sets an HttpOnly, SameSite=Strict `ticket_session`
+cookie that lasts 30 days. With `want_token: true` it returns a bearer token instead, for the
+native app (`Authorization: Bearer ...`). `POST /auth/logout` ends the session and `GET /auth/me`
+says who's signed in. Home Assistant and scripts send `X-Ticket-Key`. Keys are never accepted in
+URLs.
+
+Security details:
+- Passwords are hashed with scrypt, and the session file only holds SHA-256 hashes of tokens.
+- `users.json` and `sessions.json` are chmod 600.
+- After 5 failed logins from one IP in 5 minutes, that IP gets 429.
+- Changing or removing an account signs out all of its sessions.
+- A cookie-authenticated write whose `Origin` is a different site is refused with 403.
+- CORS doesn't allow credentials, so cookies only work on the same origin.
 
 ## 8. Photo read-back (Phase 2)
 1. `POST /scan` with a photo. Claude vision (`TICKET_VISION_MODEL`, default `claude-sonnet-5-5`)
@@ -60,7 +74,9 @@ Auth uses the `X-Ticket-Key` header, or `?k=` for `<img>` URLs. CORS is open bec
 
 ## 9. Phase checklist
 ### Phase A: desktop
-- [x] A1 service, venv, pytest green (19 tests)
+- [x] A1 service, venv, pytest green (28 tests)
+- [x] Web sign-in: local accounts, 30-day sessions, bearer tokens for native apps
+- [ ] Sign-in: `ticket user add mike` on the desktop (NEEDS MIKE)
 - [ ] A1 `.env` filled on the desktop (NEEDS MIKE)
 - [ ] A2 `ticket status` → dry-run today → first real print → layout tuning
 - [x] A3 server changes: CORS, web app at `/app`, multipart `/scan`, python-multipart

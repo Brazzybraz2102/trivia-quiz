@@ -1,21 +1,36 @@
-"""HTTP API for the web app, phone app and Home Assistant. LAN only."""
+"""HTTP API for the web app, phone app and Home Assistant. LAN only.
+
+Two ways in:
+- people sign in with a username + password (session cookie, or a bearer token for native apps)
+- Home Assistant and scripts send the shared X-Ticket-Key header
+"""
 from __future__ import annotations
 
 import secrets
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
+from urllib.parse import urlparse
+
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import jobs, printer, scan
+from .auth import Accounts
 from .config import PROJECT_DIR
 from .jobs import Context
 
 WEB_DIR = PROJECT_DIR / "web"
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
+COOKIE = "ticket_session"
+
+
+class LoginBody(BaseModel):
+    username: str
+    password: str
+    want_token: bool = False  # native apps: return a bearer token instead of relying on cookies
 
 
 class TodayBody(BaseModel):
@@ -45,16 +60,66 @@ class ConfirmBody(BaseModel):
     decisions: dict[int, str]  # {row: "confirm" | "skip"}
 
 
-def create_app(ctx: Context, vision: scan.VisionFn | None = None) -> FastAPI:
+def create_app(ctx: Context, vision: scan.VisionFn | None = None,
+               accounts: Accounts | None = None) -> FastAPI:
     app = FastAPI(title="ticket", docs_url="/docs")
+    # No allow_credentials: cookies only work same-origin; other clients use headers.
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                        allow_headers=["*"])
     key = ctx.settings.ticket_key
+    accounts = accounts or Accounts(ctx.settings.data_dir)
 
-    def auth(x_ticket_key: str | None = Header(default=None), k: str | None = Query(default=None)):
-        supplied = x_ticket_key or k or ""
-        if not key or not secrets.compare_digest(supplied.encode(), key.encode()):
-            raise HTTPException(401, "missing or wrong X-Ticket-Key")
+    def _bearer(request: Request) -> str | None:
+        h = request.headers.get("authorization", "")
+        return h[7:].strip() if h.lower().startswith("bearer ") else None
+
+    def auth(request: Request, x_ticket_key: str | None = Header(default=None)) -> str:
+        """Returns who is calling: a username, or "key" for Home Assistant/scripts."""
+        if x_ticket_key:
+            if key and secrets.compare_digest(x_ticket_key.encode(), key.encode()):
+                return "key"
+            raise HTTPException(401, "wrong X-Ticket-Key")
+        bearer = _bearer(request)
+        user = accounts.session_user(bearer or request.cookies.get(COOKIE))
+        if not user:
+            raise HTTPException(401, "sign in required")
+        if not bearer and request.method not in {"GET", "HEAD", "OPTIONS"}:
+            # Cookie-authenticated writes must come from this site's own pages.
+            origin = request.headers.get("origin")
+            if origin and urlparse(origin).netloc != request.headers.get("host"):
+                raise HTTPException(403, "cross-site request refused")
+        return user
+
+    @app.post("/auth/login")
+    def login(body: LoginBody, request: Request, response: Response):
+        client = request.client.host if request.client else "?"
+        if accounts.too_many_failures(client):
+            raise HTTPException(429, "too many attempts; wait 5 minutes")
+        if not accounts.verify(body.username, body.password):
+            accounts.record_failure(client)
+            raise HTTPException(401, "wrong username or password")
+        accounts.clear_failures(client)
+        username = body.username.strip().lower()
+        token = accounts.create_session(username)
+        if body.want_token:
+            return {"username": username, "token": token}
+        response.set_cookie(COOKIE, token, max_age=30 * 86400, httponly=True, samesite="strict",
+                            secure=request.url.scheme == "https", path="/")
+        return {"username": username}
+
+    @app.post("/auth/logout")
+    def logout(request: Request, response: Response):
+        accounts.end_session(_bearer(request) or request.cookies.get(COOKIE))
+        response.delete_cookie(COOKIE, path="/")
+        return {"ok": True}
+
+    @app.get("/auth/me")
+    def me(request: Request):
+        user = accounts.session_user(_bearer(request) or request.cookies.get(COOKIE))
+        if not user:
+            raise HTTPException(401, "sign in required" if accounts.has_users()
+                                else "no accounts yet: run `ticket user add <name>` on the desktop")
+        return {"username": user}
 
     def run(fn, *args, **kwargs):
         try:

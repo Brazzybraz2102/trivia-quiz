@@ -43,8 +43,22 @@ If it comes out faint, cramped or rotated, tell Claude and it'll tune `ticket/re
 ```bash
 scripts/install.sh          # second run: installs the systemd user service and enables linger
 ```
-It ends by printing the web app address, `http://<desktop-ip>:8787/app`. Open that on your
-phone or laptop, go to **Settings**, and paste your `TICKET_KEY`.
+Then create your sign-in (the password is typed twice and never shown):
+```bash
+.venv/bin/ticket user add mike
+```
+The install script ends by printing the web app address, `http://<desktop-ip>:8787/app`. Open
+that on any phone or laptop on your Wi-Fi and sign in. You stay signed in for 30 days per device.
+
+Accounts are managed only on the desktop; the web app has no sign-up page:
+| Want | Run |
+|---|---|
+| Add someone | `ticket user add <name>` |
+| Change a password (signs out their devices) | `ticket user passwd <name>` |
+| Remove someone | `ticket user remove <name>` |
+| See accounts | `ticket user list` |
+
+Everyone who signs in uses the same Todoist account, the one whose token is in `.env`.
 
 ### 6. Hotkey: copy text, press a key, it's a task with a ticket
 ```bash
@@ -76,6 +90,7 @@ scripts/hotkey.sh '<Super><Shift>t'             # then for real
 | Clipboard → Todoist + ticket | your hotkey |
 | Read back | Mark ✓ done, → tomorrow or ✗ drop, then web app → Read back → photo. Deletes and anything uncertain wait for Confirm/Skip. CLI: `ticket scan photo.jpg`, then `ticket confirm <scan-id>` |
 | History | web app → Printed, or `ticket printed` |
+| Sign out | web app → Account → Sign out |
 
 ## Troubleshooting
 - `printer_reachable: false`: check that the printer is on the same Wi-Fi and give it a DHCP reservation so its IP stays fixed.
