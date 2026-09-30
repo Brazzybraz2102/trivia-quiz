@@ -18,7 +18,7 @@ Mark = Literal["done", "tomorrow", "drop", "none"]
 
 
 class RowMark(BaseModel):
-    row: int = Field(description="The row number printed next to the checkbox")
+    row: int = Field(description="Task row number, counting from 1 at the top")
     mark: Mark
     confidence: float = Field(description="0.0-1.0: how sure you are about this row's mark")
     note: str = Field(default="", description="Anything odd, e.g. 'mark is between rows 3 and 4'")
@@ -32,16 +32,19 @@ class ReadBack(BaseModel):
 # (image bytes, media type, manifest) -> ReadBack. Swapped for a fake in tests.
 VisionFn = Callable[[bytes, str, list[dict]], ReadBack]
 
-PROMPT = """This is a photo of a printed to-do label. Each row has a checkbox, a row number, and a task.
+PROMPT = """This is a photo of a printed to-do label. Each task row has a checkbox on the right.
+Number the task rows 1, 2, 3... from top to bottom (skip anything in the "Also waiting" footer).
 The person marked rows by hand:
 - a check mark (✓) in or near the box means "done"
 - an arrow (→) means "move to tomorrow"
 - a cross (✗ or X) or a line struck through the task means "drop"
 - an empty box means "none"
+- anything else (an up arrow, a circle, a note) is not one of these: use the closest mark with
+  confidence below 0.5 and describe what you saw in the note
 
 Report every numbered row you can see, with the mark and your confidence.
 Be conservative: if a mark is ambiguous, smudged, or could belong to a neighbouring row, lower the confidence.
-Also read the short code printed at the bottom right after '#'.
+Also read the code printed at the bottom left after '#' (like 260930-X5C8).
 {manifest_hint}"""
 
 
@@ -54,7 +57,7 @@ def claude_vision(settings) -> VisionFn:
         hint = ""
         if manifest:
             listing = "\n".join(f"{m['row']}. {m['content']}" for m in manifest)
-            hint = f"\nThe label is expected to contain these rows:\n{listing}"
+            hint = f"\nThe label should list these task rows, in this order:\n{listing}"
         response = client.messages.parse(
             model=settings.vision_model,
             max_tokens=4000,

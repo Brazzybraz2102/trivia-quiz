@@ -44,13 +44,13 @@ def test_print_types_and_history(ctx):
 
 
 def test_scan_multipart_then_confirm(ctx, todo):
-    c = client(ctx, rows=[{"row": 4, "mark": "drop", "confidence": 0.99}])
+    c = client(ctx, rows=[{"row": 3, "mark": "drop", "confidence": 0.99}])  # row 3 = task #4
     label = c.post("/print/today", json={}, headers=H).json()
     rec = c.post("/scan", headers=H, data={"label_id": label["id"]},
                  files={"photo": ("p.jpg", b"fake", "image/jpeg")}).json()
     assert rec["needs_confirmation"][0]["task_id"] == "4"
     assert not any(call[0] == "delete" for call in todo.calls)
-    out = c.post(f"/scan/{rec['id']}/confirm", json={"decisions": {"4": "confirm"}}, headers=H).json()
+    out = c.post(f"/scan/{rec['id']}/confirm", json={"decisions": {"3": "confirm"}}, headers=H).json()
     assert out["needs_confirmation"][0]["status"] == "applied"
     assert ("delete", "4") in todo.calls
 

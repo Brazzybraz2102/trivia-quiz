@@ -34,10 +34,24 @@ Todoist ↔ Brother QL-1110NWB label printer, running on Mike's desktop and reac
 
 The API also takes `"dry_run": true` on every print endpoint.
 
-## 4. Label layout
-Title and date, then numbered checkbox rows with tags on the right (`late`, `p1`/`p2`, `↻` for
-recurring), then the legend `✓ done → tomorrow ✗ drop` and a `#code` in the bottom-right corner.
-The code is the label ID that read-back uses to find the manifest.
+## 4. Label layout (today and list prints)
+- **Header:** the big day name and the date, then the legend `✓ done → move ✗ drop`.
+- **Rows:** each row has a time column (a blank write-in line if the task has no time), the task
+  text, and a checkbox on the right.
+- **Urgent tasks** (p1/p2) are bold with a leading `!`.
+- **Tags** after the text: `overdue Nd` and `↻` for recurring tasks.
+- **Row order:**
+  1. today's timed tasks, by time
+  2. urgent tasks
+  3. the rest of today
+  4. overdue tasks, most recently due first
+- **Overflow:** at most 10 rows. The rest are listed under "Also waiting (N)" and can't be marked.
+- **Footer:** `#YYMMDD-XXXX` at the bottom left, where XXXX is 4 characters with no 0/O/1/I.
+  This is the label ID that read-back uses to find the manifest.
+- **Rows aren't numbered on paper.** Read-back counts the task rows from the top, and the manifest
+  stores that same order.
+- **Marks outside the legend** (for example ↑) come back below 0.7 confidence, so they always wait
+  for confirmation.
 
 ## 5. Endpoints
 `GET /health` · `GET /status` · `GET /tasks?query=` · `POST /print/{today,list,task,text}` ·

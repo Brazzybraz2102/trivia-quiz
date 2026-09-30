@@ -9,8 +9,8 @@ def test_today_dry_run_renders_png_and_manifest(ctx):
     assert r["status"] == "dry_run"
     img = Image.open(r["png"])
     assert img.width == WIDTH and img.height > 200
-    # overdue first, then by priority
-    assert [m["task_id"] for m in r["manifest"]] == ["3", "1", "2", "4"]
+    # urgent first (#1 p1), then the rest of today (#2, #4), then overdue (#3)
+    assert [m["task_id"] for m in r["manifest"]] == ["1", "2", "4", "3"]
     assert [m["row"] for m in r["manifest"]] == [1, 2, 3, 4]
     assert ctx.store.get_printed(r["id"])["manifest"] == r["manifest"]
 
@@ -55,3 +55,24 @@ def test_long_words_wrap_without_overflow(ctx, todo):
     todo.tasks["1"]["content"] = "x" * 300
     r = jobs.print_today(ctx)
     assert Image.open(r["png"]).width == WIDTH
+
+
+def test_timed_tasks_first_and_overflow_goes_to_waiting(ctx, todo):
+    todo.tasks["t"] = {"id": "t", "content": "Standup", "priority": 1,
+                       "due": {"date": "2026-09-28T09:00:00"}}
+    for i in range(12):
+        todo.tasks[f"x{i}"] = {"id": f"x{i}", "content": f"Chore {i}", "priority": 1,
+                               "due": {"date": "2026-09-28"}}
+    r = jobs.print_today(ctx)
+    assert r["manifest"][0]["task_id"] == "t"
+    assert len(r["manifest"]) == jobs.MAX_ROWS
+    assert r["id"].startswith("260928-") and len(r["id"]) == 11
+
+
+def test_time_and_tag_helpers():
+    from datetime import date
+    assert jobs._time({"due": {"date": "2026-09-30T19:00:00"}}) == "7:00p"
+    assert jobs._time({"due": {"date": "2026-09-30T00:05:00"}}) == "12:05a"
+    assert jobs._time({"due": {"date": "2026-09-30"}}) == ""
+    assert jobs._tag({"due": {"date": "2026-09-28"}}, date(2026, 9, 30)) == "overdue 2d"
+    assert jobs._tag({"due": {"date": "2026-09-30", "is_recurring": True}}, date(2026, 9, 30)) == "↻"

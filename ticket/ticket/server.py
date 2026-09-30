@@ -6,6 +6,7 @@ Two ways in:
 """
 from __future__ import annotations
 
+import re
 import secrets
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from pydantic import BaseModel
 
 from . import jobs, printer, scan
 from .auth import Accounts
+from .store import normalize_id
 from .config import PROJECT_DIR
 from .jobs import Context
 
@@ -173,8 +175,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.get("/printed/{label_id}/png", dependencies=[Depends(auth)])
     def printed_png(label_id: str):
-        path = ctx.store.png_path(label_id.lower())
-        if not label_id.isalnum() or not path.exists():
+        label_id = normalize_id(label_id)
+        path = ctx.store.png_path(label_id)
+        if not re.fullmatch(r"[A-Z0-9-]{4,16}", label_id) or not path.exists():
             raise HTTPException(404)
         return FileResponse(path, media_type="image/png")
 

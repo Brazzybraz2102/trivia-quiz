@@ -10,8 +10,15 @@ import fcntl
 import json
 import os
 import secrets
+from datetime import date
 from pathlib import Path
 from typing import Iterator
+
+ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def normalize_id(label_id: str) -> str:
+    return label_id.strip().lstrip("#").upper()
 
 
 class Store:
@@ -36,8 +43,10 @@ class Store:
         os.replace(tmp, path)
 
     @staticmethod
-    def new_id() -> str:
-        return secrets.token_hex(3)  # 6 hex chars; printed on the label as #abc123
+    def new_id(day: date | None = None) -> str:
+        """e.g. 260930-X5C8: printed date + 4 unambiguous characters (no 0/O, 1/I)."""
+        day = day or date.today()
+        return f"{day:%y%m%d}-" + "".join(secrets.choice(ID_ALPHABET) for _ in range(4))
 
     # --- auto guard -------------------------------------------------------
     def claim_auto(self, day: str, dry_run: bool) -> bool:
@@ -72,7 +81,7 @@ class Store:
             self._write(self.root / "printed" / f"{record['id']}.json", record)
 
     def get_printed(self, label_id: str) -> dict | None:
-        path = self.root / "printed" / f"{label_id.lstrip('#').lower()}.json"
+        path = self.root / "printed" / f"{normalize_id(label_id)}.json"
         return json.loads(path.read_text()) if path.exists() else None
 
     def list_printed(self, limit: int = 50) -> list[dict]:

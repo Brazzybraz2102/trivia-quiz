@@ -12,11 +12,12 @@ from PIL import Image
 
 from . import printer
 from .config import Settings
-from .render import Row, render_label
+from .render import DayRow, render_day, render_label
 from .store import Store
 from .todoist import Todoist
 
 TODAY_QUERY = "today | overdue"
+MAX_ROWS = 10  # the rest are listed under "Also waiting" (not markable)
 
 
 @dataclass
@@ -44,23 +45,46 @@ def _clean(content: str) -> str:
     return re.sub(r"[*_`]{1,2}", "", content).strip()
 
 
-def _meta(task: dict, today: date) -> str:
-    bits = []
+def _time(task: dict) -> str:
+    """Todoist puts the time in due.date ("2026-09-30T19:00:00") or due.datetime."""
     due = task.get("due") or {}
-    if due.get("date") and due["date"][:10] < today.isoformat():
-        bits.append("late")
-    if task.get("priority") == 4:
-        bits.append("p1")
-    elif task.get("priority") == 3:
-        bits.append("p2")
+    raw = due.get("datetime") or due.get("date") or ""
+    if len(raw) < 16:
+        return ""
+    hour, minute = int(raw[11:13]), raw[14:16]
+    return f"{hour % 12 or 12}:{minute}{'a' if hour < 12 else 'p'}"
+
+
+def _tag(task: dict, today: date) -> str:
+    due = task.get("due") or {}
+    bits = []
+    if due.get("date"):
+        late = (today - date.fromisoformat(due["date"][:10])).days
+        if late > 0:
+            bits.append(f"overdue {late}d")
     if due.get("is_recurring"):
         bits.append("↻")
     return " ".join(bits)
 
 
-def _sort_key(task: dict):
+def _sort_key(task: dict, today: date):
+    """Today's timed items in time order, then urgent, then the rest of today, then overdue
+    newest first, so long-stale tasks sink into "Also waiting" instead of crowding out today."""
     due = task.get("due") or {}
-    return (due.get("date", "9999")[:10], -int(task.get("priority", 1)), task.get("child_order", 0))
+    day = (due.get("date") or "9999")[:10]
+    is_today = day == today.isoformat()
+    timed = bool(_time(task)) and is_today
+    urgent = int(task.get("priority", 1)) >= 3
+    group = 0 if timed else 1 if urgent else 2 if is_today else 3
+    days_late = (today - date.fromisoformat(day)).days if day != "9999" else 0
+    return (group, _time_minutes(task) if timed else 0, -int(task.get("priority", 1)), days_late,
+            task.get("child_order", 0))
+
+
+def _time_minutes(task: dict) -> int:
+    due = task.get("due") or {}
+    raw = due.get("datetime") or due.get("date") or ""
+    return int(raw[11:13]) * 60 + int(raw[14:16]) if len(raw) >= 16 else 0
 
 
 def _finish(ctx: Context, *, kind: str, title: str, img: Image.Image, label_id: str,
@@ -88,12 +112,14 @@ def _finish(ctx: Context, *, kind: str, title: str, img: Image.Image, label_id: 
 def _task_label(ctx: Context, *, kind: str, title: str, subtitle: str, tasks: list[dict],
                 source: str, dry_run: bool | None) -> dict:
     today = ctx.today()
-    tasks = sorted(tasks, key=_sort_key)
-    label_id = ctx.store.new_id()
+    tasks = sorted(tasks, key=lambda t: _sort_key(t, today))
+    shown, waiting = tasks[:MAX_ROWS], tasks[MAX_ROWS:]
+    label_id = ctx.store.new_id(today)
     rows, manifest = [], []
-    for n, task in enumerate(tasks, start=1):
+    for n, task in enumerate(shown, start=1):
         due = task.get("due") or {}
-        rows.append(Row(n, _clean(task["content"]), _meta(task, today)))
+        rows.append(DayRow(_clean(task["content"]), _time(task), int(task.get("priority", 1)) >= 3,
+                           _tag(task, today)))
         manifest.append({
             "row": n,
             "task_id": str(task["id"]),
@@ -101,7 +127,11 @@ def _task_label(ctx: Context, *, kind: str, title: str, subtitle: str, tasks: li
             "due_date": (due.get("date") or "")[:10] or None,
             "is_recurring": bool(due.get("is_recurring")),
         })
-    img = render_label(title, subtitle, rows=rows, code=label_id)
+    now = datetime.now()
+    made = f"{now:%a} {now.hour % 12 or 12}:{now:%M}{'a' if now.hour < 12 else 'p'}"
+    footer = f"{kind}  {today.isoformat()}  made {made}"
+    img = render_day(title, subtitle, rows, code=label_id, footer=footer,
+                     waiting=[_clean(t["content"]) for t in waiting])
     return _finish(ctx, kind=kind, title=title, img=img, label_id=label_id,
                    manifest=manifest, source=source, dry_run=dry_run)
 
@@ -119,8 +149,8 @@ def print_today(ctx: Context, source: str = "manual", dry_run: bool | None = Non
         if source == "auto":
             ctx.store.release_auto(today.isoformat(), dry)  # nothing printed, so no reprint risk
         raise
-    title = "TODAY"
-    subtitle = today.strftime("%A %b %-d")
+    title = today.strftime("%A")
+    subtitle = today.strftime("%B %-d")
     return _task_label(ctx, kind="today", title=title, subtitle=subtitle, tasks=tasks,
                        source=source, dry_run=dry_run)
 
@@ -128,13 +158,13 @@ def print_today(ctx: Context, source: str = "manual", dry_run: bool | None = Non
 def print_filter(ctx: Context, query: str, title: str | None = None,
                  dry_run: bool | None = None, source: str = "manual") -> dict:
     tasks = ctx.todoist.filter_tasks(query)
-    return _task_label(ctx, kind="list", title=title or query, subtitle=ctx.today().strftime("%a %b %-d"),
+    return _task_label(ctx, kind="list", title=title or query, subtitle=ctx.today().strftime("%b %-d"),
                        tasks=tasks, source=source, dry_run=dry_run)
 
 
 def print_task(ctx: Context, task_id: str, dry_run: bool | None = None, source: str = "manual") -> dict:
     task = ctx.todoist.get_task(task_id)
-    label_id = ctx.store.new_id()
+    label_id = ctx.store.new_id(ctx.today())
     due = task.get("due") or {}
     subtitle = f"due {due['date'][:10]}" if due.get("date") else ""
     img = render_label(_clean(task["content"]), subtitle, body=task.get("description", ""), code=label_id)
@@ -147,7 +177,7 @@ def print_task(ctx: Context, task_id: str, dry_run: bool | None = None, source: 
 
 def print_text(ctx: Context, text: str, title: str = "NOTE", dry_run: bool | None = None,
                source: str = "manual") -> dict:
-    label_id = ctx.store.new_id()
+    label_id = ctx.store.new_id(ctx.today())
     img = render_label(title, ctx.today().strftime("%a %b %-d"), body=text, code=label_id)
     return _finish(ctx, kind="text", title=title, img=img, label_id=label_id, manifest=[],
                    source=source, dry_run=dry_run, text=text)

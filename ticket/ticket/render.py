@@ -101,12 +101,123 @@ def render_label(title: str, subtitle: str = "", rows: list[Row] | None = None,
         y += 4
         d.line((MARGIN, y, WIDTH - MARGIN, y), fill=0, width=2)
         y += 10
-        d.text((MARGIN, y), "✓ done    → tomorrow    ✗ drop", font=small_f, fill=0)
+        d.text((MARGIN, y), "✓ done    → move    ✗ drop", font=small_f, fill=0)
         y += 28
     if code:
         w = d.textlength(f"#{code}", font=meta_f)
         d.text((WIDTH - MARGIN - w, y), f"#{code}", font=meta_f, fill=0)
         y += 32
     y += MARGIN
+    img = canvas.crop((0, 0, WIDTH, y))
+    return img.point(lambda p: 0 if p < 128 else 255, mode="1")
+
+
+@dataclass
+class DayRow:
+    text: str
+    time: str = ""        # "9:00a"; blank rows get a write-in line
+    urgent: bool = False  # p1/p2: bold with a leading "!"
+    tag: str = ""         # "overdue 2d", "↻"
+
+
+def _dotted(d: ImageDraw.ImageDraw, y: int, x0: int, x1: int) -> None:
+    for x in range(x0, x1, 8):
+        d.line((x, y, x + 3, y), fill=0, width=2)
+
+
+def render_day(day_name: str, date_text: str, rows: list[DayRow], code: str, footer: str = "",
+               subtitle: str = "", waiting: list[str] | None = None) -> Image.Image:
+    """The daily sheet: big day name, legend on top, time column, checkboxes on the right.
+    Read-back matches rows top to bottom against the manifest, so row order is the contract."""
+    day_f, date_f, sub_f = _font(84, True), _font(40, True), _font(28)
+    legend_f, time_f = _font(28), _font(28, True)
+    text_f, text_bold_f, tag_f = _font(31), _font(31, True), _font(22)
+    wait_bold_f, wait_f, code_f, foot_f = _font(25, True), _font(25), _font(26, True), _font(20)
+
+    canvas = Image.new("L", (WIDTH, 5000), 255)
+    d = ImageDraw.Draw(canvas)
+    left, right = MARGIN + 4, WIDTH - MARGIN - 4
+    y = MARGIN + 6
+
+    dw = d.textlength(date_text, font=date_f)
+    size = 84
+    while size > 48 and d.textlength(day_name, font=day_f) + dw + 24 > right - left:
+        size -= 4
+        day_f = _font(size, True)
+    d.text((left, y), day_name, font=day_f, fill=0)
+    base = y + int(size * 0.98)  # approximate baseline, so the date sits on the same line
+    d.text((right - dw, base - 40), date_text, font=date_f, fill=0)
+    y += int(size * 1.2)
+    if subtitle:
+        d.text((left, y), subtitle, font=sub_f, fill=0)
+        y += 38
+    d.line((left, y, right, y), fill=0, width=4)
+    y += 10
+    legend = "✓ done    → move    ✗ drop"
+    lw = d.textlength(legend, font=legend_f)
+    d.text(((WIDTH - lw) / 2, y), legend, font=legend_f, fill=0)
+    y += 40
+    d.line((left, y, right, y), fill=0, width=2)
+    y += 12
+
+    box = 44
+    box_x = right - box
+    time_w = 112
+    text_x = left + time_w
+    text_max = box_x - 16 - text_x
+    if not rows:
+        d.text((text_x, y), "Nothing due. Nice.", font=text_f, fill=0)
+        y += 56
+    for row in rows:
+        top = y
+        font = text_bold_f if row.urgent else text_f
+        text = f"! {row.text}" if row.urgent else row.text
+        lines = _wrap(d, text, font, text_max)
+        tag_w = d.textlength(row.tag, font=tag_f) + 12 if row.tag else 0
+        tag_on_own_line = bool(row.tag) and d.textlength(lines[-1], font=font) + tag_w > text_max
+        for i, line in enumerate(lines):
+            d.text((text_x, y), line, font=font, fill=0)
+            if i == len(lines) - 1 and row.tag and not tag_on_own_line:
+                d.text((text_x + d.textlength(line, font=font) + 12, y + 8), row.tag, font=tag_f, fill=0)
+            y += 40
+        if tag_on_own_line:
+            d.text((text_x, y - 4), row.tag, font=tag_f, fill=0)
+            y += 28
+        if row.time:
+            d.text((left, top + 2), row.time, font=time_f, fill=0)
+        else:
+            d.line((left, top + 32, left + time_w - 20, top + 32), fill=0, width=2)
+        row_h = max(y - top, box + 8)
+        d.rectangle((box_x, top + (row_h - box) // 2 - 2, box_x + box, top + (row_h - box) // 2 - 2 + box),
+                    outline=0, width=3)
+        y = top + row_h + 8
+        _dotted(d, y - 4, left, right)
+        y += 8
+
+    if waiting:
+        y += 4
+        d.line((left, y, right, y), fill=0, width=2)
+        y += 10
+        head = f"Also waiting ({len(waiting)}): "
+        body_lines = _wrap(d, head + " · ".join(waiting), wait_f, right - left)[:2]
+        full = " ".join(body_lines)
+        if len(full) < len(head + " · ".join(waiting)):
+            body_lines[-1] = body_lines[-1].rstrip(" ·") + "…"
+        for i, line in enumerate(body_lines):
+            if i == 0 and line.startswith(head.strip()):
+                d.text((left, y), head, font=wait_bold_f, fill=0)
+                d.text((left + d.textlength(head, font=wait_bold_f), y), line[len(head):], font=wait_f, fill=0)
+            else:
+                d.text((left, y), line, font=wait_f, fill=0)
+            y += 34
+
+    y += 10
+    d.line((left, y, right, y), fill=0, width=4)
+    y += 12
+    d.text((left, y), f"#{code}", font=code_f, fill=0)
+    if footer:
+        fw = d.textlength(footer, font=foot_f)
+        d.text((right - fw, y + 5), footer, font=foot_f, fill=0)
+    y += 36 + MARGIN
     img = canvas.crop((0, 0, WIDTH, y))
     return img.point(lambda p: 0 if p < 128 else 255, mode="1")
