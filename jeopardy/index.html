@@ -1,0 +1,847 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Braznarkel Trivia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600;700&family=Spectral:wght@600;700&display=swap">
+<style>
+/* Layout: a game-show stage. Header strip on top, the blue board fills the middle,
+   the team podium rail runs along the bottom; clues take over the whole screen. */
+:root {
+  --stage: #050826;
+  --panel: #0c1352;
+  --board: #0a1ab4;
+  --board-hi: #1a33e6;
+  --tile-used: #070e5a;
+  --line: #22309a;
+  --gold: #f6c544;
+  --ink: #ffffff;
+  --muted: #a7b0e6;
+  --right: #34d07a;
+  --wrong: #ff5d63;
+  --f-display: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+  --f-clue: "Spectral", Georgia, "Times New Roman", serif;
+  --f-ui: "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--stage);
+  color: var(--ink);
+  font: 15px/1.45 var(--f-ui);
+  padding-inline: 16px;
+}
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+
+.app { min-height: 100%; display: flex; flex-direction: column; gap: 14px; padding-block: 14px; }
+
+/* ---------- shared bits ---------- */
+.logo {
+  font-family: var(--f-display); font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--gold); text-shadow: 0 3px 0 #000a; line-height: 1;
+}
+.btn {
+  border: 1px solid var(--line); background: var(--panel); border-radius: 8px;
+  padding: 8px 14px; font-weight: 600; white-space: nowrap;
+}
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--gold); color: #1a1400; border-color: var(--gold); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.danger { color: var(--wrong); }
+.btn.armed { background: var(--wrong); color: #fff; border-color: var(--wrong); }
+.btn:disabled { opacity: .45; cursor: default; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.spacer { flex: 1; }
+.label { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.field { background: var(--stage); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; width: 100%; }
+textarea.field { resize: vertical; min-height: 54px; }
+.hint { color: var(--muted); font-size: 13px; }
+
+/* ---------- setup / editor ---------- */
+.setup-head { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: end; }
+.setup-head .logo { font-size: clamp(2.2rem, 6vw, 3.6rem); }
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); }
+.tab {
+  background: none; border: 0; border-bottom: 3px solid transparent; padding: 8px 14px;
+  font-family: var(--f-display); font-weight: 700; font-size: 18px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
+}
+.tab[aria-selected="true"] { color: var(--gold); border-bottom-color: var(--gold); }
+.pane { display: flex; flex-direction: column; gap: 16px; }
+.cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.cat-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.cat-card .cat-name { font-family: var(--f-display); font-weight: 700; font-size: 18px; text-transform: uppercase; letter-spacing: .03em; }
+.clue-ed { display: grid; grid-template-columns: 56px 1fr; gap: 6px 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+.clue-ed .val { font-family: var(--f-display); font-weight: 800; font-size: 20px; color: var(--gold); padding-top: 4px; }
+.clue-ed .stack { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.dd { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
+.dd input { accent-color: var(--gold); }
+.values { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.values input { width: 88px; }
+.teams-ed { display: flex; flex-direction: column; gap: 8px; max-width: 560px; }
+.team-ed { display: grid; grid-template-columns: 34px 1fr auto; gap: 8px; align-items: center; }
+.keycap {
+  display: inline-grid; place-items: center; min-width: 28px; height: 28px; padding: 0 6px; border-radius: 6px;
+  border: 1px solid var(--muted); border-bottom-width: 3px; font-weight: 700; font-size: 13px; color: var(--ink);
+}
+.final-ed { display: flex; flex-direction: column; gap: 10px; max-width: 720px; }
+.io { display: flex; flex-direction: column; gap: 10px; max-width: 820px; }
+.io textarea { min-height: 220px; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; }
+.note { border-left: 3px solid var(--gold); padding: 6px 12px; background: var(--panel); border-radius: 0 8px 8px 0; max-width: 820px; }
+
+/* ---------- game board ---------- */
+.game-head { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.game-head .logo { font-size: clamp(1.4rem, 3vw, 2rem); }
+.round-name { font-family: var(--f-display); font-weight: 700; font-size: 20px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.board-wrap { flex: 1; overflow-x: auto; display: flex; min-height: 0; }
+.board {
+  flex: 1; display: grid; gap: 6px; min-width: 620px;
+  background: #000; padding: 6px; border-radius: 6px;
+}
+.board .head {
+  background: var(--board); display: grid; place-items: center; text-align: center; padding: 10px 6px;
+  font-family: var(--f-display); font-weight: 800; text-transform: uppercase; letter-spacing: .03em;
+  font-size: clamp(14px, 1.7vw, 26px); line-height: 1.05; text-shadow: 2px 2px 0 #000; text-wrap: balance;
+  border-bottom: 4px solid #000;
+}
+.tile {
+  background: var(--board); border: 0; border-radius: 0; display: grid; place-items: center; min-height: 64px;
+  font-family: var(--f-display); font-weight: 800; color: var(--gold); font-size: clamp(24px, 4vw, 60px);
+  text-shadow: 3px 3px 0 #000; font-variant-numeric: tabular-nums; transition: background .12s;
+}
+.tile:hover:not(:disabled) { background: var(--board-hi); }
+.tile.used { background: var(--tile-used); color: transparent; text-shadow: none; }
+.tile.used:hover { color: #ffffff33; }
+.tile:disabled { cursor: default; }
+.round-done {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: center;
+  padding: 12px; background: var(--panel); border: 1px solid var(--gold); border-radius: 10px;
+}
+.round-done strong { font-family: var(--f-display); font-size: 22px; text-transform: uppercase; letter-spacing: .05em; color: var(--gold); }
+
+/* ---------- scoreboard ---------- */
+.scores { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.podium {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+  display: flex; flex-direction: column; gap: 2px; min-width: 0; position: relative;
+}
+.podium .name { font-weight: 700; font-size: 15px; display: flex; gap: 8px; align-items: center; min-width: 0; }
+.podium .name span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.podium .score {
+  background: none; border: 0; padding: 0; text-align: left;
+  font-family: var(--f-display); font-weight: 800; font-size: clamp(26px, 3vw, 40px); line-height: 1.1; font-variant-numeric: tabular-nums;
+}
+.podium .score.neg { color: var(--wrong); }
+.podium input { font-family: var(--f-display); font-size: 26px; font-weight: 800; width: 100%; }
+.podium.buzzed { border-color: var(--gold); box-shadow: 0 0 0 2px var(--gold), 0 0 24px #f6c54466; }
+
+/* ---------- clue overlay ---------- */
+.overlay {
+  position: fixed; inset: 0; z-index: 10; background: var(--board);
+  display: flex; flex-direction: column; gap: 16px;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+}
+.ov-top { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.ov-cat { font-family: var(--f-display); font-weight: 800; font-size: clamp(18px, 2.4vw, 30px); text-transform: uppercase; letter-spacing: .05em; text-shadow: 2px 2px 0 #000; }
+.ov-val { font-family: var(--f-display); font-weight: 800; color: var(--gold); font-size: clamp(22px, 3vw, 38px); text-shadow: 2px 2px 0 #000; }
+.ov-body { flex: 1; display: grid; place-items: center; text-align: center; padding: 8px 0; min-height: 0; }
+.clue-text {
+  font-family: var(--f-clue); font-weight: 700; text-transform: uppercase; text-wrap: balance;
+  font-size: clamp(26px, 4.6vw, 72px); line-height: 1.2; max-width: 22ch; text-shadow: 3px 3px 0 #000;
+  margin: 0;
+}
+.clue-text.long { font-size: clamp(22px, 3.4vw, 52px); max-width: 30ch; }
+.answer {
+  margin-top: 24px; font-family: var(--f-clue); font-weight: 700; color: var(--gold);
+  font-size: clamp(22px, 3.4vw, 48px); text-transform: uppercase; text-shadow: 2px 2px 0 #000; text-wrap: balance;
+}
+.answer::before { content: "Answer"; display: block; font: 600 13px/1.4 var(--f-ui); letter-spacing: .14em; color: var(--muted); text-shadow: none; }
+.dd-splash {
+  font-family: var(--f-display); font-weight: 800; text-transform: uppercase; color: var(--gold);
+  font-size: clamp(48px, 11vw, 160px); line-height: .95; text-shadow: 5px 5px 0 #000; letter-spacing: .02em;
+  animation: ddpop .6s cubic-bezier(.2,1.6,.4,1);
+}
+@keyframes ddpop { from { transform: scale(.2) rotate(-8deg); opacity: 0; } to { transform: none; opacity: 1; } }
+.timer { height: 10px; background: #0005; border-radius: 6px; overflow: hidden; }
+.timer > div { height: 100%; width: 100%; background: var(--gold); transform-origin: left; }
+.timer.out > div { background: var(--wrong); }
+.ov-controls { display: flex; flex-direction: column; gap: 10px; }
+.ov-teams { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.ov-team { background: #0008; border: 1px solid #ffffff22; border-radius: 10px; padding: 8px 10px; display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; min-width: 0; }
+.ov-team.buzzed { border-color: var(--gold); box-shadow: 0 0 0 2px var(--gold); }
+.ov-team.tried { opacity: .5; }
+.ov-team .nm { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-team .nm small { display: block; font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; }
+.mark { width: 44px; height: 40px; border-radius: 8px; border: 1px solid; font-size: 20px; font-weight: 800; background: none; }
+.mark.ok { color: var(--right); border-color: var(--right); }
+.mark.ok:hover { background: var(--right); color: #032; }
+.mark.no { color: var(--wrong); border-color: var(--wrong); }
+.mark.no:hover { background: var(--wrong); color: #300; }
+.ov-btns { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.ov-btns .btn { background: #0008; border-color: #ffffff33; }
+.ov-btns .btn.primary { background: var(--gold); color: #1a1400; border-color: var(--gold); }
+.kbd-hint { text-align: center; color: var(--muted); font-size: 12px; }
+.wager-box { display: flex; flex-direction: column; gap: 12px; align-items: center; margin-top: 18px; }
+.wager-box input { width: 180px; text-align: center; font-family: var(--f-display); font-size: 32px; font-weight: 800; }
+.final-grid { display: grid; gap: 8px; width: min(720px, 100%); text-align: left; }
+.final-row { display: grid; grid-template-columns: 1fr 120px auto auto; gap: 8px; align-items: center; background: #0008; padding: 8px 10px; border-radius: 10px; }
+.final-row.out { opacity: .5; }
+.final-row .mark[aria-pressed="true"].ok { background: var(--right); color: #032; }
+.final-row .mark[aria-pressed="true"].no { background: var(--wrong); color: #300; }
+.standings { display: flex; flex-direction: column; gap: 8px; width: min(560px, 100%); }
+.standing { display: flex; justify-content: space-between; gap: 12px; padding: 10px 16px; background: #0008; border-radius: 10px; font-size: 20px; font-weight: 700; }
+.standing.win { background: var(--gold); color: #1a1400; font-size: 26px; }
+.standing b { font-family: var(--f-display); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 560px) {
+  .final-row { grid-template-columns: 1fr 90px; }
+  .clue-ed { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dd-splash { animation: none; }
+  .tile { transition: none; }
+}
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+<div class="overlay" id="overlay" hidden></div>
+
+<script>
+(() => {
+  "use strict";
+  const STORE_KEY = "braznarkel-trivia-v1";
+
+  // ---------- helpers ----------
+  const uid = () => Math.random().toString(36).slice(2, 9);
+  const $ = (s, r = document) => r.querySelector(s);
+  function h(tag, attrs, ...kids) {
+    const n = document.createElement(tag);
+    if (attrs) for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+      else if (k === "class") n.className = v;
+      else if (k === "text") n.textContent = v;
+      else if (k === "value") n.value = v;
+      else if (k === "checked") n.checked = v;
+      else n.setAttribute(k, v === true ? "" : v);
+    }
+    for (const c of kids.flat()) if (c != null && c !== false) n.append(c.nodeType ? c : document.createTextNode(c));
+    return n;
+  }
+  const money = n => (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString("en-US");
+  const clone = o => JSON.parse(JSON.stringify(o));
+
+  // Two-click confirm (the viewer can't show confirm() dialogs)
+  function confirmBtn(label, onConfirm, cls = "btn danger") {
+    let armed = false, t;
+    const b = h("button", { class: cls, type: "button", text: label });
+    b.addEventListener("click", () => {
+      if (armed) { clearTimeout(t); onConfirm(); return; }
+      armed = true; b.textContent = "Click again to confirm"; b.classList.add("armed");
+      t = setTimeout(() => { armed = false; b.textContent = label; b.classList.remove("armed"); }, 3000);
+    });
+    return b;
+  }
+
+  // ---------- sample game ----------
+  function cat(name, clues) { return { name, clues: clues.map(([q, a, dd]) => ({ q, a, dd: !!dd })) }; }
+  function sampleGame() {
+    return {
+      title: "Braznarkel Trivia",
+      rounds: [
+        {
+          name: "Round One", values: [200, 400, 600, 800, 1000],
+          categories: [
+            cat("World Capitals", [
+              ["This city on the Seine is the capital of France", "Paris"],
+              ["This capital city of Japan was once called Edo", "Tokyo"],
+              ["Not Sydney, this planned city is Australia's capital", "Canberra"],
+              ["The capital of Canada", "Ottawa"],
+              ["In 2022, Kazakhstan's capital changed its name from Nur-Sultan back to this", "Astana"],
+            ]),
+            cat("Science", [
+              ["The chemical formula for this is H2O", "Water"],
+              ["The planet nicknamed the Red Planet", "Mars"],
+              ["This organelle is famously called the powerhouse of the cell", "Mitochondria"],
+              ["The element with the symbol Fe", "Iron", true],
+              ["Light travels about 300,000 of these units every second", "Kilometers"],
+            ]),
+            cat("At the Movies", [
+              ["The 1997 James Cameron film about a doomed ocean liner", "Titanic"],
+              ["Tom Hanks voices this cowboy in Toy Story", "Woody"],
+              ["He directed Jaws, E.T. and Jurassic Park", "Steven Spielberg"],
+              ["\"May the Force be with you\" comes from this franchise", "Star Wars"],
+              ["In 1991 it became the first animated film nominated for Best Picture", "Beauty and the Beast"],
+            ]),
+            cat("Sports", [
+              ["The number of players each team has on a soccer field", "11"],
+              ["The Stanley Cup is awarded in this sport", "Ice hockey"],
+              ["In tennis, a score of zero", "Love"],
+              ["In bowling, three strikes in a row", "A turkey"],
+              ["With five titles, this country has won the most men's FIFA World Cups", "Brazil"],
+            ]),
+            cat("Food & Drink", [
+              ["The main ingredient in guacamole", "Avocado"],
+              ["Nigiri and maki are types of this Japanese dish", "Sushi"],
+              ["Hummus is made mostly from these legumes", "Chickpeas"],
+              ["Picked from crocus flowers, it is the most expensive spice by weight", "Saffron"],
+              ["Its Italian name means \"little tongues\"", "Linguine"],
+            ]),
+            cat("Music", [
+              ["John, Paul, George and Ringo", "The Beatles"],
+              ["The number of strings on a standard guitar", "6"],
+              ["The King of Pop", "Michael Jackson"],
+              ["Bob Marley is the most famous artist of this genre", "Reggae"],
+              ["He composed his Ninth Symphony while almost completely deaf", "Ludwig van Beethoven"],
+            ]),
+          ],
+        },
+        {
+          name: "Round Two", values: [400, 800, 1200, 1600, 2000],
+          categories: [
+            cat("History", [
+              ["The first President of the United States", "George Washington"],
+              ["The ship that carried the Pilgrims to America in 1620", "The Mayflower"],
+              ["The year the Berlin Wall fell", "1989"],
+              ["In 49 BC this Roman general crossed the Rubicon", "Julius Caesar", true],
+              ["This 1215 English charter limited the power of the king", "Magna Carta"],
+            ]),
+            cat("Animals", [
+              ["The largest animal that has ever lived", "Blue whale"],
+              ["A group of lions", "A pride"],
+              ["A baby kangaroo", "A joey"],
+              ["The only mammal capable of true flight", "The bat"],
+              ["The number of hearts an octopus has", "3"],
+            ]),
+            cat("Geography", [
+              ["The tallest mountain above sea level", "Mount Everest"],
+              ["The longest river in South America", "The Amazon"],
+              ["The smallest country in the world by area", "Vatican City"],
+              ["This strait separates Europe from Africa", "Strait of Gibraltar"],
+              ["This country has more natural lakes than any other", "Canada", true],
+            ]),
+            cat("TV Time", [
+              ["The Simpsons live in this town", "Springfield"],
+              ["The coffee shop where the Friends hang out", "Central Perk"],
+              ["The paper company in The Office", "Dunder Mifflin"],
+              ["\"Winter is coming\" is the motto of this Game of Thrones house", "House Stark"],
+              ["Walter White's job at the start of Breaking Bad", "High school chemistry teacher"],
+            ]),
+            cat("Wordplay", [
+              ["The number of letters in the English alphabet", "26"],
+              ["\"Hola\" means this in English", "Hello"],
+              ["A word like \"racecar\" that reads the same backward", "A palindrome"],
+              ["A word formed from initials, like NASA or scuba", "An acronym"],
+              ["By number of native speakers, the most spoken language in the world", "Mandarin Chinese"],
+            ]),
+            cat("Tech", [
+              ["The company that makes the iPhone", "Apple"],
+              ["The \"www\" in a web address", "World Wide Web"],
+              ["He co-founded Microsoft with Paul Allen", "Bill Gates"],
+              ["Binary code is written using only these two digits", "0 and 1"],
+              ["1,024 of these make a gigabyte", "Megabytes"],
+            ]),
+          ],
+        },
+      ],
+      final: { category: "Space Race", q: "In July 1969, he became the second person to walk on the Moon", a: "Buzz Aldrin" },
+    };
+  }
+
+  function defaultState() {
+    return {
+      game: sampleGame(),
+      teams: ["Team 1", "Team 2", "Team 3"].map(name => ({ id: uid(), name, score: 0 })),
+      used: {}, round: 0, view: "setup", tab: "teams", timerSecs: 7, finalSecs: 30, history: [],
+    };
+  }
+
+  // ---------- persistence ----------
+  function load() {
+    try { const raw = localStorage.getItem(STORE_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; }
+  }
+  function save() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch { /* storage unavailable: game still works this session */ }
+  }
+  let S = load() || defaultState();
+  if (!S.game || !Array.isArray(S.game.rounds)) S = defaultState();
+  if (S.view === "final") S.view = "board"; // overlays don't survive reloads
+
+  // ---------- sound ----------
+  let actx;
+  function beep(freq = 660, dur = 0.18, type = "square", vol = 0.08) {
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = type; o.frequency.value = freq; g.gain.value = vol;
+      o.connect(g); g.connect(actx.destination);
+      g.gain.setTargetAtTime(0, actx.currentTime + dur * 0.7, 0.03);
+      o.start(); o.stop(actx.currentTime + dur);
+    } catch { /* audio unavailable */ }
+  }
+  const timeUp = () => { beep(220, 0.7, "sawtooth", 0.09); };
+
+  // ---------- scoring ----------
+  function addScore(teamId, delta, note) {
+    const t = S.teams.find(t => t.id === teamId); if (!t || !delta) return;
+    t.score += delta; S.history.push({ teamId, delta, note }); if (S.history.length > 200) S.history.shift();
+    save(); renderScores();
+  }
+  function undo() {
+    const last = S.history.pop(); if (!last) return;
+    const t = S.teams.find(t => t.id === last.teamId); if (t) t.score -= last.delta;
+    save(); render();
+  }
+
+  // ---------- render root ----------
+  const app = $("#app"), ov = $("#overlay");
+  function render() {
+    app.replaceChildren();
+    if (S.view === "setup") renderSetup(); else renderGame();
+  }
+
+  // ================= SETUP =================
+  function renderSetup() {
+    const inProgress = Object.keys(S.used).length || S.teams.some(t => t.score);
+    app.append(
+      h("div", { class: "setup-head" },
+        h("div", null,
+          h("div", { class: "label", text: "Host setup" }),
+          h("div", { class: "logo", text: S.game.title || "Braznarkel Trivia" })),
+        h("div", { class: "spacer" }),
+        h("div", { class: "row" },
+          inProgress ? confirmBtn("New game (reset scores)", () => { resetProgress(); S.view = "board"; save(); render(); }) : null,
+          h("button", { class: "btn primary", type: "button", onclick: () => { S.view = "board"; save(); render(); } },
+            inProgress ? "Resume game" : "Start game"))),
+    );
+    const tabs = [["teams", "Teams"], ...S.game.rounds.map((r, i) => ["r" + i, r.name || "Round " + (i + 1)]), ["final", "Final"], ["io", "Save / Load"]];
+    if (!tabs.some(t => t[0] === S.tab)) S.tab = "teams";
+    app.append(h("div", { class: "tabs", role: "tablist" },
+      tabs.map(([k, label]) => h("button", { class: "tab", role: "tab", type: "button", "aria-selected": String(S.tab === k), text: label,
+        onclick: () => { S.tab = k; save(); render(); } }))));
+    const pane = h("div", { class: "pane" });
+    if (S.tab === "teams") paneTeams(pane);
+    else if (S.tab === "final") paneFinal(pane);
+    else if (S.tab === "io") paneIO(pane);
+    else paneRound(pane, +S.tab.slice(1));
+    app.append(pane);
+  }
+
+  function resetProgress() {
+    S.used = {}; S.round = 0; S.history = []; S.teams.forEach(t => t.score = 0);
+  }
+
+  function paneTeams(pane) {
+    const list = h("div", { class: "teams-ed" });
+    S.teams.forEach((t, i) => list.append(h("div", { class: "team-ed" },
+      h("span", { class: "keycap", title: "Buzz-in key", text: i < 9 ? String(i + 1) : "–" }),
+      h("input", { class: "field", id: "team-" + t.id, value: t.name, "aria-label": "Team name", maxlength: 40,
+        oninput: e => { t.name = e.target.value; save(); } }),
+      h("button", { class: "btn danger", type: "button", disabled: S.teams.length <= 1, text: "Remove",
+        onclick: () => { S.teams.splice(i, 1); save(); render(); } }))));
+    pane.append(
+      h("p", { class: "note" }, "Show this on a TV or projector. You run the laptop as host: pick tiles, reveal answers and mark teams right or wrong. On a shared keyboard, players can buzz in with their number key."),
+      h("div", { class: "label", text: "Teams or players" }), list,
+      h("div", { class: "row" },
+        h("button", { class: "btn", type: "button", disabled: S.teams.length >= 12, text: "+ Add team",
+          onclick: () => { S.teams.push({ id: uid(), name: "Team " + (S.teams.length + 1), score: 0 }); save(); render(); } })),
+      h("div", { class: "label", text: "Game settings" }),
+      h("div", { class: "row" },
+        h("label", { class: "row", for: "game-title" }, "Game title"),
+        h("input", { class: "field", id: "game-title", style: "max-width:300px", value: S.game.title, oninput: e => { S.game.title = e.target.value; save(); } })),
+      h("div", { class: "row" },
+        h("label", { for: "timer-secs" }, "Clue timer (seconds)"),
+        h("input", { class: "field", id: "timer-secs", type: "number", min: 1, max: 120, style: "width:90px", value: S.timerSecs,
+          oninput: e => { S.timerSecs = Math.max(1, +e.target.value || 7); save(); } }),
+        h("label", { for: "final-secs" }, "Final timer"),
+        h("input", { class: "field", id: "final-secs", type: "number", min: 5, max: 300, style: "width:90px", value: S.finalSecs,
+          oninput: e => { S.finalSecs = Math.max(5, +e.target.value || 30); save(); } })),
+      h("div", { class: "row" },
+        h("button", { class: "btn", type: "button", text: "+ Add a round",
+          onclick: () => {
+            const prev = S.game.rounds[S.game.rounds.length - 1];
+            S.game.rounds.push({ name: "Round " + (S.game.rounds.length + 1), values: prev ? prev.values.map(v => v * 2) : [200, 400, 600, 800, 1000],
+              categories: Array.from({ length: prev ? prev.categories.length : 6 }, () => ({ name: "", clues: (prev ? prev.values : [1,2,3,4,5]).map(() => ({ q: "", a: "", dd: false })) })) });
+            S.tab = "r" + (S.game.rounds.length - 1); save(); render();
+          } }),
+        S.game.rounds.length > 1 ? confirmBtn("Remove last round", () => { S.game.rounds.pop(); save(); render(); }) : null),
+    );
+  }
+
+  function paneRound(pane, ri) {
+    const r = S.game.rounds[ri];
+    if (!r) return;
+    const syncRows = () => r.categories.forEach(c => { while (c.clues.length < r.values.length) c.clues.push({ q: "", a: "", dd: false }); c.clues.length = r.values.length; });
+    pane.append(
+      h("div", { class: "row" },
+        h("label", { for: "round-name-" + ri }, "Round name"),
+        h("input", { class: "field", id: "round-name-" + ri, style: "max-width:260px", value: r.name,
+          oninput: e => { r.name = e.target.value; save(); } })),
+      h("div", { class: "values" },
+        h("span", { class: "label", text: "Row values" }),
+        r.values.map((v, vi) => h("input", { class: "field", type: "number", step: 100, id: `val-${ri}-${vi}`, value: v, "aria-label": "Row " + (vi + 1) + " value",
+          onchange: e => { r.values[vi] = Math.max(0, +e.target.value || 0); save(); render(); } })),
+        h("button", { class: "btn", type: "button", disabled: r.values.length >= 8, text: "+ Row",
+          onclick: () => { const l = r.values; l.push((l[l.length - 1] || 0) + (l[1] - l[0] || 200)); syncRows(); save(); render(); } }),
+        h("button", { class: "btn", type: "button", disabled: r.values.length <= 1, text: "− Row",
+          onclick: () => { r.values.pop(); syncRows(); save(); render(); } }),
+        h("span", { class: "spacer" }),
+        h("button", { class: "btn", type: "button", disabled: r.categories.length >= 8, text: "+ Category",
+          onclick: () => { r.categories.push({ name: "", clues: r.values.map(() => ({ q: "", a: "", dd: false })) }); save(); render(); } })),
+      h("p", { class: "hint", text: "Write each clue as a statement; players answer in the form of a question. Tick Daily Double on any clue to hide a wager behind it. Blank clues show as empty tiles." }),
+    );
+    const grid = h("div", { class: "cats" });
+    r.categories.forEach((c, ci) => {
+      grid.append(h("div", { class: "cat-card" },
+        h("div", { class: "row" },
+          h("input", { class: "field cat-name", id: `cat-${ri}-${ci}`, placeholder: "Category name", value: c.name, "aria-label": "Category name",
+            oninput: e => { c.name = e.target.value; save(); } }),
+          r.categories.length > 1 ? confirmBtn("Remove", () => { r.categories.splice(ci, 1); save(); render(); }) : null),
+        c.clues.map((cl, i) => h("div", { class: "clue-ed" },
+          h("div", { class: "val", text: money(r.values[i]) }),
+          h("div", { class: "stack" },
+            h("textarea", { class: "field", id: `q-${ri}-${ci}-${i}`, placeholder: "Clue", rows: 2, "aria-label": "Clue",
+              oninput: e => { cl.q = e.target.value; save(); } }, cl.q),
+            h("input", { class: "field", id: `a-${ri}-${ci}-${i}`, placeholder: "Correct response", value: cl.a, "aria-label": "Correct response",
+              oninput: e => { cl.a = e.target.value; save(); } }),
+            h("label", { class: "dd" }, h("input", { type: "checkbox", id: `dd-${ri}-${ci}-${i}`, checked: cl.dd,
+              onchange: e => { cl.dd = e.target.checked; save(); } }), "Daily Double"))))));
+    });
+    pane.append(grid);
+  }
+
+  function paneFinal(pane) {
+    const f = S.game.final;
+    pane.append(h("div", { class: "final-ed" },
+      h("p", { class: "hint", text: "Final round: teams see the category, secretly write a wager on paper, then see the clue. Leave the clue blank to skip the final." }),
+      h("label", { class: "label", for: "f-cat", text: "Category" }),
+      h("input", { class: "field", id: "f-cat", value: f.category, oninput: e => { f.category = e.target.value; save(); } }),
+      h("label", { class: "label", for: "f-q", text: "Clue" }),
+      h("textarea", { class: "field", id: "f-q", rows: 3, oninput: e => { f.q = e.target.value; save(); } }, f.q),
+      h("label", { class: "label", for: "f-a", text: "Correct response" }),
+      h("input", { class: "field", id: "f-a", value: f.a, oninput: e => { f.a = e.target.value; save(); } })));
+  }
+
+  function paneIO(pane) {
+    const exportText = () => JSON.stringify({ app: "braznarkel-trivia", version: 1, game: S.game, teams: S.teams.map(t => t.name) }, null, 2);
+    const ta = h("textarea", { class: "field", id: "io-json", spellcheck: "false", "aria-label": "Game JSON" }, exportText());
+    const msg = h("div", { class: "hint", role: "status" });
+    function importText(txt) {
+      try {
+        const d = JSON.parse(txt);
+        const g = d.game || d;
+        if (!Array.isArray(g.rounds) || !g.rounds.length) throw new Error("No rounds found.");
+        g.rounds.forEach(r => {
+          if (!Array.isArray(r.values) || !Array.isArray(r.categories)) throw new Error("Each round needs values and categories.");
+          r.categories.forEach(c => { c.clues = (c.clues || []).slice(0, r.values.length); while (c.clues.length < r.values.length) c.clues.push({ q: "", a: "", dd: false }); });
+        });
+        g.final = g.final || { category: "", q: "", a: "" };
+        g.title = g.title || "Braznarkel Trivia";
+        S.game = g;
+        if (Array.isArray(d.teams) && d.teams.length) S.teams = d.teams.slice(0, 12).map(n => ({ id: uid(), name: String(n), score: 0 }));
+        resetProgress(); save();
+        S.tab = "io"; render();
+        $("#io-msg-slot")?.replaceChildren("Loaded “" + g.title + "”. Scores were reset.");
+      } catch (e) {
+        msg.textContent = "That didn't load: " + e.message + " Check that it's a game exported from this page.";
+      }
+    }
+    pane.append(h("div", { class: "io" },
+      h("p", { class: "note" }, "Your board saves automatically in this browser. To keep a game for later or move it to another device, copy the text below into a note or file. To load one, paste it in and press Load."),
+      h("div", { class: "hint", id: "io-msg-slot" }),
+      ta,
+      h("div", { class: "row" },
+        h("button", { class: "btn", type: "button", text: "Copy game", onclick: async e => {
+          ta.value = exportText();
+          try { await navigator.clipboard.writeText(ta.value); e.target.textContent = "Copied"; }
+          catch { ta.focus(); ta.select(); msg.textContent = "Text selected. Press Ctrl+C (or ⌘C) to copy."; }
+        } }),
+        h("button", { class: "btn primary", type: "button", text: "Load pasted game", onclick: () => importText(ta.value) }),
+        h("label", { class: "btn", for: "io-file" }, "Open file…"),
+        h("input", { type: "file", id: "io-file", accept: ".json,application/json,text/plain", hidden: true, onchange: e => {
+          const f = e.target.files[0]; if (!f) return;
+          const rd = new FileReader(); rd.onload = () => importText(String(rd.result)); rd.readAsText(f);
+        } }),
+        h("span", { class: "spacer" }),
+        confirmBtn("Restore sample game", () => { S = defaultState(); S.tab = "io"; save(); render(); }),
+        confirmBtn("Clear board (blank game)", () => {
+          S.game.rounds.forEach(r => r.categories.forEach(c => { c.name = ""; c.clues.forEach(cl => { cl.q = ""; cl.a = ""; cl.dd = false; }); }));
+          S.game.final = { category: "", q: "", a: "" }; resetProgress(); S.tab = "r0"; save(); render();
+        })),
+      msg));
+  }
+
+  // ================= GAME =================
+  const key = (ri, ci, i) => `${ri}-${ci}-${i}`;
+  const round = () => S.game.rounds[S.round];
+  function roundRemaining(ri = S.round) {
+    const r = S.game.rounds[ri]; if (!r) return 0;
+    let n = 0; r.categories.forEach((c, ci) => c.clues.forEach((cl, i) => { if (cl.q.trim() && !S.used[key(ri, ci, i)]) n++; }));
+    return n;
+  }
+  const hasFinal = () => !!(S.game.final && S.game.final.q.trim());
+
+  function nextStep() {
+    if (S.round < S.game.rounds.length - 1) { S.round++; save(); render(); }
+    else if (hasFinal()) openFinal();
+    else showResults();
+  }
+
+  function renderGame() {
+    const r = round();
+    if (!r) { S.round = 0; save(); return render(); }
+    const isLast = S.round >= S.game.rounds.length - 1;
+    const nextLabel = !isLast ? "Next round" : hasFinal() ? "Go to Final" : "End game";
+    app.append(h("div", { class: "game-head" },
+      h("div", { class: "logo", text: S.game.title || "Braznarkel Trivia" }),
+      h("div", { class: "round-name", text: r.name }),
+      h("div", { class: "spacer" }),
+      h("div", { class: "row" },
+        h("button", { class: "btn", type: "button", disabled: !S.history.length, title: S.history.length ? "Undo: " + S.history[S.history.length - 1].note : "", text: "Undo score", onclick: undo }),
+        S.round > 0 ? h("button", { class: "btn", type: "button", text: "Previous round", onclick: () => { S.round--; save(); render(); } }) : null,
+        roundRemaining() ? confirmBtn(nextLabel, nextStep, "btn") : null,
+        h("button", { class: "btn", type: "button", text: "Fullscreen", onclick: () => {
+          const d = document;
+          if (d.fullscreenElement) d.exitFullscreen?.().catch(() => {});
+          else d.documentElement.requestFullscreen?.().catch(() => {});
+        } }),
+        h("button", { class: "btn", type: "button", text: "Edit board", onclick: () => { S.view = "setup"; save(); render(); } }))));
+
+    if (!roundRemaining()) {
+      app.append(h("div", { class: "round-done" },
+        h("strong", { text: r.name + " complete" }),
+        h("button", { class: "btn primary", type: "button", text: nextLabel, onclick: nextStep })));
+    }
+
+    const cols = r.categories.length;
+    const board = h("div", { class: "board", style: `grid-template-columns: repeat(${cols}, minmax(0, 1fr)); grid-template-rows: auto repeat(${r.values.length}, minmax(64px, 1fr));` });
+    r.categories.forEach(c => board.append(h("div", { class: "head", text: c.name || " " })));
+    r.values.forEach((v, i) => r.categories.forEach((c, ci) => {
+      const cl = c.clues[i], used = !!S.used[key(S.round, ci, i)], empty = !cl || !cl.q.trim();
+      board.append(h("button", { class: "tile" + (used || empty ? " used" : ""), type: "button", disabled: empty,
+        "aria-label": empty ? "Empty" : `${c.name || "Category"} for ${money(v)}${used ? " (played)" : ""}`,
+        text: money(v), onclick: () => openClue(S.round, ci, i) }));
+    }));
+    app.append(h("div", { class: "board-wrap" }, board));
+    app.append(h("div", { class: "scores", id: "scores" }));
+    renderScores();
+  }
+
+  let editingScore = null;
+  function renderScores() {
+    const box = $("#scores"); if (!box) return;
+    box.replaceChildren(...S.teams.map((t, i) => {
+      const p = h("div", { class: "podium" + (clue && clue.buzzed === t.id ? " buzzed" : "") },
+        h("div", { class: "name" }, h("span", { text: t.name || "Team " + (i + 1) }), i < 9 ? h("span", { class: "keycap", title: "Buzz-in key", text: String(i + 1) }) : null));
+      if (editingScore === t.id) {
+        const inp = h("input", { class: "field", type: "number", step: 100, value: t.score, "aria-label": "Set score for " + t.name });
+        const done = commit => {
+          if (editingScore !== t.id) return;
+          editingScore = null;
+          if (commit) { const nv = Math.round(+inp.value || 0); addScore(t.id, nv - t.score, "manual adjust for " + t.name); }
+          renderScores();
+        };
+        inp.addEventListener("keydown", e => { if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); });
+        inp.addEventListener("blur", () => done(true));
+        p.append(inp); setTimeout(() => { inp.focus(); inp.select(); });
+      } else {
+        p.append(h("button", { class: "score" + (t.score < 0 ? " neg" : ""), type: "button", title: "Click to fix this score", text: money(t.score),
+          onclick: () => { editingScore = t.id; renderScores(); } }));
+      }
+      return p;
+    }));
+  }
+
+  // ---------- clue overlay ----------
+  let clue = null, timerRAF = 0;
+  function stopTimer() { cancelAnimationFrame(timerRAF); timerRAF = 0; }
+  function startTimer(secs, bar) {
+    stopTimer();
+    const fill = bar.firstChild, t0 = performance.now();
+    bar.classList.remove("out");
+    const tick = now => {
+      const p = Math.min(1, (now - t0) / (secs * 1000));
+      fill.style.transform = `scaleX(${1 - p})`;
+      if (p < 1) timerRAF = requestAnimationFrame(tick);
+      else { timerRAF = 0; bar.classList.add("out"); timeUp(); }
+    };
+    timerRAF = requestAnimationFrame(tick);
+  }
+
+  function openClue(ri, ci, i) {
+    const r = S.game.rounds[ri], c = r.categories[ci], cl = c.clues[i];
+    clue = { ri, ci, i, value: r.values[i], cat: c.name, q: cl.q, a: cl.a, dd: cl.dd, stage: cl.dd ? "dd" : "clue",
+      ddTeam: null, wager: null, revealed: false, buzzed: null, tried: new Set(), awarded: false };
+    S.used[key(ri, ci, i)] = true; save();
+    if (cl.dd) { beep(523, .15); setTimeout(() => beep(784, .3), 160); }
+    ov.hidden = false; drawClue();
+  }
+
+  function closeClue() {
+    stopTimer(); clue = null; ov.hidden = true; ov.replaceChildren(); render();
+  }
+
+  function drawClue() {
+    const c = clue;
+    ov.replaceChildren();
+    ov.append(h("div", { class: "ov-top" },
+      h("div", { class: "ov-cat", text: c.cat }),
+      h("div", { class: "ov-val", text: c.dd && c.wager != null ? "Wager " + money(c.wager) : money(c.value) })));
+
+    if (c.stage === "dd") {
+      const maxWager = t => Math.max(t.score, Math.max(...round().values));
+      const body = h("div", { class: "ov-body" });
+      const inner = h("div", null, h("div", { class: "dd-splash", text: "Daily Double" }));
+      const box = h("div", { class: "wager-box" });
+      if (!c.ddTeam) {
+        box.append(h("div", { class: "label", text: "Which team picked it?" }),
+          h("div", { class: "ov-btns" }, S.teams.map(t => h("button", { class: "btn", type: "button", text: t.name,
+            onclick: () => { c.ddTeam = t.id; drawClue(); } }))));
+      } else {
+        const t = S.teams.find(t => t.id === c.ddTeam), mx = maxWager(t);
+        const inp = h("input", { class: "field", id: "dd-wager", type: "number", min: 0, max: mx, step: 100, value: Math.min(mx, Math.max(0, Math.round(mx / 2 / 100) * 100)) });
+        const err = h("div", { class: "hint", role: "status" });
+        const go = () => {
+          const w = Math.round(+inp.value);
+          if (!(w >= 0 && w <= mx)) { err.textContent = `Wager must be between $0 and ${money(mx)}.`; return; }
+          c.wager = w; c.stage = "clue"; drawClue();
+        };
+        inp.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+        box.append(h("div", { class: "label", text: `${t.name} — wager up to ${money(mx)}` }), inp, err,
+          h("div", { class: "ov-btns" },
+            h("button", { class: "btn", type: "button", text: "Change team", onclick: () => { c.ddTeam = null; drawClue(); } }),
+            h("button", { class: "btn primary", type: "button", text: "Show clue", onclick: go })));
+        setTimeout(() => inp.focus());
+      }
+      inner.append(box); body.append(inner); ov.append(body);
+      ov.append(h("div", { class: "ov-btns" }, h("button", { class: "btn", type: "button", text: "Back to board (Esc)", onclick: closeClue })));
+      return;
+    }
+
+    const text = h("p", { class: "clue-text" + (c.q.length > 110 ? " long" : ""), text: c.q });
+    const body = h("div", { class: "ov-body" }, h("div", null, text, c.revealed ? h("div", { class: "answer", text: c.a || "(no answer written)" }) : null));
+    ov.append(body);
+
+    const bar = h("div", { class: "timer", id: "timer" }, h("div"));
+    const teamIds = c.dd ? [c.ddTeam] : S.teams.map(t => t.id);
+    const amount = c.dd ? c.wager : c.value;
+    const teams = h("div", { class: "ov-teams" }, teamIds.map(id => {
+      const t = S.teams.find(t => t.id === id), idx = S.teams.indexOf(t);
+      return h("div", { class: "ov-team" + (c.buzzed === id ? " buzzed" : "") + (c.tried.has(id) ? " tried" : "") },
+        h("div", { class: "nm" }, (!c.dd && idx < 9 ? `${idx + 1} · ` : "") + t.name, h("small", { text: money(t.score) })),
+        h("button", { class: "mark ok", type: "button", title: `Correct: +${money(amount)}`, "aria-label": `${t.name} correct`, disabled: c.tried.has(id) || c.awarded, text: "✓",
+          onclick: () => { addScore(id, amount, `${t.name} +${money(amount)}`); c.awarded = true; beep(880, .12, "sine", .1); setTimeout(() => beep(1175, .2, "sine", .1), 120); c.revealed = true; c.buzzed = id; stopTimer(); drawClue(); } }),
+        h("button", { class: "mark no", type: "button", title: `Wrong: −${money(amount)}`, "aria-label": `${t.name} wrong`, disabled: c.tried.has(id) || c.awarded, text: "✗",
+          onclick: () => { addScore(id, -amount, `${t.name} −${money(amount)}`); c.tried.add(id); c.buzzed = null; beep(160, .3, "square", .07); stopTimer(); drawClue(); } }));
+    }));
+    ov.append(h("div", { class: "ov-controls" },
+      bar, teams,
+      h("div", { class: "ov-btns" },
+        h("button", { class: "btn", type: "button", text: "Start timer (T)", onclick: () => startTimer(c.dd ? Math.max(S.timerSecs, 10) : S.timerSecs, $("#timer")) }),
+        !c.revealed ? h("button", { class: "btn", type: "button", text: "Reveal answer (Space)", onclick: reveal }) : null,
+        h("button", { class: "btn primary", type: "button", text: "Back to board (Esc)", onclick: closeClue })),
+      !c.dd ? h("div", { class: "kbd-hint", text: "Players buzz in with their number key. ✓ adds the value, ✗ subtracts it." }) : null));
+  }
+  function reveal() { if (clue && clue.stage === "clue" && !clue.revealed) { clue.revealed = true; stopTimer(); drawClue(); } }
+
+  // ---------- final round ----------
+  let fin = null;
+  function openFinal() {
+    fin = { stage: "category", wagers: {}, result: {} };
+    ov.hidden = false; drawFinal();
+  }
+  function drawFinal() {
+    const f = S.game.final;
+    ov.replaceChildren();
+    ov.append(h("div", { class: "ov-top" }, h("div", { class: "ov-cat", text: "Final Round" }), h("div", { class: "ov-val", text: f.category })));
+    const body = h("div", { class: "ov-body" }), inner = h("div", { style: "display:flex;flex-direction:column;align-items:center;gap:20px;width:100%" });
+    body.append(inner); ov.append(body);
+    const btns = h("div", { class: "ov-btns" });
+
+    if (fin.stage === "category") {
+      inner.append(h("div", { class: "label", text: "The category is" }), h("p", { class: "clue-text", text: f.category || "Final Round" }),
+        h("div", { class: "hint", text: "Each team writes down a secret wager, up to their current score." }));
+      btns.append(h("button", { class: "btn", type: "button", text: "Back to board", onclick: () => { fin = null; ov.hidden = true; render(); } }),
+        h("button", { class: "btn primary", type: "button", text: "Show the clue", onclick: () => { fin.stage = "clue"; drawFinal(); } }));
+    } else if (fin.stage === "clue") {
+      const bar = h("div", { class: "timer", id: "ftimer", style: "width:min(720px,100%)" }, h("div"));
+      inner.append(h("p", { class: "clue-text" + (f.q.length > 110 ? " long" : ""), text: f.q }), bar);
+      btns.append(h("button", { class: "btn", type: "button", text: `Start ${S.finalSecs}s timer`, onclick: () => startTimer(S.finalSecs, $("#ftimer")) }),
+        h("button", { class: "btn primary", type: "button", text: "Reveal & score", onclick: () => { stopTimer(); fin.stage = "score"; drawFinal(); } }));
+    } else if (fin.stage === "score") {
+      inner.append(h("p", { class: "clue-text long", text: f.q }), h("div", { class: "answer", text: f.a || "(no answer written)" }));
+      const grid = h("div", { class: "final-grid" }, h("div", { class: "label", text: "Enter each wager, then mark right or wrong" }));
+      const err = h("div", { class: "hint", role: "status" });
+      S.teams.forEach(t => {
+        const out = t.score <= 0;
+        const w = h("input", { class: "field", type: "number", min: 0, max: Math.max(0, t.score), step: 100, disabled: out, "aria-label": t.name + " wager", value: fin.wagers[t.id] ?? "",
+          oninput: e => { fin.wagers[t.id] = e.target.value; } });
+        const mk = (v, cls, sym) => h("button", { class: "mark " + cls, type: "button", disabled: out, "aria-pressed": String(fin.result[t.id] === v), text: sym,
+          onclick: () => { fin.result[t.id] = v; drawFinal(); } });
+        grid.append(h("div", { class: "final-row" + (out ? " out" : "") },
+          h("div", { class: "nm" }, h("strong", { text: t.name }), " ", h("span", { class: "hint", text: out ? "sits out" : money(t.score) })),
+          w, mk(true, "ok", "✓"), mk(false, "no", "✗")));
+      });
+      inner.append(grid, err);
+      btns.append(h("button", { class: "btn primary", type: "button", text: "Show final scores", onclick: () => {
+        for (const t of S.teams) {
+          if (t.score <= 0) continue;
+          const w = Math.round(+fin.wagers[t.id] || 0);
+          if (w < 0 || w > t.score) { err.textContent = `${t.name}'s wager must be between $0 and ${money(t.score)}.`; return; }
+          if (fin.result[t.id] === undefined) { err.textContent = `Mark ${t.name} right or wrong.`; return; }
+        }
+        S.teams.forEach(t => {
+          if (t.score <= 0) return;
+          const w = Math.round(+fin.wagers[t.id] || 0);
+          addScore(t.id, fin.result[t.id] ? w : -w, `Final: ${t.name} ${fin.result[t.id] ? "+" : "−"}${money(w)}`);
+        });
+        fin = null; showResults();
+      } }));
+    }
+    ov.append(btns);
+  }
+
+  function showResults() {
+    ov.hidden = false; ov.replaceChildren();
+    const ranked = [...S.teams].sort((a, b) => b.score - a.score);
+    const top = ranked[0]?.score, winners = ranked.filter(t => t.score === top);
+    beep(523, .15, "sine", .1); setTimeout(() => beep(659, .15, "sine", .1), 150); setTimeout(() => beep(784, .4, "sine", .1), 300);
+    ov.append(h("div", { class: "ov-body" }, h("div", { style: "display:flex;flex-direction:column;align-items:center;gap:22px;width:100%" },
+      h("div", { class: "label", text: S.game.title || "Braznarkel Trivia" }),
+      h("div", { class: "dd-splash", style: "font-size:clamp(40px,8vw,110px)", text: winners.length > 1 ? "It's a tie!" : winners[0].name + " wins!" }),
+      h("div", { class: "standings" }, ranked.map(t => h("div", { class: "standing" + (t.score === top ? " win" : "") }, h("span", { text: t.name }), h("b", { text: money(t.score) })))))),
+      h("div", { class: "ov-btns" },
+        h("button", { class: "btn", type: "button", text: "Back to board", onclick: () => { ov.hidden = true; render(); } }),
+        h("button", { class: "btn", type: "button", text: "Edit board", onclick: () => { ov.hidden = true; S.view = "setup"; save(); render(); } }),
+        confirmBtn("Play again (reset scores)", () => { resetProgress(); S.view = "board"; save(); ov.hidden = true; render(); }, "btn primary")));
+  }
+
+  // ---------- keyboard ----------
+  document.addEventListener("keydown", e => {
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+    if (clue && !ov.hidden) {
+      if (e.key === "Escape") { e.preventDefault(); closeClue(); return; }
+      if (typing || clue.stage !== "clue") return;
+      if (e.key === " ") { e.preventDefault(); reveal(); return; }
+      if (e.key === "t" || e.key === "T") { startTimer(clue.dd ? Math.max(S.timerSecs, 10) : S.timerSecs, $("#timer")); return; }
+      if (!clue.dd && !clue.awarded && /^[1-9]$/.test(e.key) && !clue.buzzed) {
+        const t = S.teams[+e.key - 1];
+        if (t && !clue.tried.has(t.id)) { clue.buzzed = t.id; beep(988, .2, "triangle", .12); stopTimer(); drawClue(); }
+      }
+    }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
