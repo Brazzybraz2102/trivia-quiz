@@ -23,8 +23,7 @@ def test_auth_required(ctx):
 def test_status_never_leaks_secrets(ctx):
     body = client(ctx).get("/status", headers=H).json()
     assert "printer_reachable" in body
-    assert body["config"]["ticket_key"] == "set"
-    assert "k" not in body["config"].values()
+    assert "config" not in body  # config details are superadmin-only (diagnostics)
 
 
 def test_auto_twice_second_skipped(ctx):
@@ -64,7 +63,7 @@ def signed_in(ctx):
     Accounts(ctx.settings.data_dir).set_password("mike", "correct horse", create=True)
     c = client(ctx)
     r = c.post("/auth/login", json={"username": "Mike", "password": "correct horse"})
-    assert r.status_code == 200 and r.json() == {"username": "mike"}
+    assert r.status_code == 200 and r.json()["username"] == "mike"
     return c
 
 
@@ -77,7 +76,7 @@ def test_sign_in_with_cookie(ctx):
     c = signed_in(ctx)
     cookie = c.cookies.get("ticket_session")
     assert cookie
-    assert c.get("/auth/me").json() == {"username": "mike"}
+    assert c.get("/auth/me").json()["username"] == "mike"
     assert c.post("/print/today", json={}).json()["status"] == "dry_run"
     # the session file never holds the raw token
     assert cookie not in (ctx.settings.data_dir / "sessions.json").read_text()
@@ -115,11 +114,13 @@ def test_bearer_token_for_native_apps(ctx):
 
 
 def test_password_change_and_removal_sign_out(ctx):
-    c = signed_in(ctx)
     accts = Accounts(ctx.settings.data_dir)
+    accts.create("boss", "boss password", role="superadmin")
+    c = signed_in(ctx)
     accts.set_password("mike", "new password!")
     assert c.get("/auth/me").status_code == 401
-    c = signed_in_again = client(ctx)
-    signed_in_again.post("/auth/login", json={"username": "mike", "password": "new password!"})
+    c = client(ctx)
+    c.post("/auth/login", json={"username": "mike", "password": "new password!"})
+    assert c.get("/auth/me").status_code == 200
     accts.remove_user("mike")
     assert c.get("/auth/me").status_code == 401

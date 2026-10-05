@@ -11,6 +11,7 @@ from typing import Callable
 from PIL import Image
 
 from . import printer
+from .auth import default_prefs
 from .config import Settings
 from .render import DayRow, render_day, render_label
 from .store import Store
@@ -26,6 +27,10 @@ class Context:
     store: Store
     todoist_factory: Callable[[], Todoist] | None = None
     today: Callable[[], date] = date.today
+    user: str = "cli"                 # who's asking: a username, "key" (HA/scripts) or "cli"
+    prefs: dict = field(default_factory=default_prefs)
+    printing_paused: bool = False     # server-wide kill switch: everything becomes a dry run
+    auto_print_enabled: bool = True
     _todoist: Todoist | None = field(default=None, repr=False)
 
     @property
@@ -36,7 +41,8 @@ class Context:
         return self._todoist
 
     def is_dry(self, dry_run: bool | None) -> bool:
-        return bool(dry_run) or self.settings.dry_run
+        return (bool(dry_run) or self.settings.dry_run or self.printing_paused
+                or bool(self.prefs.get("always_dry_run")))
 
 
 def _clean(content: str) -> str:
@@ -45,13 +51,15 @@ def _clean(content: str) -> str:
     return re.sub(r"[*_`]{1,2}", "", content).strip()
 
 
-def _time(task: dict) -> str:
+def _time(task: dict, h24: bool = False) -> str:
     """Todoist puts the time in due.date ("2026-09-30T19:00:00") or due.datetime."""
     due = task.get("due") or {}
     raw = due.get("datetime") or due.get("date") or ""
     if len(raw) < 16:
         return ""
     hour, minute = int(raw[11:13]), raw[14:16]
+    if h24:
+        return f"{hour:02d}:{minute}"
     return f"{hour % 12 or 12}:{minute}{'a' if hour < 12 else 'p'}"
 
 
@@ -99,6 +107,7 @@ def _finish(ctx: Context, *, kind: str, title: str, img: Image.Image, label_id: 
         "title": title,
         "source": source,
         "dry_run": not sent,
+        "by": ctx.user,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "png": str(png),
         "manifest": manifest,
@@ -113,12 +122,14 @@ def _task_label(ctx: Context, *, kind: str, title: str, subtitle: str, tasks: li
                 source: str, dry_run: bool | None) -> dict:
     today = ctx.today()
     tasks = sorted(tasks, key=lambda t: _sort_key(t, today))
-    shown, waiting = tasks[:MAX_ROWS], tasks[MAX_ROWS:]
+    max_rows = int(ctx.prefs.get("max_rows", MAX_ROWS))
+    shown, waiting = tasks[:max_rows], tasks[max_rows:]
+    h24 = bool(ctx.prefs.get("time_24h"))
     label_id = ctx.store.new_id(today)
     rows, manifest = [], []
     for n, task in enumerate(shown, start=1):
         due = task.get("due") or {}
-        rows.append(DayRow(_clean(task["content"]), _time(task), int(task.get("priority", 1)) >= 3,
+        rows.append(DayRow(_clean(task["content"]), _time(task, h24), int(task.get("priority", 1)) >= 3,
                            _tag(task, today)))
         manifest.append({
             "row": n,
@@ -130,8 +141,9 @@ def _task_label(ctx: Context, *, kind: str, title: str, subtitle: str, tasks: li
     now = datetime.now()
     made = f"{now:%a} {now.hour % 12 or 12}:{now:%M}{'a' if now.hour < 12 else 'p'}"
     footer = f"{kind}  {today.isoformat()}  made {made}"
+    show_waiting = ctx.prefs.get("show_waiting", True)
     img = render_day(title, subtitle, rows, code=label_id, footer=footer,
-                     waiting=[_clean(t["content"]) for t in waiting])
+                     waiting=[_clean(t["content"]) for t in waiting] if show_waiting else None)
     return _finish(ctx, kind=kind, title=title, img=img, label_id=label_id,
                    manifest=manifest, source=source, dry_run=dry_run)
 
@@ -141,6 +153,8 @@ def print_today(ctx: Context, source: str = "manual", dry_run: bool | None = Non
     the second auto call on the same day returns skipped, whatever happened to the first."""
     today = ctx.today()
     dry = ctx.is_dry(dry_run)
+    if source == "auto" and not ctx.auto_print_enabled:
+        return {"status": "skipped", "reason": "auto print is turned off in server settings"}
     if source == "auto" and not ctx.store.claim_auto(today.isoformat(), dry):
         return {"status": "skipped", "reason": f"auto print already ran on {today.isoformat()}"}
     try:

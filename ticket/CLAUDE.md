@@ -8,6 +8,8 @@ Read SPEC.md first. Its §1 rules override everything:
 - Deleting a Todoist task always needs Mike's explicit confirmation.
 - Never print, echo or log `.env` values. `Settings.redacted()` is the only thing that's safe to show.
 - LAN only. People sign in with local accounts (`ticket/auth.py`). Don't add web sign-up or a cloud login.
+- Roles are enforced server-side in `server.py` (`require`, `can_manage`). Don't add "log in as user".
+  Never put hashes, tokens or `.env` values in events, diagnostics or debug bundles. Log admin actions with `audit()`.
 
 Dev loop:
 ```

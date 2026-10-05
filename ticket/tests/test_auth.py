@@ -27,3 +27,16 @@ def test_cli_user_add(tmp_path, monkeypatch, capsys):
     assert main(["user", "list"]) == 0
     assert "mike" in capsys.readouterr().out
     assert Accounts(tmp_path).verify("mike", "hunter2hunter2")
+
+
+def test_cli_roles_and_recovery(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TICKET_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TICKET_ENV_FILE", str(tmp_path / "none.env"))
+    monkeypatch.setattr("getpass.getpass", lambda prompt="": "hunter2hunter2")
+    assert main(["user", "add", "mike"]) == 0
+    assert main(["user", "add", "sam", "admin"]) == 0
+    assert main(["user", "disable", "sam"]) == 0
+    assert main(["user", "role", "mike", "user"]) == 1   # last superadmin is protected
+    assert main(["user", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "superadmin" in out and "disabled" in out

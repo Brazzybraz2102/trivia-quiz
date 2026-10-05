@@ -111,6 +111,8 @@ def scan_photo(ctx: Context, vision: VisionFn, image: bytes, media_type: str,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "label_id": label["id"] if label else None,
         "label_code_read": result.label_code,
+        "by": ctx.user,
+        "vision": result.model_dump(),  # raw read-back, for debugging misreads
         "applied": [],
         "needs_confirmation": [],
         "ignored": [],
@@ -123,6 +125,8 @@ def scan_photo(ctx: Context, vision: VisionFn, image: bytes, media_type: str,
 
     by_row = {m["row"]: m for m in label["manifest"]}
     seen: set[int] = set()
+    threshold = float(ctx.prefs.get("confidence", CONFIDENCE_THRESHOLD))
+    auto_apply = bool(ctx.prefs.get("auto_apply", True))
     for rm in result.rows:
         item = by_row.get(rm.row)
         if item is None or rm.row in seen:
@@ -133,7 +137,8 @@ def scan_photo(ctx: Context, vision: VisionFn, image: bytes, media_type: str,
         if rm.mark == "none":
             continue
         entry = {**item, "mark": rm.mark, "confidence": round(rm.confidence, 2), "note": rm.note}
-        if rm.mark == "drop" or rm.confidence < CONFIDENCE_THRESHOLD:
+        # Drops always wait for a person, whatever the settings say.
+        if rm.mark == "drop" or rm.confidence < threshold or not auto_apply:
             record["needs_confirmation"].append({**entry, "status": "pending"})
             continue
         try:

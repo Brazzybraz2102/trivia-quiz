@@ -21,6 +21,9 @@ class FakeTodoist:
         self.calls.append(("filter", query))
         return list(self.tasks.values())
 
+    def projects(self):
+        return [{"id": "p1", "name": "Inbox"}]
+
     def get_task(self, task_id):
         return self.tasks[task_id]
 

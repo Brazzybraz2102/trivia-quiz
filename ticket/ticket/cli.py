@@ -31,9 +31,16 @@ def _show(result: dict) -> None:
     print(f"png: {result.get('png')}")
 
 
-def _user(accounts: Accounts, action: str, username: str | None) -> int:
+def _user(accounts: Accounts, action: str, username: str | None, role: str | None = None) -> int:
+    """The desktop is the recovery path: it works even if every web admin is locked out."""
     if action == "list":
-        print("\n".join(accounts.list_users()) or "(no accounts)")
+        users = accounts.all_users()
+        for u in users:
+            flags = " ".join(f for f, on in (("disabled", u["disabled"]), ("beta", u["beta"]),
+                                             ("debug", u["debug"])) if on)
+            print(f"{u['username']:<20} {u['role']:<11} {flags}")
+        if not users:
+            print("(no accounts)")
         return 0
     if not username:
         print("username required", file=sys.stderr)
@@ -43,12 +50,30 @@ def _user(accounts: Accounts, action: str, username: str | None) -> int:
             accounts.remove_user(username)
             print(f"removed {username}; their sessions are signed out")
             return 0
+        if action in {"role", "enable", "disable"}:
+            if action == "role":
+                if not role:
+                    print("usage: ticket user role <name> user|admin|superadmin", file=sys.stderr)
+                    return 2
+                accounts.update(username, role=role)
+            else:
+                accounts.update(username, disabled=action == "disable")
+            u = accounts.get(username)
+            print(f"{u['username']}: role={u['role']} disabled={u['disabled']}")
+            return 0
         pw = getpass.getpass(f"password for {username}: ")
         if pw != getpass.getpass("again: "):
             print("passwords don't match", file=sys.stderr)
             return 1
-        accounts.set_password(username, pw, create=action == "add")
-        print(f"{'created' if action == 'add' else 'updated'} {username}")
+        if action == "add":
+            if role:
+                accounts.create(username, pw, role=role)
+            else:
+                accounts.set_password(username, pw, create=True)  # first account -> superadmin
+            print(f"created {username} ({accounts.get(username)['role']})")
+        else:
+            accounts.set_password(username, pw)
+            print(f"updated {username}; their other devices are signed out")
         return 0
     except AuthError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -84,8 +109,10 @@ def main(argv: list[str] | None = None) -> int:
     cf.add_argument("scan_id")
     sub.add_parser("serve", help="run the HTTP server")
     us = sub.add_parser("user", help="manage web sign-in accounts")
-    us.add_argument("action", choices=["add", "passwd", "remove", "list"])
+    us.add_argument("action", choices=["add", "passwd", "role", "enable", "disable", "remove", "list"])
     us.add_argument("username", nargs="?")
+    us.add_argument("role", nargs="?", choices=["user", "admin", "superadmin"],
+                    help="for `role` (and optionally `add`)")
 
     args = ap.parse_args(argv)
     settings = load_settings()
@@ -98,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(out, indent=2))
             return 0 if out["printer_reachable"] else 1
         if args.cmd == "user":
-            return _user(Accounts(settings.data_dir), args.action, args.username)
+            return _user(Accounts(settings.data_dir), args.action, args.username, args.role)
         if args.cmd == "serve":
             import uvicorn
 

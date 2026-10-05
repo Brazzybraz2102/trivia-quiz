@@ -14,9 +14,10 @@ Todoist ↔ Brother QL-1110NWB label printer, running on Mike's desktop and reac
 5. **Secrets live only in `.env`** (chmod 600). `/status` and `ticket status` show whether each
    one is set, never its value.
 6. **LAN only**: no cloud relay and no remote access. The server binds to 0.0.0.0:8787.
-7. **Sign-in**: people sign in to the web app with local accounts that live only on the desktop
-   (`ticket user add/passwd/remove/list`). There's no web sign-up and no cloud identity provider.
-   Home Assistant and scripts use the shared `X-Ticket-Key` header instead.
+7. **Sign-in**: people sign in to the web app with local accounts that live only on the desktop.
+   There's no web sign-up and no cloud identity provider. Home Assistant and scripts use the
+   shared `X-Ticket-Key` header instead, and that key never reaches admin features.
+8. **Roles**: `user` < `admin` (support) < `superadmin` (debug). See §10.
 
 ## 2. Hardware
 - Brother QL-1110NWB on Wi-Fi, raw TCP port 9100.
@@ -73,6 +74,52 @@ Security details:
 - A cookie-authenticated write whose `Origin` is a different site is refused with 403.
 - CORS doesn't allow credentials, so cookies only work on the same origin.
 
+## 10. Roles, settings, support and debugging
+**Everyone** (Settings tab):
+- **Account:** change password (signs out other devices), list signed-in devices, sign out
+  other devices.
+- **Printing:** always preview only; rows per ticket (3–20); show "Also waiting"; 24-hour
+  times; default list filter.
+- **Read-back:** apply confident marks automatically, on or off; confidence needed (50–95%).
+  Drops always wait for confirmation, whatever these say.
+- **Theme:** per device. **Feedback:** a form, plus a floating button for beta testers; recent
+  errors are attached if allowed.
+
+**Admin** (support):
+- add people with a one-time temporary password (the person must choose their own at first sign-in)
+- reset passwords the same way
+- turn accounts off or on
+- sign people out
+- mark beta testers
+- read a person's activity, without tracebacks
+- read the feedback inbox
+
+Admins only manage plain users, and can't change roles or debug mode.
+
+**Superadmin** (debugging): everything an admin can do, on anyone but themselves, plus:
+- change roles
+- per-user **debug mode**: that person's events also record request arguments and results
+- delete people
+- **diagnostics**: printer, Todoist and Claude key checks, counts, storage, version, redacted config
+- the full **event log**: activity, errors with tracebacks, audit, auth and feedback
+- a one-click **debug bundle** per person: profile, sessions, events, their tickets and scans with the raw read-back
+- **server switches**: pause all printing (every print becomes a preview), Home Assistant auto
+  print on or off, and an announcement banner
+
+**Guardrails:**
+- The last active superadmin can't be demoted, turned off or deleted.
+- Nobody can change their own role or turn themselves off.
+- Every admin action is written to the audit log.
+- There's no "log in as user"; the debug bundle covers that need without the risk.
+- Events and bundles never contain passwords, hashes, tokens or `.env` values.
+- Tracebacks are visible to superadmins only.
+
+**Recovery from the desktop:** `ticket user add|passwd|role|enable|disable|remove|list`. The
+first account ever created becomes the superadmin.
+
+Storage, all in the data dir: `users.json` (holds prefs), `sessions.json`, `events.jsonl`
+(the last 5,000 events), `server_settings.json`.
+
 ## 8. Photo read-back (Phase 2)
 1. `POST /scan` with a photo. Claude vision (`TICKET_VISION_MODEL`, default `claude-sonnet-5-5`)
    returns structured output: the label code and, for each row, a mark (done, tomorrow, drop or
@@ -88,9 +135,10 @@ Security details:
 
 ## 9. Phase checklist
 ### Phase A: desktop
-- [x] A1 service, venv, pytest green (28 tests)
+- [x] A1 service, venv, pytest green (50 tests)
 - [x] Web sign-in: local accounts, 30-day sessions, bearer tokens for native apps
 - [ ] Sign-in: `ticket user add mike` on the desktop (NEEDS MIKE)
+- [x] Settings, admin (support) and superadmin (debug) tools, §10 (19 tests)
 - [ ] A1 `.env` filled on the desktop (NEEDS MIKE)
 - [ ] A2 `ticket status` → dry-run today → first real print → layout tuning
 - [x] A3 server changes: CORS, web app at `/app`, multipart `/scan`, python-multipart

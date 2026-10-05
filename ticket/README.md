@@ -50,13 +50,34 @@ Then create your sign-in (the password is typed twice and never shown):
 The install script ends by printing the web app address, `http://<desktop-ip>:8787/app`. Open
 that on any phone or laptop on your Wi-Fi and sign in. You stay signed in for 30 days per device.
 
-Accounts are managed only on the desktop; the web app has no sign-up page:
+The first account you create is the **superadmin**, which is you. After that, add people from
+the web app (**Admin → Add someone**). They get a one-time password and pick their own when they
+first sign in. There's no public sign-up page.
+
+| Role | Can do |
+|---|---|
+| user | print, read back, their own Settings, send feedback |
+| admin | support: add people, reset passwords, turn accounts off/on, sign people out, mark beta testers, see activity and feedback |
+| superadmin | debug: everything above, plus roles, per-user debug mode, diagnostics, the error log, debug bundles, pause all printing, auto-print switch, banner |
+
+If you're ever locked out of the web app, fix it from the desktop:
 | Want | Run |
 |---|---|
-| Add someone | `ticket user add <name>` |
+| Add someone | `ticket user add <name> [user\|admin\|superadmin]` |
 | Change a password (signs out their devices) | `ticket user passwd <name>` |
+| Change a role | `ticket user role <name> admin` |
+| Turn an account off/on | `ticket user disable <name>` / `ticket user enable <name>` |
 | Remove someone | `ticket user remove <name>` |
 | See accounts | `ticket user list` |
+
+### Helping a beta tester
+1. Admin tab: mark them **beta**. They get a Feedback button on every screen.
+2. When they report a problem, read it in the **Feedback inbox** along with their recent errors.
+   **Activity** shows what they did.
+3. For anything odd, a superadmin turns on **Debug** for that person, asks them to repeat it, then:
+   - looks at the **Debug tab → Event log** (filter by their name)
+   - or downloads their **Debug bundle** and hands it to Claude
+4. To stop real prints while you investigate, use **Debug tab → Pause all printing**.
 
 Everyone who signs in uses the same Todoist account, the one whose token is in `.env`.
 
