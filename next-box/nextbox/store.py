@@ -10,9 +10,9 @@ import fcntl
 import json
 import os
 import secrets
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Iterator
+from collections.abc import Iterator
 
 ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
@@ -26,6 +26,8 @@ class Store:
         self.root = Path(root)
         for sub in ("printed", "png", "scans"):
             (self.root / sub).mkdir(parents=True, exist_ok=True)
+        # Tickets, scans and logs hold people's task names: keep them from other desktop users.
+        os.chmod(self.root, 0o700)
 
     @contextlib.contextmanager
     def _lock(self) -> Iterator[None]:
@@ -42,11 +44,13 @@ class Store:
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
         os.replace(tmp, path)
 
-    @staticmethod
-    def new_id(day: date | None = None) -> str:
+    def new_id(self, day: date | None = None) -> str:
         """e.g. 260930-X5C8: printed date + 4 unambiguous characters (no 0/O, 1/I)."""
         day = day or date.today()
-        return f"{day:%y%m%d}-" + "".join(secrets.choice(ID_ALPHABET) for _ in range(4))
+        while True:
+            label_id = f"{day:%y%m%d}-" + "".join(secrets.choice(ID_ALPHABET) for _ in range(4))
+            if not any((self.root / d / f"{label_id}.json").exists() for d in ("printed", "scans")):
+                return label_id
 
     # --- auto guard -------------------------------------------------------
     def claim_auto(self, day: str, dry_run: bool) -> bool:
@@ -84,8 +88,10 @@ class Store:
         path = self.root / "printed" / f"{normalize_id(label_id)}.json"
         return json.loads(path.read_text()) if path.exists() else None
 
-    def list_printed(self, limit: int = 50) -> list[dict]:
+    def list_printed(self, limit: int = 50, by: str | None = None) -> list[dict]:
         records = [json.loads(p.read_text()) for p in (self.root / "printed").glob("*.json")]
+        if by is not None:
+            records = [r for r in records if r.get("by") == by]
         records.sort(key=lambda r: r["created_at"], reverse=True)
         return records[:limit]
 
@@ -108,7 +114,28 @@ class Store:
             yield record
             self._write(path, record)
 
-    def list_scans(self, limit: int = 20) -> list[dict]:
+    def list_scans(self, limit: int = 20, by: str | None = None) -> list[dict]:
         records = [json.loads(p.read_text()) for p in (self.root / "scans").glob("*.json")]
+        if by is not None:
+            records = [r for r in records if r.get("by") == by]
         records.sort(key=lambda r: r["created_at"], reverse=True)
         return records[:limit]
+
+    # --- retention --------------------------------------------------------
+    def prune(self, days: int = 90) -> dict:
+        """Delete tickets and scans older than `days`. Todoist (or whichever app) is untouched."""
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
+        removed = {"printed": 0, "scans": 0}
+        with self._lock():
+            for kind in ("printed", "scans"):
+                for p in (self.root / kind).glob("*.json"):
+                    try:
+                        old = json.loads(p.read_text()).get("created_at", "") < cutoff
+                    except ValueError:
+                        old = False
+                    if old:
+                        p.unlink()
+                        if kind == "printed":
+                            (self.root / "png" / f"{p.stem}.png").unlink(missing_ok=True)
+                        removed[kind] += 1
+        return removed

@@ -27,6 +27,7 @@ class Settings:
     vision_model: str = "claude-sonnet-5-5"
     host: str = "0.0.0.0"
     port: int = 8787
+    retention_days: int = 90  # tickets and scans older than this are deleted at startup
 
     def redacted(self) -> dict:
         """Safe to print: never includes secret values."""
@@ -57,4 +58,5 @@ def load_settings(env_file: Path | None = None) -> Settings:
         vision_model=e("NEXTBOX_VISION_MODEL", "claude-sonnet-5-5"),
         host=e("NEXTBOX_HOST", "0.0.0.0"),
         port=int(e("NEXTBOX_PORT", "8787")),
+        retention_days=int(e("NEXTBOX_RETENTION_DAYS", "90")),
     )

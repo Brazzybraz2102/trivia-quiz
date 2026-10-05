@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timedelta
-from typing import Callable, Literal
+from typing import Literal
+from collections.abc import Callable
 
 from pydantic import BaseModel, Field
 
@@ -48,10 +49,44 @@ Also read the code printed at the bottom left after '#' (like 260930-X5C8).
 {manifest_hint}"""
 
 
+MAX_EDGE = 2048          # plenty for handwriting; keeps uploads small and cost down
+MAX_PIXELS = 50_000_000  # refuse decompression bombs
+
+
+class PhotoError(ValueError):
+    pass
+
+
+def prepare_photo(data: bytes) -> tuple[bytes, str]:
+    """Phone photo -> upright JPEG no bigger than MAX_EDGE on its long side."""
+    import io
+
+    from PIL import Image, ImageOps
+
+    Image.MAX_IMAGE_PIXELS = MAX_PIXELS
+    try:
+        img = Image.open(io.BytesIO(data))  # reads the header only; pixels aren't decoded yet
+        if img.width * img.height > MAX_PIXELS:
+            raise PhotoError("photo is far too large")
+        img = ImageOps.exif_transpose(img)  # phones store rotation separately
+        img = img.convert("RGB")
+    except PhotoError:
+        raise
+    except Image.DecompressionBombError as exc:
+        raise PhotoError("photo is far too large") from exc
+    except Exception as exc:
+        raise PhotoError("that file isn't a photo Next Box can read (try JPEG or PNG)") from exc
+    img.thumbnail((MAX_EDGE, MAX_EDGE))
+    out = io.BytesIO()
+    img.save(out, "JPEG", quality=85)
+    return out.getvalue(), "image/jpeg"
+
+
 def claude_vision(settings) -> VisionFn:
     import anthropic
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key or None)
+    # A stuck request mustn't tie up the server: fail after 90 s instead of the SDK's 10 minutes.
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key or None, timeout=90.0, max_retries=2)
 
     def run(image: bytes, media_type: str, manifest: list[dict]) -> ReadBack:
         hint = ""
@@ -83,13 +118,14 @@ def _find_label(ctx: Context, code: str | None, label_id: str | None) -> dict | 
     for candidate in (label_id, code):
         if candidate:
             rec = ctx.store.get_printed(candidate)
-            if rec and rec["manifest"]:
+            # Only your own tickets: their task ids belong to your to-do app.
+            if rec and rec["manifest"] and rec.get("by", ctx.user) == ctx.user:
                 return rec
     return None
 
 
 def _apply(ctx: Context, mark: str, item: dict) -> None:
-    td = ctx.todoist
+    td = ctx.tasks
     if mark == "done":
         td.close_task(item["task_id"])
     elif mark == "tomorrow":

@@ -1,23 +1,28 @@
 # Next Box: spec
 
-Todoist ↔ Brother QL-1110NWB label printer, running on Mike's desktop and reachable only on the home LAN.
+Each person's to-do app ↔ Brother QL-1110NWB label printer, running on Mike's desktop and reachable only on the home LAN.
 
 ## 1. Rules (these override everything else)
-1. **Todoist is the only source of truth.** There's no local task database. The data dir only
-   keeps print history, label manifests (row → task ID), scan results and the auto-print guard.
+1. **Each person's own to-do app is the only source of truth.** There's no local task database.
+   The data dir only keeps print history, ticket manifests (row → task ID), scan results and the
+   auto-print guard.
 2. **Nothing prints unless Mike asks.** The one exception is the once-a-day `source="auto"` print
    of today's list when Home Assistant sees him enter the office. The server guards it
    (`Store.claim_auto`), so a second auto call that day returns `skipped`. There are no
    crons, no retries that reprint, and no other automatic prints.
 3. **Deleting a task always needs explicit confirmation**, including when read-back finds one.
 4. **Dry-run for development**: `--dry-run`, `NEXTBOX_DRY_RUN=1`, or `dry_run: true` in the API.
-5. **Secrets live only in `.env`** (chmod 600). `/status` and `nextbox status` show whether each
-   one is set, never its value.
+5. **Server secrets live only in `.env`** (chmod 600). Each person's to-do app token or password is
+   encrypted with `secret.key` (data dir, 600) inside `users.json`. Neither is ever shown, logged
+   or put in a debug bundle. The data dir is 700.
 6. **LAN only**: no cloud relay and no remote access. The server binds to 0.0.0.0:8787.
 7. **Sign-in**: people sign in to the web app with local accounts that live only on the desktop.
    There's no web sign-up and no cloud identity provider. Home Assistant and scripts use the
    shared `X-NextBox-Key` header instead, and that key never reaches admin features.
 8. **Roles**: `user` < `admin` (support) < `superadmin` (debug). See §10.
+9. **Privacy between people**: each person prints, sees and reads back only their own tickets
+   and scans. Home Assistant and the CLI act as the **owner** (the oldest active superadmin)
+   unless the CLI gets `--user`.
 
 ## 2. Hardware
 - Brother QL-1110NWB on Wi-Fi, raw TCP port 9100.
@@ -73,6 +78,58 @@ Security details:
 - Changing or removing an account signs out all of its sessions.
 - A cookie-authenticated write whose `Origin` is a different site is refused with 403.
 - CORS doesn't allow credentials, so cookies only work on the same origin.
+
+## 11. To-do app connections
+| App | Status | How |
+|---|---|---|
+| Todoist | ready | API token |
+| CalDAV task lists (Nextcloud, Fastmail, Synology, Zoho, Radicale, DAVx⁵, older iCloud lists) | ready | server URL, username, app password, optional single list |
+| Google Tasks, Microsoft To Do, TickTick | next | OAuth: the owner registers Next Box once with each service (NEEDS MIKE) |
+| Apple Reminders (current), Things, Any.do, Google Keep | not possible | no API for other apps |
+
+Providers (`nextbox/providers/`) all implement `TaskProvider` and return Todoist-shaped tasks, so
+printing and read-back don't care which app a person uses.
+
+**Connecting:** `PUT /connection` (or `nextbox connect`) runs `check()` before saving, so a bad
+token is never stored. `GET /connection` and `DELETE /connection`; `GET /providers` drives the
+Settings form.
+
+**Not connected:** every task action returns 409 "Connect your to-do app in Settings first".
+`TODOIST_TOKEN` in `.env` still serves the owner only, as a migration path.
+
+**CalDAV behavior:**
+- "Today" means pending tasks due today or earlier.
+- A list query is a list name, or "all".
+- Completing a repeating task advances it to its next occurrence. We compute that ourselves,
+  because the library's own mode is broken.
+- Moving one day of a repeating task is refused with an explanation. Most apps store that kind
+  of change differently.
+
+**Todoist behavior:**
+- Retries 429, 5xx and connection errors with backoff, reusing the same `X-Request-Id` so a write
+  happens at most once.
+- Task IDs are validated before they go into URLs.
+
+## 12. Reliability and safety details
+- **Printing:** one job at a time, via a thread lock plus a file lock in the data dir, shared by
+  the CLI and the server.
+- **Auto print:** if the printer is offline, it returns `skipped` *without* using up the day, so
+  the next walk-in prints.
+- **Read-back photos:**
+  - turned upright from the phone's rotation data, shrunk to 2048 px on the long edge, re-encoded as JPEG
+  - anything over 50 MP, or not an image, is refused with 415
+  - the vision call times out after 90 s
+- **Temporary passwords:** the server refuses everything except `/auth/*` until the person
+  chooses their own password.
+- **Login:** "account turned off" is shown only with the correct password. Every other failure
+  is a plain 401 that counts toward the 5-in-5-minutes lockout.
+- **Admins:** can read activity only for people they manage.
+- **Sessions:** slide forward on use, so monthly-or-more users stay signed in.
+- **Web security headers:** CSP with `frame-ancestors 'none'`, nosniff, no-referrer.
+- **Retention:** tickets and scans older than `NEXTBOX_RETENTION_DAYS` (90) are pruned at startup
+  and by `nextbox prune`.
+- **Dependencies:** pinned in `constraints.txt`. The installer also upgrades pip and setuptools.
+- **systemd:** `Restart=always`, `UMask=0077`, `ProtectSystem=strict` with write access only to the data dir.
 
 ## 10. Roles, settings, support and debugging
 **Everyone** (Settings tab):
@@ -135,10 +192,14 @@ Storage, all in the data dir: `users.json` (holds prefs), `sessions.json`, `even
 
 ## 9. Phase checklist
 ### Phase A: desktop
-- [x] A1 service, venv, pytest green (50 tests)
+- [x] A1 service, venv, pytest green (74 tests)
 - [x] Web sign-in: local accounts, 30-day sessions, bearer tokens for native apps
 - [ ] Sign-in: `nextbox user add mike` on the desktop (NEEDS MIKE)
 - [x] Settings, admin (support) and superadmin (debug) tools, §10 (19 tests)
+- [x] Per-person to-do app connections: Todoist and CalDAV, encrypted secrets, per-person tickets (§11)
+- [x] Audit fixes (§12)
+- [ ] Google Tasks / Microsoft To Do / TickTick (NEEDS MIKE: register Next Box once with each)
+- [ ] HTTPS on the LAN via Tailscale; nightly data-dir backup
 - [ ] A1 `.env` filled on the desktop (NEEDS MIKE)
 - [ ] A2 `nextbox status` → dry-run today → first real print → layout tuning
 - [x] A3 server changes: CORS, web app at `/app`, multipart `/scan`, python-multipart

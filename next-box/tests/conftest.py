@@ -12,10 +12,25 @@ from nextbox.store import Store
 TODAY = date(2026, 9, 28)
 
 
+def tiny_jpeg(size=(40, 30)) -> bytes:
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", size, "white").save(buf, "JPEG")
+    return buf.getvalue()
+
+
 class FakeTodoist:
     def __init__(self, tasks: list[dict] | None = None):
         self.tasks = {t["id"]: t for t in (tasks or [])}
         self.calls: list[tuple] = []
+
+    def check(self):
+        return {"account": "fake@example.com", "lists": ["Inbox"]}
+
+    def today(self):
+        return self.filter_tasks("today | overdue")
 
     def filter_tasks(self, query):
         self.calls.append(("filter", query))
@@ -68,5 +83,5 @@ def todo():
 def ctx(tmp_path, todo):
     settings = Settings(todoist_token="x", printer_ip="", server_key="k", dry_run=True,
                         data_dir=tmp_path)
-    return Context(settings=settings, store=Store(tmp_path), todoist_factory=lambda: todo,
+    return Context(settings=settings, store=Store(tmp_path), tasks_factory=lambda: todo,
                    today=lambda: TODAY)

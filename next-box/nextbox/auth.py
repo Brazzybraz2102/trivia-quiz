@@ -8,6 +8,8 @@ read activity); superadmins also debug (diagnostics, error log, per-user debug m
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import hmac
 import json
@@ -62,8 +64,29 @@ class Accounts:
         self.root.mkdir(parents=True, exist_ok=True)
         self._users_path = self.root / "users.json"
         self._sessions_path = self.root / "sessions.json"
-        self._lock = threading.RLock()
+        self._thread_lock = threading.RLock()
+        self._depth = 0
         self._failures: dict[str, list[float]] = {}
+
+    @contextlib.contextmanager
+    def _lock(self):
+        """Thread lock plus a file lock, so the CLI and the server never clobber each other."""
+        with self._thread_lock:
+            if self._depth:  # already holding the file lock in this thread
+                self._depth += 1
+                try:
+                    yield
+                finally:
+                    self._depth -= 1
+                return
+            with open(self.root / ".accounts.lock", "w") as fh:
+                fcntl.flock(fh, fcntl.LOCK_EX)
+                self._depth = 1
+                try:
+                    yield
+                finally:
+                    self._depth = 0
+                    fcntl.flock(fh, fcntl.LOCK_UN)
 
     # --- storage ----------------------------------------------------------
     def _load(self, path: Path) -> dict:
@@ -110,8 +133,34 @@ class Accounts:
         u = self._users().get(username.strip().lower())
         if not u:
             return None
-        return {"username": username.strip().lower(),
-                **{k: v for k, v in u.items() if k not in {"salt", "hash"}}}
+        out = {"username": username.strip().lower(),
+               **{k: v for k, v in u.items() if k not in {"salt", "hash", "connection"}}}
+        conn = u.get("connection")
+        out["connection"] = ({k: v for k, v in conn.items() if k != "secret"} if conn else None)
+        return out
+
+    # --- to-do app connection (secret is sealed by the Vault) ----------------
+    def connection(self, username: str) -> dict | None:
+        """Includes the sealed secret: server-side use only."""
+        u = self._users().get(username.strip().lower())
+        return u.get("connection") if u else None
+
+    def set_connection(self, username: str, connection: dict | None) -> None:
+        with self._lock():
+            users = self._users()
+            if username not in users:
+                raise AuthError(f"no user {username}")
+            if connection is None:
+                users[username].pop("connection", None)
+            else:
+                users[username]["connection"] = connection
+            self._save(self._users_path, users)
+
+    def owner(self) -> str | None:
+        """The oldest active superadmin: whose to-do app Home Assistant and the CLI use."""
+        supers = [(u.get("created", 0), name) for name, u in self._users().items()
+                  if u["role"] == "superadmin" and not u["disabled"]]
+        return min(supers)[1] if supers else None
 
     def all_users(self) -> list[dict]:
         return [self.get(name) for name in self.list_users()]
@@ -122,7 +171,7 @@ class Accounts:
         self._check_password(password)
         if role not in ROLES:
             raise AuthError(f"role must be one of {', '.join(ROLES)}")
-        with self._lock:
+        with self._lock():
             users = self._users()
             if username in users:
                 raise AuthError(f"user {username} already exists")
@@ -141,7 +190,7 @@ class Accounts:
             return self.create(username, password, role=role)
         username = self._check_name(username)
         self._check_password(password)
-        with self._lock:
+        with self._lock():
             users = self._users()
             if username not in users:
                 raise AuthError(f"no user {username}")
@@ -158,7 +207,7 @@ class Accounts:
         if "role" in fields and fields["role"] not in ROLES:
             raise AuthError(f"role must be one of {', '.join(ROLES)}")
         username = username.strip().lower()
-        with self._lock:
+        with self._lock():
             users = self._users()
             if username not in users:
                 raise AuthError(f"no user {username}")
@@ -177,7 +226,7 @@ class Accounts:
                 raise AuthError(f"unknown setting {k}")
             if not PREFS[k][1](v):
                 raise AuthError(f"invalid value for {k}")
-        with self._lock:
+        with self._lock():
             users = self._users()
             users[username]["prefs"].update(changes)
             self._save(self._users_path, users)
@@ -189,7 +238,7 @@ class Accounts:
 
     def remove_user(self, username: str) -> None:
         username = username.strip().lower()
-        with self._lock:
+        with self._lock():
             users = self._users()
             if username not in users:
                 raise AuthError(f"no user {username}")
@@ -199,15 +248,20 @@ class Accounts:
             self._save(self._users_path, users)
         self.revoke_user_sessions(username)
 
-    def verify(self, username: str, password: str) -> bool:
+    def password_ok(self, username: str, password: str) -> bool:
+        """Right password, whether or not the account is turned off."""
         user = self._users().get(username.strip().lower())
         # Hash even for unknown users so response time doesn't reveal which names exist.
         salt = bytes.fromhex(user["salt"]) if user else b"\0" * 16
         digest = _hash_password(password, salt)
-        return bool(user) and hmac.compare_digest(digest, user["hash"]) and not user["disabled"]
+        return bool(user) and hmac.compare_digest(digest, user["hash"])
+
+    def verify(self, username: str, password: str) -> bool:
+        user = self._users().get(username.strip().lower())
+        return self.password_ok(username, password) and not user["disabled"]
 
     def touch_login(self, username: str) -> None:
-        with self._lock:
+        with self._lock():
             users = self._users()
             users[username]["last_login"] = int(time.time())
             self._save(self._users_path, users)
@@ -232,7 +286,7 @@ class Accounts:
     # --- sessions ---------------------------------------------------------
     def create_session(self, username: str, ip: str = "", agent: str = "") -> str:
         token = secrets.token_urlsafe(32)
-        with self._lock:
+        with self._lock():
             sessions = self._prune(self._load(self._sessions_path))
             sessions[_token_hash(token)] = {"user": username.lower(), "created": int(time.time()),
                                             "expires": int(time.time()) + SESSION_DAYS * 86400,
@@ -243,12 +297,21 @@ class Accounts:
     def session_user(self, token: str | None) -> str | None:
         if not token:
             return None
-        s = self._load(self._sessions_path).get(_token_hash(token))
-        if not s or s["expires"] < time.time():
+        h = _token_hash(token)
+        s = self._load(self._sessions_path).get(h)
+        now = time.time()
+        if not s or s["expires"] < now:
             return None
         user = self._users().get(s["user"])
         if not user or user["disabled"]:
             return None
+        if s["expires"] - now < (SESSION_DAYS - 1) * 86400:
+            # Sliding expiry: anyone who uses the app at least monthly stays signed in.
+            with self._lock():
+                sessions = self._load(self._sessions_path)
+                if h in sessions:
+                    sessions[h]["expires"] = int(now) + SESSION_DAYS * 86400
+                    self._save(self._sessions_path, sessions)
         return s["user"]
 
     def sessions_for(self, username: str, current: str | None = None) -> list[dict]:
@@ -263,14 +326,14 @@ class Accounts:
     def end_session(self, token: str | None) -> None:
         if not token:
             return
-        with self._lock:
+        with self._lock():
             sessions = self._load(self._sessions_path)
             if sessions.pop(_token_hash(token), None) is not None:
                 self._save(self._sessions_path, sessions)
 
     def revoke_user_sessions(self, username: str, keep: str | None = None) -> int:
         keep_h = _token_hash(keep) if keep else None
-        with self._lock:
+        with self._lock():
             sessions = self._load(self._sessions_path)
             kept = {k: v for k, v in sessions.items() if v["user"] != username or k == keep_h}
             if kept != sessions:

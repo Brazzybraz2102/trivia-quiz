@@ -1,7 +1,10 @@
 """Send images to the Brother QL-1110NWB over the network (raw TCP 9100)."""
 from __future__ import annotations
 
+import fcntl
 import socket
+import threading
+from pathlib import Path
 
 from PIL import Image
 
@@ -51,11 +54,24 @@ def _send_raster(img: Image.Image, settings: Settings) -> None:
         raise RuntimeError(f"printer reported an error: {result}")
 
 
+_thread_lock = threading.Lock()
+
+
 def print_image(img: Image.Image, settings: Settings, dry_run: bool) -> bool:
-    """Returns True if the label went to the printer, False for a dry run."""
+    """Returns True if the label went to the printer, False for a dry run.
+
+    One job at a time: the printer takes a single connection, so overlapping sends from two
+    people (or the CLI and the server) would garble or drop labels.
+    """
     if dry_run or settings.dry_run:
         return False
     if not settings.printer_ip:
         raise RuntimeError("PRINTER_IP is not set")
-    _send_raster(img, settings)
+    Path(settings.data_dir).mkdir(parents=True, exist_ok=True)
+    with _thread_lock, open(Path(settings.data_dir) / ".printer.lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            _send_raster(img, settings)
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
     return True

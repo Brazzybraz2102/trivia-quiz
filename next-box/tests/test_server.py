@@ -4,6 +4,8 @@ from nextbox.auth import Accounts
 from nextbox.scan import ReadBack, RowMark
 from nextbox.server import create_app
 
+from conftest import tiny_jpeg
+
 H = {"X-NextBox-Key": "k"}
 
 
@@ -46,7 +48,7 @@ def test_scan_multipart_then_confirm(ctx, todo):
     c = client(ctx, rows=[{"row": 3, "mark": "drop", "confidence": 0.99}])  # row 3 = task #4
     label = c.post("/print/today", json={}, headers=H).json()
     rec = c.post("/scan", headers=H, data={"label_id": label["id"]},
-                 files={"photo": ("p.jpg", b"fake", "image/jpeg")}).json()
+                 files={"photo": ("p.jpg", tiny_jpeg(), "image/jpeg")}).json()
     assert rec["needs_confirmation"][0]["task_id"] == "4"
     assert not any(call[0] == "delete" for call in todo.calls)
     out = c.post(f"/scan/{rec['id']}/confirm", json={"decisions": {"3": "confirm"}}, headers=H).json()
@@ -124,3 +126,8 @@ def test_password_change_and_removal_sign_out(ctx):
     assert c.get("/auth/me").status_code == 200
     accts.remove_user("mike")
     assert c.get("/auth/me").status_code == 401
+
+
+def test_scan_refuses_files_that_arent_photos(ctx):
+    r = client(ctx).post("/scan", headers=H, files={"photo": ("p.jpg", b"not a photo", "image/jpeg")})
+    assert r.status_code == 415 and "photo" in r.json()["detail"]

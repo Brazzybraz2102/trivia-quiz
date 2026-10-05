@@ -7,8 +7,9 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$HERE"
 
 python3 -m venv .venv
-.venv/bin/pip install -q --upgrade pip
-.venv/bin/pip install -q -e '.[dev]'
+.venv/bin/pip install -q --upgrade pip setuptools
+# constraints.txt pins every package to the versions this release was tested with.
+.venv/bin/pip install -q -c constraints.txt -e '.[dev]'
 .venv/bin/python -m pytest -q
 
 if [[ ! -f .env ]]; then
@@ -37,8 +38,13 @@ Type=simple
 WorkingDirectory=%h/.local/share/nextbox/app
 Environment=NEXTBOX_ENV_FILE=%h/.local/share/nextbox/app/.env
 ExecStart=%h/.local/share/nextbox/app/.venv/bin/nextbox serve
-Restart=on-failure
+Restart=always
 RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=%h/.local/share/nextbox
 
 [Install]
 WantedBy=default.target

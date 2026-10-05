@@ -6,7 +6,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Callable
+from collections.abc import Callable
 
 from PIL import Image
 
@@ -15,7 +15,7 @@ from .auth import default_prefs
 from .config import Settings
 from .render import DayRow, render_day, render_label
 from .store import Store
-from .todoist import Todoist
+from .providers import TaskProvider
 
 TODAY_QUERY = "today | overdue"
 MAX_ROWS = 10  # the rest are listed under "Also waiting" (not markable)
@@ -25,20 +25,22 @@ MAX_ROWS = 10  # the rest are listed under "Also waiting" (not markable)
 class Context:
     settings: Settings
     store: Store
-    todoist_factory: Callable[[], Todoist] | None = None
+    tasks_factory: Callable[[], TaskProvider] | None = None  # this person's to-do app
     today: Callable[[], date] = date.today
-    user: str = "cli"                 # who's asking: a username, "key" (HA/scripts) or "cli"
+    user: str = "cli"                 # whose tickets these are (a username)
     prefs: dict = field(default_factory=default_prefs)
     printing_paused: bool = False     # server-wide kill switch: everything becomes a dry run
     auto_print_enabled: bool = True
-    _todoist: Todoist | None = field(default=None, repr=False)
+    _tasks: TaskProvider | None = field(default=None, repr=False)
 
     @property
-    def todoist(self) -> Todoist:
-        if self._todoist is None:
-            factory = self.todoist_factory or (lambda: Todoist(self.settings.todoist_token))
-            self._todoist = factory()
-        return self._todoist
+    def tasks(self) -> TaskProvider:
+        if self._tasks is None:
+            if self.tasks_factory is None:
+                from .providers import ProviderError
+                raise ProviderError("Connect your to-do app in Settings first.")
+            self._tasks = self.tasks_factory()
+        return self._tasks
 
     def is_dry(self, dry_run: bool | None) -> bool:
         return (bool(dry_run) or self.settings.dry_run or self.printing_paused
@@ -155,10 +157,13 @@ def print_today(ctx: Context, source: str = "manual", dry_run: bool | None = Non
     dry = ctx.is_dry(dry_run)
     if source == "auto" and not ctx.auto_print_enabled:
         return {"status": "skipped", "reason": "auto print is turned off in server settings"}
+    if source == "auto" and not dry and not printer.is_reachable(ctx.settings.printer_ip):
+        # Don't use up today's print on a printer that's off; the next walk-in will print.
+        return {"status": "skipped", "reason": "printer is offline; today's ticket will print next time"}
     if source == "auto" and not ctx.store.claim_auto(today.isoformat(), dry):
         return {"status": "skipped", "reason": f"auto print already ran on {today.isoformat()}"}
     try:
-        tasks = ctx.todoist.filter_tasks(TODAY_QUERY)
+        tasks = ctx.tasks.today()
     except Exception:
         if source == "auto":
             ctx.store.release_auto(today.isoformat(), dry)  # nothing printed, so no reprint risk
@@ -171,13 +176,13 @@ def print_today(ctx: Context, source: str = "manual", dry_run: bool | None = Non
 
 def print_filter(ctx: Context, query: str, title: str | None = None,
                  dry_run: bool | None = None, source: str = "manual") -> dict:
-    tasks = ctx.todoist.filter_tasks(query)
+    tasks = ctx.tasks.filter_tasks(query)
     return _task_label(ctx, kind="list", title=title or query, subtitle=ctx.today().strftime("%b %-d"),
                        tasks=tasks, source=source, dry_run=dry_run)
 
 
 def print_task(ctx: Context, task_id: str, dry_run: bool | None = None, source: str = "manual") -> dict:
-    task = ctx.todoist.get_task(task_id)
+    task = ctx.tasks.get_task(task_id)
     label_id = ctx.store.new_id(ctx.today())
     due = task.get("due") or {}
     subtitle = f"due {due['date'][:10]}" if due.get("date") else ""
@@ -198,9 +203,9 @@ def print_text(ctx: Context, text: str, title: str = "NOTE", dry_run: bool | Non
 
 
 def add_and_print(ctx: Context, text: str, dry_run: bool | None = None, source: str = "manual") -> dict:
-    """Create a Todoist task (first line = content, rest = description) and print its ticket."""
+    """Create a task in the person's to-do app (first line = title, rest = notes), print its ticket."""
     first, _, rest = text.strip().partition("\n")
-    task = ctx.todoist.add_task(first.strip()[:500], description=rest.strip())
+    task = ctx.tasks.add_task(first.strip()[:500], description=rest.strip())
     return print_task(ctx, str(task["id"]), dry_run=dry_run, source=source)
 
 

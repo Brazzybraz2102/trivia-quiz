@@ -62,7 +62,67 @@ async function boot() {
   $$("#nuRole option[data-min]").forEach((o) => o.disabled = RANK[me.role] < RANK[o.dataset.min]);
   loadPrefs(me.prefs);
   refreshStatus();
+  loadConnection();
 }
+
+// ---------------------------------------------------------------- to-do app connection
+let providers = [], conn = null;
+
+async function loadConnection() {
+  try {
+    [providers, conn] = await Promise.all([providers.length ? providers : api("/providers"), api("/connection")]);
+  } catch (e) { $("#appStatus").textContent = e.message; return; }
+  const ready = providers.filter((p) => p.status === "ready");
+  const spec = providers.find((p) => p.key === conn.provider);
+  $("#notConnected").hidden = !!conn.connected;
+  $$(".appName").forEach((el) => el.textContent = conn.connected ? conn.name : "your to-do app");
+  $("#filterHelp").textContent = spec?.filter_help || "";
+  if (conn.connected) {
+    $("#appStatus").innerHTML = `Connected to <b>${esc(conn.name)}</b>${conn.account ? ` as ${esc(conn.account)}` : ""}.
+      ${conn.legacy ? `<div class="muted">Using the Todoist token in the server's .env. Connect here to use your own.</div>` : ""}
+      ${(conn.lists || []).length ? `<div class="muted">Lists: ${conn.lists.map(esc).join(", ")}</div>` : ""}
+      ${conn.legacy ? "" : `<div class="row"><button class="plain small" id="appDisconnect">Disconnect</button>
+        <button class="plain small" id="appChange">Switch app</button></div>`}`;
+    $("#appConnect").hidden = !conn.legacy;
+    $("#appDisconnect")?.addEventListener("click", async () => {
+      if (!confirm("Disconnect your to-do app? Your tasks stay in the app; Next Box just stops reading them.")) return;
+      await api("/connection", { method: "DELETE" }); toast("Disconnected"); loadConnection();
+    });
+    $("#appChange")?.addEventListener("click", () => { $("#appConnect").hidden = false; });
+  } else {
+    $("#appStatus").textContent = "Not connected yet. Pick your app below.";
+    $("#appConnect").hidden = false;
+  }
+  if (!$("#provSel").options.length) {
+    $("#provSel").innerHTML = ready.map((p) => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join("");
+    $("#provSel").onchange = renderProviderFields;
+    $("#provOther").innerHTML = (ready.filter((p) => p.also).map((p) => `<p><b>${esc(p.name)}</b> also covers ${esc(p.also)}.</p>`).join("")) +
+      providers.filter((p) => p.status !== "ready").map((p) => `<p><b>${esc(p.name)}</b>: ${p.status === "needs_setup" ? "coming soon." : "not possible."} ${esc(p.reason)}</p>`).join("");
+    renderProviderFields();
+  }
+}
+
+function renderProviderFields() {
+  const p = providers.find((x) => x.key === $("#provSel").value);
+  $("#provFields").innerHTML = (p.fields || []).map((f) => `<div class="field">
+      <label for="pf_${esc(f.name)}">${esc(f.label)}${f.optional ? " (optional)" : ""}</label>
+      <input id="pf_${esc(f.name)}" data-field="${esc(f.name)}" type="${f.secret ? "password" : "text"}" autocomplete="off" autocapitalize="none">
+      ${f.help ? `<div class="muted">${esc(f.help)}</div>` : ""}</div>`).join("");
+  $("#provMsg").textContent = "";
+}
+
+$("#provGo").onclick = async () => {
+  const fields = {};
+  $$("#provFields [data-field]").forEach((el) => fields[el.dataset.field] = el.value);
+  $("#provGo").disabled = true; $("#provMsg").textContent = "";
+  try {
+    await api("/connection", { method: "PUT", json: { provider: $("#provSel").value, fields } });
+    $$("#provFields input").forEach((el) => el.value = "");
+    toast("Connected"); loadConnection();
+  } catch (e) { $("#provMsg").textContent = e.message; }
+  finally { $("#provGo").disabled = false; }
+};
+$("#goConnect").onclick = () => { $("nav button[data-tab=settings]").click(); $("#appCard").scrollIntoView({ behavior: "smooth" }); };
 
 $("#loginForm").onsubmit = async (e) => {
   e.preventDefault();
@@ -120,7 +180,10 @@ $$("[data-act]").forEach((b) => b.onclick = async () => {
   if (!dry_run && !confirm("Send this to the printer?")) return;
   b.disabled = true;
   try { showPrint(await api(routes[act][0], { method: "POST", json: routes[act][1] })); }
-  catch (e) { $("#printResult").hidden = false; $("#printResult").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  catch (e) {
+    $("#printResult").hidden = false; $("#printResult").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+    if (e.message.startsWith("Connect your to-do app")) loadConnection();
+  }
   finally { b.disabled = false; }
 });
 
@@ -250,7 +313,7 @@ async function loadAdmin() {
         u.disabled && `<span class="badge bad">off</span>`, u.beta && `<span class="badge">beta</span>`,
         u.debug && `<span class="badge bad">debug</span>`, u.must_change && `<span class="badge">temp password</span>`].filter(Boolean).join(" ");
       return `<div class="user"><div class="top"><b>${esc(u.username)}</b>${badges}</div>
-        <div class="muted">last sign-in ${when(u.last_login)} · ${u.sessions} device(s) · ${u.prints} prints · ${u.errors_7d} errors this week</div>
+        <div class="muted">${u.app ? esc(u.app) : "no to-do app yet"} · last sign-in ${when(u.last_login)} · ${u.sessions} device(s) · ${u.prints} prints · ${u.errors_7d} errors this week</div>
         <div class="row">
           <button class="plain small" data-u="${esc(u.username)}" data-a="activity">Activity</button>
           ${m ? `<button class="plain small" data-u="${esc(u.username)}" data-a="reset">Reset password</button>
@@ -358,7 +421,8 @@ async function loadDiag() {
     const ok = (b) => b ? `<span class="ok">ok</span>` : `<span class="err">problem</span>`;
     const rows = [
       ["Printer", `${ok(d.printer.reachable)} ${esc(d.printer.ip || "no IP set")} · ${d.printer.ms} ms · ${esc(d.printer.label)} mm tape`],
-      ["Todoist", `${ok(d.todoist.ok)} ${d.todoist.ok ? d.todoist.projects + " projects" : esc(d.todoist.error)} · ${d.todoist.ms} ms`],
+      ["Your to-do app", `${ok(d.todoist.ok)} ${d.todoist.ok ? esc(d.todoist.app) + " · " + d.todoist.projects + " lists" : esc(d.todoist.error)} · ${d.todoist.ms} ms`],
+      ["Everyone's apps", Object.entries(d.apps || {}).map(([k, v]) => `${esc(k)}: ${v}`).join(" · ")],
       ["Read-back", `${ok(d.vision.key_set)} ${esc(d.vision.model)}${d.vision.key_set ? "" : " · ANTHROPIC_API_KEY missing"}`],
       ["Errors (24h)", d.counts.errors_24h ? `<span class="err">${d.counts.errors_24h}</span>` : "0"],
       ["Totals", `${d.counts.users} people · ${d.counts.printed} tickets · ${d.counts.scans} scans`],

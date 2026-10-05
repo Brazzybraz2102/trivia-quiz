@@ -4,14 +4,17 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
-import mimetypes
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from . import jobs, printer, scan
-from .auth import Accounts, AuthError
+from .auth import Accounts, AuthError, default_prefs
+from .connections import Connections
+from .providers import READY
+from .vault import Vault
 from .config import load_settings
 from .jobs import Context
 from .store import Store
@@ -80,16 +83,36 @@ def _user(accounts: Accounts, action: str, username: str | None, role: str | Non
         return 1
 
 
+def _connect(conns: Connections, username: str, provider: str) -> int:
+    if not conns.accounts.get(username):
+        print(f"no user {username}", file=sys.stderr)
+        return 1
+    fields = {}
+    for f in READY[provider]["fields"]:
+        if f.get("help"):
+            print(f"  {f['label']}: {f['help']}")
+        prompt = f"{f['label']}{' (optional)' if f.get('optional') else ''}: "
+        fields[f["name"]] = getpass.getpass(prompt) if f.get("secret") else input(prompt)
+    try:
+        status = conns.connect(username, provider, fields)
+    except Exception as exc:
+        print(f"couldn't connect: {exc}", file=sys.stderr)
+        return 1
+    print(f"{username}: connected to {status['name']} as {status.get('account')}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="nextbox", description="Todoist -> Brother QL label printer")
+    ap = argparse.ArgumentParser(prog="nextbox", description="Your to-do list on a Brother QL label printer")
     ap.add_argument("--dry-run", action="store_true", help="render the PNG only; never touch the printer")
+    ap.add_argument("--user", help="whose to-do app and tickets (default: the owner, i.e. first superadmin)")
     ap.add_argument("--json", action="store_true", help="print raw JSON results")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status", help="config + printer reachability")
     t = sub.add_parser("today", help="print today + overdue")
     t.add_argument("--auto", action="store_true", help="the once-a-day guarded print (Home Assistant)")
-    lst = sub.add_parser("list", help="print any Todoist filter, e.g. '#Groceries' or 'p1'")
+    lst = sub.add_parser("list", help="print a Todoist filter ('#Groceries', 'p1') or a CalDAV list name")
     lst.add_argument("query")
     lst.add_argument("--title")
     tk = sub.add_parser("task", help="print one task by id")
@@ -97,9 +120,9 @@ def main(argv: list[str] | None = None) -> int:
     tx = sub.add_parser("text", help="print a free-text note")
     tx.add_argument("text", nargs="+")
     tx.add_argument("--title", default="NOTE")
-    tx.add_argument("--todo", action="store_true", help="also add it to Todoist")
+    tx.add_argument("--todo", action="store_true", help="also add it to your to-do app")
     c = sub.add_parser("clip", help="print the clipboard (bind this to a hotkey)")
-    c.add_argument("--todo", action="store_true", help="add clipboard to Todoist, then print its ticket")
+    c.add_argument("--todo", action="store_true", help="add clipboard to your to-do app, then print its ticket")
     pr = sub.add_parser("printed", help="recent print history")
     pr.add_argument("-n", type=int, default=10)
     sc = sub.add_parser("scan", help="read back a photo of a marked-up label")
@@ -108,6 +131,13 @@ def main(argv: list[str] | None = None) -> int:
     cf = sub.add_parser("confirm", help="review a scan's pending items one by one")
     cf.add_argument("scan_id")
     sub.add_parser("serve", help="run the HTTP server")
+    cn = sub.add_parser("connect", help="connect someone's to-do app (prompts for the token/password)")
+    cn.add_argument("username")
+    cn.add_argument("provider", choices=sorted(READY))
+    dc = sub.add_parser("disconnect", help="forget someone's to-do app connection")
+    dc.add_argument("username")
+    pn = sub.add_parser("prune", help="delete tickets and scans older than N days")
+    pn.add_argument("--days", type=int, default=None)
     us = sub.add_parser("user", help="manage web sign-in accounts")
     us.add_argument("action", choices=["add", "passwd", "role", "enable", "disable", "remove", "list"])
     us.add_argument("username", nargs="?")
@@ -115,9 +145,25 @@ def main(argv: list[str] | None = None) -> int:
                     help="for `role` (and optionally `add`)")
 
     args = ap.parse_args(argv)
+    os.umask(0o077)  # files Next Box writes stay private to this desktop user
     settings = load_settings()
-    ctx = Context(settings=settings, store=Store(settings.data_dir))
+    accounts = Accounts(settings.data_dir)
+    conns = Connections(settings, accounts, Vault(settings.data_dir))
+    who = (args.user or accounts.owner() or "cli").lower()
+    ctx = Context(settings=settings, store=Store(settings.data_dir), user=who,
+                  tasks_factory=lambda: conns.provider_for(who),
+                  prefs=(accounts.get(who) or {}).get("prefs") or default_prefs())
     dry = args.dry_run or None
+
+    if args.cmd == "connect":
+        return _connect(conns, args.username.lower(), args.provider)
+    if args.cmd == "disconnect":
+        conns.disconnect(args.username.lower())
+        print(f"{args.username}: disconnected")
+        return 0
+    if args.cmd == "prune":
+        print(ctx.store.prune(args.days or settings.retention_days))
+        return 0
 
     try:
         if args.cmd == "status":
@@ -134,13 +180,13 @@ def main(argv: list[str] | None = None) -> int:
             uvicorn.run(build_default_app(), host=settings.host, port=settings.port)
             return 0
         if args.cmd == "printed":
-            for r in ctx.store.list_printed(args.n):
+            for r in ctx.store.list_printed(args.n, by=who):
                 flag = " (dry)" if r["dry_run"] else ""
                 print(f"#{r['id']}  {r['created_at']}  {r['kind']:<5} {r['source']:<6} {r['title'][:40]}{flag}")
             return 0
         if args.cmd == "scan":
-            media = mimetypes.guess_type(args.photo.name)[0] or "image/jpeg"
-            rec = scan.scan_photo(ctx, scan.claude_vision(settings), args.photo.read_bytes(), media,
+            data, media = scan.prepare_photo(args.photo.read_bytes())
+            rec = scan.scan_photo(ctx, scan.claude_vision(settings), data, media,
                                   (args.label or "").lstrip("#") or None)
             print(json.dumps(rec, indent=2, ensure_ascii=False))
             if rec["needs_confirmation"]:

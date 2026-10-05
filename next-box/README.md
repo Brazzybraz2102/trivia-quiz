@@ -1,13 +1,23 @@
 # Next Box
 
-Print your Todoist lists on a Brother QL-1110NWB. Mark them up with a pen, snap a photo, and the
-changes go back to Todoist. Everything runs on your desktop, on your home network only.
+Print your to-do list on a Brother QL-1110NWB. Mark it up with a pen, snap a photo, and the
+changes go back to your to-do app. Everything runs on your desktop, on your home network only.
+
+Each person signs in and connects **their own** to-do app:
+- **Todoist**
+- **any CalDAV task list**: Nextcloud Tasks, Fastmail, Synology, Zoho, Radicale, DAVx⁵, and older
+  iCloud Reminders lists
+
+Google Tasks, Microsoft To Do and TickTick are next. Each needs a one-time sign-in setup.
+Apple Reminders (current lists), Things, Any.do and Google Keep don't allow other apps to connect.
 
 ## Install on the desktop (about 15 minutes)
 
-You'll need your Todoist API token (Todoist → Settings → Integrations → Developer), the
-printer's IP address (hold the printer's info button to print its settings, or check your
-router), and an Anthropic API key (console.anthropic.com).
+You'll need:
+- the printer's IP address (hold the printer's info button to print its settings, or check your router)
+- an Anthropic API key, for photo read-back (console.anthropic.com)
+
+Everyone connects their own to-do app later, from the web app.
 
 ### 1. Get the code
 ```bash
@@ -22,30 +32,33 @@ cd next-box
 sudo apt install -y python3-venv wl-clipboard libnotify-bin   # Fedora: sudo dnf install python3 wl-clipboard libnotify
 scripts/install.sh          # first run: builds the venv, runs the tests, creates .env, then stops
 python3 -c "import secrets; print(secrets.token_urlsafe(24))"   # copy this: it's your NEXTBOX_KEY
-nano .env                   # paste TODOIST_TOKEN, PRINTER_IP, NEXTBOX_KEY, ANTHROPIC_API_KEY
+nano .env                   # paste PRINTER_IP, NEXTBOX_KEY, ANTHROPIC_API_KEY
 ```
 
-### 3. Check it without printing
+### 3. Create your account and connect your to-do app
+```bash
+.venv/bin/nextbox user add mike                 # first account = superadmin (you)
+.venv/bin/nextbox connect mike todoist          # or: caldav. Prompts for the token or password
+```
+You can also connect later in the web app, under **Settings → Your to-do app**.
+
+### 4. Check it without printing
 ```bash
 .venv/bin/nextbox status                 # want "printer_reachable": true
 .venv/bin/nextbox --dry-run today        # prints a PNG path; open it to see the label
 xdg-open "$(.venv/bin/nextbox --dry-run --json today | python3 -c 'import sys,json;print(json.load(sys.stdin)["png"])')"
 ```
 
-### 4. First real print
+### 5. First real print
 Load 62 mm continuous tape (DK-22205), then:
 ```bash
 .venv/bin/nextbox today
 ```
 If it comes out faint, cramped or rotated, tell Claude and it'll tune `nextbox/render.py`.
 
-### 5. Run it as a service (starts at boot)
+### 6. Run it as a service (starts at boot)
 ```bash
 scripts/install.sh          # second run: installs the systemd user service and enables linger
-```
-Then create your sign-in (the password is typed twice and never shown):
-```bash
-.venv/bin/nextbox user add mike
 ```
 The install script ends by printing the web app address, `http://<desktop-ip>:8787/app`. Open
 that on any phone or laptop on your Wi-Fi and sign in. You stay signed in for 30 days per device.
@@ -79,15 +92,19 @@ If you're ever locked out of the web app, fix it from the desktop:
    - or downloads their **Debug bundle** and hands it to Claude
 4. To stop real prints while you investigate, use **Debug tab → Pause all printing**.
 
-Everyone who signs in uses the same Todoist account, the one whose token is in `.env`.
+Everyone connects their own to-do app under **Settings → Your to-do app**. Tokens and passwords
+are checked first, then stored encrypted. Each person sees and prints only their own tasks and
+tickets. Home Assistant and the hotkey use the owner's app (the first superadmin, which is you).
+The key that encrypts those secrets is `secret.key` in the data folder, so back up the whole
+folder, not just `.env`.
 
-### 6. Hotkey: copy text, press a key, it's a task with a ticket
+### 7. Hotkey: copy text, press a key, it's a task with a ticket
 ```bash
 scripts/hotkey.sh '<Super><Shift>t' --dry-run   # try it safely first
 scripts/hotkey.sh '<Super><Shift>t'             # then for real
 ```
 
-### 7. Home Assistant
+### 8. Home Assistant
 1. Copy `ha/nextbox.yaml` to `<ha config>/packages/nextbox.yaml`, and make sure
    `configuration.yaml` has `homeassistant: { packages: !include_dir_named packages }`.
 2. Add `nextbox_print_today_url: http://<desktop-ip>:8787/print/today` and `nextbox_key: ...` to `secrets.yaml`.
@@ -108,7 +125,7 @@ scripts/hotkey.sh '<Super><Shift>t'             # then for real
 | A project or filter | `nextbox list '#Groceries'` |
 | One task | `nextbox task <id>` |
 | A note | `nextbox text "Call Sam back"` |
-| Clipboard → Todoist + ticket | your hotkey |
+| Clipboard → to-do app + ticket | your hotkey |
 | Read back | Mark ✓ done, → tomorrow or ✗ drop, then web app → Read back → photo. Deletes and anything uncertain wait for Confirm/Skip. CLI: `nextbox scan photo.jpg`, then `nextbox confirm <scan-id>` |
 | History | web app → Printed, or `nextbox printed` |
 | Sign out | web app → Account → Sign out |
@@ -116,4 +133,9 @@ scripts/hotkey.sh '<Super><Shift>t'             # then for real
 ## Troubleshooting
 - `printer_reachable: false`: check that the printer is on the same Wi-Fi and give it a DHCP reservation so its IP stays fixed.
 - Service logs: `journalctl --user -u nextbox -f`
+- Service won't start, with status 218 or "namespace" errors: your system doesn't allow the
+  service's sandboxing. Delete the `ProtectSystem=`, `ReadWritePaths=` and `PrivateTmp=` lines in
+  `~/.config/systemd/user/nextbox.service`, then run `systemctl --user daemon-reload`.
+- "Connect your to-do app first": that person hasn't connected one yet (Settings → Your to-do app).
+- Old tickets and scans are deleted after 90 days (`NEXTBOX_RETENTION_DAYS`). Run `nextbox prune` to clean up now.
 - After changing code or `.env`: `systemctl --user restart nextbox`

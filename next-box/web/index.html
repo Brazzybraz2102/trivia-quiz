@@ -60,6 +60,10 @@
   #toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); background:var(--fg); color:var(--bg); padding:8px 14px; border-radius:8px; font-size:14px; opacity:0; transition:opacity .2s; pointer-events:none; }
   #toast.show { opacity:1; }
   #fb { position:fixed; right:16px; bottom:16px; }
+  .warnbox { border-color:var(--warn); }
+  .field { margin-top:8px; }
+  .field label { display:block; font-size:14px; font-weight:600; }
+  .field .muted { font-size:12px; }
   .center { max-width:400px; margin:12vh auto 0; padding:0 16px; }
   .center label { display:block; margin-top:10px; font-size:14px; }
   .center input { margin-top:4px; }
@@ -102,19 +106,23 @@
 </nav>
 <main>
   <section id="print" class="on">
+    <div class="card warnbox" id="notConnected" hidden><b>Connect your to-do app first.</b>
+      <span class="muted">Next Box prints your own lists from Todoist or any CalDAV task app.</span>
+      <div class="row"><button class="go" id="goConnect">Connect it in Settings</button></div></div>
     <label class="dry"><input type="checkbox" id="dry" checked> Dry run (render only, don't print)</label>
     <div class="card"><h2>Today</h2>
-      <p class="muted">Today + overdue from Todoist.</p>
+      <p class="muted">Today + overdue from <span class="appName">your to-do app</span>.</p>
       <button class="go" data-act="today">Print today</button></div>
     <div class="card"><h2>List from a filter</h2>
       <input type="text" id="query" placeholder="#Groceries, p1, @errands, tomorrow…">
+      <p class="muted" id="filterHelp"></p>
       <div class="row"><button class="go" data-act="list">Print list</button></div></div>
     <div class="card"><h2>Note or new task</h2>
-      <textarea id="text" placeholder="First line becomes the title if you add it to Todoist"></textarea>
+      <textarea id="text" placeholder="First line becomes the title if you add it to your to-do app"></textarea>
       <div class="row"><button class="go" data-act="text">Print note</button>
-        <button class="plain" data-act="todo">Add to Todoist + print</button></div></div>
+        <button class="plain" data-act="todo">Add to <span class="appName">my to-do app</span> + print</button></div></div>
     <div class="card"><h2>One task</h2>
-      <input type="text" id="taskid" placeholder="Todoist task ID">
+      <input type="text" id="taskid" placeholder="Task ID">
       <div class="row"><button class="go" data-act="task">Print task</button></div></div>
     <div class="card result" id="printResult" hidden></div>
   </section>
@@ -131,6 +139,16 @@
   <section id="printed"><div id="hist" class="hist"></div></section>
 
   <section id="settings">
+    <div class="card" id="appCard"><h2>Your to-do app</h2>
+      <div id="appStatus" class="muted">…</div>
+      <div id="appConnect" hidden>
+        <div class="row"><select id="provSel" aria-label="To-do app"></select></div>
+        <div id="provFields"></div>
+        <div class="row"><button class="go" id="provGo">Connect</button><span id="provMsg" class="err"></span></div>
+        <details class="muted" style="margin-top:10px"><summary>Other apps</summary><div id="provOther"></div></details>
+      </div>
+    </div>
+
     <div class="card"><h2>Account</h2>
       <p>Signed in as <b id="who"></b> <span id="whoRole" class="badge"></span></p>
       <h3>Change password</h3>
@@ -146,21 +164,21 @@
     </div>
 
     <div class="card"><h2>Printing</h2>
-      <div class="setting"><div class="label"><b>Always preview only</b><span>Never send to the printer from my account. Good for testing.</span></div><input type="checkbox" data-pref="always_dry_run"></div>
-      <div class="setting"><div class="label"><b>Rows per ticket</b><span>Extra tasks go under "Also waiting". 3–20.</span></div><input type="number" min="3" max="20" data-pref="max_rows"></div>
-      <div class="setting"><div class="label"><b>Show "Also waiting"</b><span>List the tasks that didn't fit at the bottom.</span></div><input type="checkbox" data-pref="show_waiting"></div>
-      <div class="setting"><div class="label"><b>24-hour times</b><span>19:00 instead of 7:00p.</span></div><input type="checkbox" data-pref="time_24h"></div>
-      <div class="setting"><div class="label"><b>Default list filter</b><span>Pre-fills "List from a filter".</span></div><input type="text" style="max-width:220px" data-pref="default_filter" placeholder="#Groceries"></div>
+      <label class="setting"><div class="label"><b>Always preview only</b><span>Never send to the printer from my account. Good for testing.</span></div><input type="checkbox" data-pref="always_dry_run"></label>
+      <label class="setting"><div class="label"><b>Rows per ticket</b><span>Extra tasks go under "Also waiting". 3–20.</span></div><input type="number" min="3" max="20" data-pref="max_rows"></label>
+      <label class="setting"><div class="label"><b>Show "Also waiting"</b><span>List the tasks that didn't fit at the bottom.</span></div><input type="checkbox" data-pref="show_waiting"></label>
+      <label class="setting"><div class="label"><b>24-hour times</b><span>19:00 instead of 7:00p.</span></div><input type="checkbox" data-pref="time_24h"></label>
+      <label class="setting"><div class="label"><b>Default list filter</b><span>Pre-fills "List from a filter".</span></div><input type="text" style="max-width:220px" data-pref="default_filter" placeholder="#Groceries"></label>
     </div>
 
     <div class="card"><h2>Read-back</h2>
-      <div class="setting"><div class="label"><b>Apply confident marks automatically</b><span>Off: every mark waits for Confirm. Deletes always wait, either way.</span></div><input type="checkbox" data-pref="auto_apply"></div>
-      <div class="setting"><div class="label"><b>Confidence needed</b><span id="confLabel">Marks below this wait for you.</span></div><input type="range" min="0.5" max="0.95" step="0.05" data-pref="confidence" style="width:160px"></div>
+      <label class="setting"><div class="label"><b>Apply confident marks automatically</b><span>Off: every mark waits for Confirm. Deletes always wait, either way.</span></div><input type="checkbox" data-pref="auto_apply"></label>
+      <label class="setting"><div class="label"><b>Confidence needed</b><span id="confLabel">Marks below this wait for you.</span></div><input type="range" min="0.5" max="0.95" step="0.05" data-pref="confidence" style="width:160px"></label>
     </div>
 
     <div class="card"><h2>Appearance</h2>
       <div class="setting"><div class="label"><b>Theme</b><span>This device only.</span></div>
-        <select id="theme"><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+        <select id="theme" aria-label="Theme"><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
     </div>
 
     <div class="card"><h2>Help</h2>
@@ -192,8 +210,8 @@
       <div id="diag">…</div>
       <div class="row"><button class="plain" id="diagGo">Refresh</button></div></div>
     <div class="card"><h2>Server switches</h2>
-      <div class="setting"><div class="label"><b>Pause all printing</b><span>Kill switch: every print becomes a preview, for everyone.</span></div><input type="checkbox" data-server="printing_paused"></div>
-      <div class="setting"><div class="label"><b>Home Assistant auto print</b><span>The once-a-day print when you walk into the office.</span></div><input type="checkbox" data-server="auto_print_enabled"></div>
+      <label class="setting"><div class="label"><b>Pause all printing</b><span>Kill switch: every print becomes a preview, for everyone.</span></div><input type="checkbox" data-server="printing_paused"></label>
+      <label class="setting"><div class="label"><b>Home Assistant auto print</b><span>The once-a-day print when you walk into the office.</span></div><input type="checkbox" data-server="auto_print_enabled"></label>
       <h3>Announcement banner</h3>
       <div class="row"><input type="text" id="announceText" maxlength="300" placeholder="Shown to everyone who's signed in. Leave blank for none."></div>
       <div class="row"><button class="go" id="announceGo">Save banner</button></div>

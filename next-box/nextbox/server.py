@@ -29,9 +29,12 @@ from pydantic import BaseModel
 from . import jobs, printer, scan
 from .auth import ROLES, Accounts, AuthError, default_prefs, rank
 from .config import PROJECT_DIR
+from .connections import Builder, Connections, NotConnected
 from .events import Events, ServerSettings
 from .jobs import Context
+from .providers import PROVIDERS, ProviderError
 from .store import normalize_id
+from .vault import Vault
 
 WEB_DIR = PROJECT_DIR / "web"
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
@@ -89,6 +92,11 @@ class NewUserBody(BaseModel):
     beta: bool = False
 
 
+class ConnectBody(BaseModel):
+    provider: str
+    fields: dict[str, str]
+
+
 class UserPatch(BaseModel):
     role: str | None = None
     disabled: bool | None = None
@@ -106,16 +114,31 @@ class Caller:
 
 
 def create_app(ctx: Context, vision: scan.VisionFn | None = None,
-               accounts: Accounts | None = None) -> FastAPI:
+               accounts: Accounts | None = None, builder: Builder | None = None) -> FastAPI:
+    """`ctx.tasks_factory`, when set, is one to-do app shared by everyone (tests only).
+    Otherwise each person's own connection is used."""
     app = FastAPI(title="Next Box", docs_url="/docs")
     # No allow_credentials: cookies only work same-origin; other clients use headers.
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                        allow_headers=["*"])
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("Content-Security-Policy",
+                                    "default-src 'self'; img-src 'self' data: blob:; "
+                                    "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'")
+        return response
+
     key = ctx.settings.server_key
     data_dir = Path(ctx.settings.data_dir)
     accounts = accounts or Accounts(data_dir)
     events = Events(data_dir)
     server_settings = ServerSettings(data_dir)
+    vault = Vault(data_dir)
+    connections = Connections(ctx.settings, accounts, vault, **({"builder": builder} if builder else {}))
 
     # ------------------------------------------------------------------ auth
     def _bearer(request: Request) -> str | None:
@@ -140,6 +163,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             if origin and urlparse(origin).netloc != request.headers.get("host"):
                 raise HTTPException(403, "cross-site request refused")
         user = accounts.get(name)
+        if user["must_change"] and not request.url.path.startswith("/auth/"):
+            raise HTTPException(403, "Choose your own password first (Settings → Account).")
         return Caller(name, role=user["role"], debug=user["debug"], token=token, prefs=user["prefs"])
 
     def require(min_role: str):
@@ -166,12 +191,26 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         events.log(caller.name, action, kind="audit", detail=detail)
 
     # -------------------------------------------------------------- running
+    def acting_as(caller: Caller) -> str:
+        """Whose tasks and tickets: the person, or the owner for Home Assistant/scripts."""
+        if caller.role == "service":
+            return accounts.owner() or caller.name
+        return caller.name
+
     def rctx(caller: Caller) -> Context:
         s = server_settings.get()
-        return dataclasses.replace(ctx, user=caller.name, prefs=caller.prefs,
+        name = acting_as(caller)
+        prefs = caller.prefs
+        if caller.role == "service" and accounts.get(name):
+            prefs = accounts.get(name)["prefs"]
+        if ctx.tasks_factory is not None:
+            factory = ctx.tasks_factory
+        else:
+            factory = lambda: connections.provider_for(name)  # noqa: E731
+        return dataclasses.replace(ctx, user=name, prefs=prefs,
                                    printing_paused=s["printing_paused"],
                                    auto_print_enabled=s["auto_print_enabled"],
-                                   todoist_factory=lambda: ctx.todoist, _todoist=None)
+                                   tasks_factory=factory, _tasks=None)
 
     def run(caller: Caller, action: str, fn, *args, **kwargs):
         start = time.time()
@@ -179,6 +218,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             result = fn(*args, **kwargs)
         except HTTPException:
             raise
+        except NotConnected as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except scan.PhotoError as exc:
+            raise HTTPException(415, str(exc)) from exc
         except Exception as exc:
             events.log(caller.name, action, ok=False, kind="error", error=str(exc),
                        trace=traceback.format_exc(), detail={"args": _safe_args(args, kwargs)})
@@ -206,7 +249,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(429, "too many attempts; wait 5 minutes")
         if not accounts.verify(username, body.password):
             user = accounts.get(username)
-            if user and user["disabled"]:
+            # Only say "turned off" to someone who knows the password; everyone else gets the
+            # same answer as a wrong password, and it counts toward the lockout.
+            if user and user["disabled"] and accounts.password_ok(username, body.password):
                 events.log(username, "login", ok=False, kind="auth", detail={"ip": client, "why": "disabled"})
                 raise HTTPException(403, "this account is turned off; ask an admin")
             accounts.record_failure(client)
@@ -308,7 +353,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.get("/tasks")
     def tasks(query: str = jobs.TODAY_QUERY, caller: Caller = Depends(auth)):
-        return run(caller, "tasks", rctx(caller).todoist.filter_tasks, query)
+        c = rctx(caller)
+        return run(caller, "tasks", lambda q: c.tasks.filter_tasks(q), query)
 
     @app.post("/print/today")
     def p_today(body: TodayBody, caller: Caller = Depends(auth)):
@@ -339,13 +385,16 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.get("/printed")
     def printed(limit: int = 50, caller: Caller = Depends(auth)):
-        return ctx.store.list_printed(limit)
+        return ctx.store.list_printed(limit, by=acting_as(caller))
 
     @app.get("/printed/{label_id}/png")
     def printed_png(label_id: str, caller: Caller = Depends(auth)):
         label_id = normalize_id(label_id)
         path = ctx.store.png_path(label_id)
         if not re.fullmatch(r"[A-Z0-9-]{4,16}", label_id) or not path.exists():
+            raise HTTPException(404)
+        rec = ctx.store.get_printed(label_id)
+        if not rec or rec.get("by") != acting_as(caller):
             raise HTTPException(404)
         return FileResponse(path, media_type="image/png")
 
@@ -358,25 +407,60 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         media_type = photo.content_type or "image/jpeg"
         if media_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
             raise HTTPException(415, f"unsupported image type {media_type}")
+        try:
+            data, media_type = scan.prepare_photo(data)  # upright, resized JPEG
+        except scan.PhotoError as exc:
+            raise HTTPException(415, str(exc)) from exc
         fn = vision or scan.claude_vision(ctx.settings)
         return run(caller, "scan", scan.scan_photo, rctx(caller), fn, data, media_type, label_id or None)
 
     @app.get("/scans")
     def scans(limit: int = 20, caller: Caller = Depends(auth)):
-        return ctx.store.list_scans(limit)
+        return ctx.store.list_scans(limit, by=acting_as(caller))
 
-    @app.get("/scan/{scan_id}")
-    def get_scan(scan_id: str, caller: Caller = Depends(auth)):
-        rec = ctx.store.get_scan(scan_id)
-        if not rec:
+    def _own_scan(scan_id: str, caller: Caller) -> dict:
+        rec = ctx.store.get_scan(scan_id) if re.fullmatch(r"[A-Za-z0-9-]{4,16}", scan_id) else None
+        if not rec or rec.get("by") != acting_as(caller):
             raise HTTPException(404)
         return rec
 
+    @app.get("/scan/{scan_id}")
+    def get_scan(scan_id: str, caller: Caller = Depends(auth)):
+        return _own_scan(scan_id, caller)
+
     @app.post("/scan/{scan_id}/confirm")
     def confirm_scan(scan_id: str, body: ConfirmBody, caller: Caller = Depends(auth)):
-        if not ctx.store.get_scan(scan_id):
-            raise HTTPException(404)
+        _own_scan(scan_id, caller)
         return run(caller, "scan_confirm", scan.confirm, rctx(caller), scan_id, body.decisions)
+
+    # ----------------------------------------------------------- to-do app connection
+    @app.get("/providers")
+    def providers():
+        return PROVIDERS
+
+    @app.get("/connection")
+    def get_connection(caller: Caller = Depends(person)):
+        return connections.status(caller.name)
+
+    @app.put("/connection")
+    def put_connection(body: ConnectBody, caller: Caller = Depends(person)):
+        try:
+            status = connections.connect(caller.name, body.provider, body.fields)
+        except ProviderError as exc:
+            events.log(caller.name, "connect", ok=False, detail={"provider": body.provider}, error=str(exc))
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:  # a server we can't talk to at all
+            events.log(caller.name, "connect", ok=False, kind="error", detail={"provider": body.provider},
+                       error=str(exc), trace=traceback.format_exc())
+            raise HTTPException(400, f"Couldn't connect: {exc}") from exc
+        events.log(caller.name, "connect", detail={"provider": body.provider, "account": status.get("account")})
+        return status
+
+    @app.delete("/connection")
+    def delete_connection(caller: Caller = Depends(person)):
+        connections.disconnect(caller.name)
+        events.log(caller.name, "disconnect")
+        return connections.status(caller.name)
 
     # ----------------------------------------------------------- admin (support)
     def _target(username: str) -> dict:
@@ -395,6 +479,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             out.append({**{k: u[k] for k in ("username", "role", "disabled", "beta", "debug",
                                              "must_change", "created", "last_login")},
                         "sessions": len(accounts.sessions_for(u["username"])),
+                        "app": connections.status(u["username"]).get("name"),
                         "prints": prints.get(u["username"], 0),
                         "errors_7d": sum(1 for e in events.query(user=u["username"], kind="error", limit=500)
                                          if e["ts"] > time.time() - 7 * 86400)})
@@ -464,7 +549,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.get("/admin/users/{username}/activity")
     def admin_activity(username: str, limit: int = 100, caller: Caller = Depends(admin_only)):
-        _target(username)
+        target = _target(username)
+        if target["username"] != caller.name and not can_manage(caller, target):
+            raise HTTPException(403, "you can't see this account's activity")
         evs = events.query(user=username.lower(), limit=min(limit, 500))
         if caller.role != "superadmin":
             evs = [{k: v for k, v in e.items() if k != "trace"} for e in evs]
@@ -477,14 +564,19 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     # ----------------------------------------------------------- superadmin (debug)
     @app.get("/super/diagnostics")
     def diagnostics(caller: Caller = Depends(super_only)):
-        todoist: dict = {"ok": False}
+        todoist: dict = {"ok": False}  # "your to-do app": the superadmin's own connection
         start = time.time()
         try:
-            todoist["projects"] = len(ctx.todoist.projects())
-            todoist["ok"] = True
+            info = rctx(caller).tasks.check()
+            todoist.update(ok=True, app=connections.status(caller.name).get("name", "shared"),
+                           projects=len(info.get("lists", [])))
         except Exception as exc:
             todoist["error"] = str(exc)[:300]
         todoist["ms"] = int((time.time() - start) * 1000)
+        apps: dict[str, int] = {}
+        for u in accounts.list_users():
+            name = connections.status(u).get("name", "not connected")
+            apps[name] = apps.get(name, 0) + 1
         start = time.time()
         reachable = printer.is_reachable(ctx.settings.printer_ip)
         usage = shutil.disk_usage(data_dir)
@@ -497,6 +589,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             "printer": {"reachable": reachable, "ms": int((time.time() - start) * 1000),
                         "ip": ctx.settings.printer_ip or None, "label": ctx.settings.label},
             "todoist": todoist,
+            "apps": apps,
             "vision": {"model": ctx.settings.vision_model, "key_set": bool(ctx.settings.anthropic_api_key)},
             "data_dir": {"path": str(data_dir), "used_mb": round(size / 1e6, 1),
                          "disk_free_gb": round(usage.free / 1e9, 1)},
@@ -536,8 +629,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             "user": user,  # never contains the password hash
             "sessions": accounts.sessions_for(name),
             "events": events.query(user=name, limit=300),
-            "printed": [r for r in ctx.store.list_printed(500) if r.get("by") == name][:20],
-            "scans": [r for r in ctx.store.list_scans(500) if r.get("by") == name][:20],
+            "connection": connections.status(name),  # never includes the sealed secret
+            "printed": ctx.store.list_printed(20, by=name),
+            "scans": ctx.store.list_scans(20, by=name),
             "server": {"version": _version(), "config": ctx.settings.redacted(),
                        "server_settings": server_settings.get()},
         }
@@ -580,7 +674,12 @@ def build_default_app() -> FastAPI:
     from .config import load_settings
     from .store import Store
 
+    import os
+
+    os.umask(0o077)  # every file Next Box writes is readable by this desktop user only
     settings = load_settings()
     if not settings.server_key:
         raise SystemExit("NEXTBOX_KEY is not set in .env; refusing to start an unauthenticated server")
-    return create_app(Context(settings=settings, store=Store(settings.data_dir)))
+    store = Store(settings.data_dir)
+    store.prune(settings.retention_days)
+    return create_app(Context(settings=settings, store=store))
