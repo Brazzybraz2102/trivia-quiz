@@ -1,7 +1,7 @@
 from PIL import Image
 
-from ticket import jobs
-from ticket.render import WIDTH
+from nextbox import jobs
+from nextbox.render import WIDTH
 
 
 def test_today_dry_run_renders_png_and_manifest(ctx):

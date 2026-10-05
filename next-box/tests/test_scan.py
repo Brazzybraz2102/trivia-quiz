@@ -1,5 +1,5 @@
-from ticket import jobs, scan
-from ticket.scan import ReadBack, RowMark
+from nextbox import jobs, scan
+from nextbox.scan import ReadBack, RowMark
 
 
 def fake_vision(rows, code=None):

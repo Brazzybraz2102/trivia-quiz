@@ -3,12 +3,12 @@ import json
 
 from fastapi.testclient import TestClient
 
-from ticket import jobs, scan
-from ticket.auth import Accounts
-from ticket.scan import ReadBack, RowMark
-from ticket.server import create_app
+from nextbox import jobs, scan
+from nextbox.auth import Accounts
+from nextbox.scan import ReadBack, RowMark
+from nextbox.server import create_app
 
-H = {"X-Ticket-Key": "k"}
+H = {"X-NextBox-Key": "k"}
 
 
 def app_client(ctx):
@@ -65,7 +65,7 @@ def test_prefs_change_the_ticket(ctx, todo):
 def test_always_dry_run_pref_blocks_real_prints(ctx, monkeypatch):
     ctx.settings.dry_run = False
     sent = []
-    monkeypatch.setattr("ticket.printer._send_raster", lambda img, s: sent.append(1))
+    monkeypatch.setattr("nextbox.printer._send_raster", lambda img, s: sent.append(1))
     ctx.settings.printer_ip = "10.0.0.9"
     setup(ctx)
     c = login(ctx, "tester", "tester pass")
@@ -75,7 +75,7 @@ def test_always_dry_run_pref_blocks_real_prints(ctx, monkeypatch):
 
 
 def test_readback_prefs(ctx, todo):
-    from ticket.jobs import Context
+    from nextbox.jobs import Context
     import dataclasses
     label = jobs.print_today(ctx)
     vision = lambda *a: ReadBack(label_code=label["id"], rows=[RowMark(row=1, mark="done", confidence=0.8)])
@@ -212,7 +212,7 @@ def test_pause_printing_and_auto_switch(ctx, monkeypatch):
     ctx.settings.dry_run = False
     ctx.settings.printer_ip = "10.0.0.9"
     sent = []
-    monkeypatch.setattr("ticket.printer._send_raster", lambda img, s: sent.append(1))
+    monkeypatch.setattr("nextbox.printer._send_raster", lambda img, s: sent.append(1))
     setup(ctx)
     mike = login(ctx, "mike", "super secret")
     mike.patch("/super/settings", json={"printing_paused": True, "auto_print_enabled": False,
@@ -230,7 +230,7 @@ def test_pause_printing_and_auto_switch(ctx, monkeypatch):
 def test_diagnostics_and_bundle_have_no_secrets(ctx):
     ctx.settings.todoist_token = "tdk_SECRET"
     ctx.settings.anthropic_api_key = "sk-ant-SECRET"
-    ctx.settings.ticket_key = "KEY-SECRET"
+    ctx.settings.server_key = "KEY-SECRET"
     setup(ctx)
     mike = login(ctx, "mike", "super secret")
     d = mike.get("/super/diagnostics").json()

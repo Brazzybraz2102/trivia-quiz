@@ -1,7 +1,7 @@
 import pytest
 
-from ticket.auth import Accounts, AuthError
-from ticket.cli import main
+from nextbox.auth import Accounts, AuthError
+from nextbox.cli import main
 
 
 def test_password_rules(tmp_path):
@@ -20,8 +20,8 @@ def test_password_rules(tmp_path):
 
 
 def test_cli_user_add(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("TICKET_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("TICKET_ENV_FILE", str(tmp_path / "none.env"))
+    monkeypatch.setenv("NEXTBOX_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("NEXTBOX_ENV_FILE", str(tmp_path / "none.env"))
     monkeypatch.setattr("getpass.getpass", lambda prompt="": "hunter2hunter2")
     assert main(["user", "add", "mike"]) == 0
     assert main(["user", "list"]) == 0
@@ -30,8 +30,8 @@ def test_cli_user_add(tmp_path, monkeypatch, capsys):
 
 
 def test_cli_roles_and_recovery(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("TICKET_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("TICKET_ENV_FILE", str(tmp_path / "none.env"))
+    monkeypatch.setenv("NEXTBOX_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("NEXTBOX_ENV_FILE", str(tmp_path / "none.env"))
     monkeypatch.setattr("getpass.getpass", lambda prompt="": "hunter2hunter2")
     assert main(["user", "add", "mike"]) == 0
     assert main(["user", "add", "sam", "admin"]) == 0

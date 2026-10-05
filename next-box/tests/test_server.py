@@ -1,10 +1,10 @@
 from fastapi.testclient import TestClient
 
-from ticket.auth import Accounts
-from ticket.scan import ReadBack, RowMark
-from ticket.server import create_app
+from nextbox.auth import Accounts
+from nextbox.scan import ReadBack, RowMark
+from nextbox.server import create_app
 
-H = {"X-Ticket-Key": "k"}
+H = {"X-NextBox-Key": "k"}
 
 
 def client(ctx, rows=None):
@@ -17,7 +17,7 @@ def test_auth_required(ctx):
     c = client(ctx)
     assert c.get("/health").status_code == 200
     assert c.post("/print/today", json={}).status_code == 401
-    assert c.post("/print/today", json={}, headers={"X-Ticket-Key": "nope"}).status_code == 401
+    assert c.post("/print/today", json={}, headers={"X-NextBox-Key": "nope"}).status_code == 401
 
 
 def test_status_never_leaks_secrets(ctx):
@@ -69,12 +69,12 @@ def signed_in(ctx):
 
 def test_me_explains_when_no_accounts(ctx):
     r = client(ctx).get("/auth/me")
-    assert r.status_code == 401 and "ticket user add" in r.json()["detail"]
+    assert r.status_code == 401 and "nextbox user add" in r.json()["detail"]
 
 
 def test_sign_in_with_cookie(ctx):
     c = signed_in(ctx)
-    cookie = c.cookies.get("ticket_session")
+    cookie = c.cookies.get("nextbox_session")
     assert cookie
     assert c.get("/auth/me").json()["username"] == "mike"
     assert c.post("/print/today", json={}).json()["status"] == "dry_run"
@@ -109,7 +109,7 @@ def test_bearer_token_for_native_apps(ctx):
     c = client(ctx)
     tok = c.post("/auth/login", json={"username": "mike", "password": "correct horse",
                                       "want_token": True}).json()["token"]
-    assert "ticket_session" not in c.cookies
+    assert "nextbox_session" not in c.cookies
     assert c.get("/auth/me", headers={"Authorization": f"Bearer {tok}"}).json()["username"] == "mike"
 
 

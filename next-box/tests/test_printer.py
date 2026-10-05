@@ -1,7 +1,7 @@
 from PIL import Image
 
-from ticket import printer
-from ticket.config import Settings
+from nextbox import printer
+from nextbox.config import Settings
 
 
 def test_dry_run_never_sends(tmp_path):

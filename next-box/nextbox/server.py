@@ -2,7 +2,7 @@
 
 Two ways in:
 - people sign in with a username + password (session cookie, or a bearer token for native apps)
-- Home Assistant and scripts send the shared X-Ticket-Key header (no admin access)
+- Home Assistant and scripts send the shared X-NextBox-Key header (no admin access)
 
 Roles: user < admin (support) < superadmin (debug). Every admin action is written to the audit log.
 """
@@ -35,7 +35,7 @@ from .store import normalize_id
 
 WEB_DIR = PROJECT_DIR / "web"
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
-COOKIE = "ticket_session"
+COOKIE = "nextbox_session"
 STARTED = time.time()
 
 
@@ -107,11 +107,11 @@ class Caller:
 
 def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                accounts: Accounts | None = None) -> FastAPI:
-    app = FastAPI(title="ticket", docs_url="/docs")
+    app = FastAPI(title="Next Box", docs_url="/docs")
     # No allow_credentials: cookies only work same-origin; other clients use headers.
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                        allow_headers=["*"])
-    key = ctx.settings.ticket_key
+    key = ctx.settings.server_key
     data_dir = Path(ctx.settings.data_dir)
     accounts = accounts or Accounts(data_dir)
     events = Events(data_dir)
@@ -125,11 +125,11 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def _token(request: Request) -> str | None:
         return _bearer(request) or request.cookies.get(COOKIE)
 
-    def auth(request: Request, x_ticket_key: str | None = Header(default=None)) -> Caller:
-        if x_ticket_key:
-            if key and secrets.compare_digest(x_ticket_key.encode(), key.encode()):
+    def auth(request: Request, x_nextbox_key: str | None = Header(default=None)) -> Caller:
+        if x_nextbox_key:
+            if key and secrets.compare_digest(x_nextbox_key.encode(), key.encode()):
                 return Caller("key", role="service")
-            raise HTTPException(401, "wrong X-Ticket-Key")
+            raise HTTPException(401, "wrong X-NextBox-Key")
         token = _token(request)
         name = accounts.session_user(token)
         if not name:
@@ -238,7 +238,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         name = accounts.session_user(_token(request))
         if not name:
             raise HTTPException(401, "sign in required" if accounts.has_users()
-                                else "no accounts yet: run `ticket user add <name>` on the desktop")
+                                else "no accounts yet: run `nextbox user add <name>` on the desktop")
         user = accounts.get(name)
         s = server_settings.get()
         return {"username": name, "role": user["role"], "beta": user["beta"], "debug": user["debug"],
@@ -544,7 +544,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         audit(caller, "debug_bundle", target=name)
         body = json.dumps(bundle, indent=2, ensure_ascii=False, default=str)
         return Response(body, media_type="application/json", headers={
-            "Content-Disposition": f'attachment; filename="ticket-debug-{name}-{time.strftime("%Y%m%d-%H%M")}.json"'})
+            "Content-Disposition": f'attachment; filename="nextbox-debug-{name}-{time.strftime("%Y%m%d-%H%M")}.json"'})
 
     if Path(WEB_DIR).is_dir():
         app.mount("/app", StaticFiles(directory=WEB_DIR, html=True), name="app")
@@ -571,7 +571,7 @@ def _safe_args(args: tuple, kwargs: dict) -> dict:
 def _version() -> str:
     try:
         from importlib.metadata import version
-        return version("ticket")
+        return version("nextbox")
     except Exception:
         return "dev"
 
@@ -581,6 +581,6 @@ def build_default_app() -> FastAPI:
     from .store import Store
 
     settings = load_settings()
-    if not settings.ticket_key:
-        raise SystemExit("TICKET_KEY is not set in .env; refusing to start an unauthenticated server")
+    if not settings.server_key:
+        raise SystemExit("NEXTBOX_KEY is not set in .env; refusing to start an unauthenticated server")
     return create_app(Context(settings=settings, store=Store(settings.data_dir)))

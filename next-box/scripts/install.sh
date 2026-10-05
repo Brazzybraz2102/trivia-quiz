@@ -20,23 +20,23 @@ fi
 chmod 600 .env
 
 # systemd doesn't like spaces in paths ("custom projects"), so point it at a symlink.
-LINK="$HOME/.local/share/ticket/app"
+LINK="$HOME/.local/share/nextbox/app"
 mkdir -p "$(dirname "$LINK")"
 ln -sfn "$HERE" "$LINK"
 
 UNIT_DIR="$HOME/.config/systemd/user"
 mkdir -p "$UNIT_DIR"
-cat > "$UNIT_DIR/ticket.service" <<EOF
+cat > "$UNIT_DIR/nextbox.service" <<EOF
 [Unit]
-Description=ticket label printer server (LAN only)
+Description=Next Box label printer server (LAN only)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/.local/share/ticket/app
-Environment=TICKET_ENV_FILE=%h/.local/share/ticket/app/.env
-ExecStart=%h/.local/share/ticket/app/.venv/bin/ticket serve
+WorkingDirectory=%h/.local/share/nextbox/app
+Environment=NEXTBOX_ENV_FILE=%h/.local/share/nextbox/app/.env
+ExecStart=%h/.local/share/nextbox/app/.venv/bin/nextbox serve
 Restart=on-failure
 RestartSec=5
 
@@ -45,17 +45,17 @@ WantedBy=default.target
 EOF
 
 systemctl --user daemon-reload
-systemctl --user enable --now ticket.service
-systemctl --user restart ticket.service
+systemctl --user enable --now nextbox.service
+systemctl --user restart nextbox.service
 if ! loginctl show-user "$USER" -p Linger | grep -q yes; then
-  echo "Enabling linger so ticket starts at boot without a login (may ask for your password)."
+  echo "Enabling linger so Next Box starts at boot without a login (may ask for your password)."
   sudo loginctl enable-linger "$USER"
 fi
 sleep 2
-systemctl --user --no-pager status ticket.service | head -5
+systemctl --user --no-pager status nextbox.service | head -5
 IP="$(hostname -I | awk '{print $1}')"
 echo
 echo "Web app: http://$IP:8787/app"
-if .venv/bin/ticket user list | grep -q '(no accounts)'; then
-  echo "No sign-in accounts yet. Create yours with: .venv/bin/ticket user add <name>"
+if .venv/bin/nextbox user list | grep -q '(no accounts)'; then
+  echo "No sign-in accounts yet. Create yours with: .venv/bin/nextbox user add <name>"
 fi

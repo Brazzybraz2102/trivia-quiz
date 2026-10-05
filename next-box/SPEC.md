@@ -1,4 +1,4 @@
-# ticket: spec
+# Next Box: spec
 
 Todoist ↔ Brother QL-1110NWB label printer, running on Mike's desktop and reachable only on the home LAN.
 
@@ -10,13 +10,13 @@ Todoist ↔ Brother QL-1110NWB label printer, running on Mike's desktop and reac
    (`Store.claim_auto`), so a second auto call that day returns `skipped`. There are no
    crons, no retries that reprint, and no other automatic prints.
 3. **Deleting a task always needs explicit confirmation**, including when read-back finds one.
-4. **Dry-run for development**: `--dry-run`, `TICKET_DRY_RUN=1`, or `dry_run: true` in the API.
-5. **Secrets live only in `.env`** (chmod 600). `/status` and `ticket status` show whether each
+4. **Dry-run for development**: `--dry-run`, `NEXTBOX_DRY_RUN=1`, or `dry_run: true` in the API.
+5. **Secrets live only in `.env`** (chmod 600). `/status` and `nextbox status` show whether each
    one is set, never its value.
 6. **LAN only**: no cloud relay and no remote access. The server binds to 0.0.0.0:8787.
 7. **Sign-in**: people sign in to the web app with local accounts that live only on the desktop.
    There's no web sign-up and no cloud identity provider. Home Assistant and scripts use the
-   shared `X-Ticket-Key` header instead, and that key never reaches admin features.
+   shared `X-NextBox-Key` header instead, and that key never reaches admin features.
 8. **Roles**: `user` < `admin` (support) < `superadmin` (debug). See §10.
 
 ## 2. Hardware
@@ -26,12 +26,12 @@ Todoist ↔ Brother QL-1110NWB label printer, running on Mike's desktop and reac
 ## 3. Print types
 | Type | CLI | API | Manifest |
 |---|---|---|---|
-| Today (+ overdue) | `ticket today` | `POST /print/today {source}` | yes |
-| Auto today (HA) | `ticket today --auto` | `POST /print/today {"source":"auto"}` | yes |
-| Any filter | `ticket list '#Groceries'` | `POST /print/list {query,title}` | yes |
-| One task | `ticket task <id>` | `POST /print/task {task_id}` | yes (1 row) |
-| Note | `ticket text ...` | `POST /print/text {text}` | no |
-| New task + ticket | `ticket text --todo ...`, `ticket clip --todo` | `POST /print/text {text,todo:true}` | yes |
+| Today (+ overdue) | `nextbox today` | `POST /print/today {source}` | yes |
+| Auto today (HA) | `nextbox today --auto` | `POST /print/today {"source":"auto"}` | yes |
+| Any filter | `nextbox list '#Groceries'` | `POST /print/list {query,title}` | yes |
+| One task | `nextbox task <id>` | `POST /print/task {task_id}` | yes (1 row) |
+| Note | `nextbox text ...` | `POST /print/text {text}` | no |
+| New task + ticket | `nextbox text --todo ...`, `nextbox clip --todo` | `POST /print/text {text,todo:true}` | yes |
 
 The API also takes `"dry_run": true` on every print endpoint.
 
@@ -60,10 +60,10 @@ The API also takes `"dry_run": true` on every print endpoint.
 `GET /scans` · `GET /scan/{id}` · `POST /scan/{id}/confirm {decisions:{row:"confirm"|"skip"}}` ·
 `/app` (web app) · `/docs` (OpenAPI).
 
-Auth: `POST /auth/login {username,password}` sets an HttpOnly, SameSite=Strict `ticket_session`
+Auth: `POST /auth/login {username,password}` sets an HttpOnly, SameSite=Strict `nextbox_session`
 cookie that lasts 30 days. With `want_token: true` it returns a bearer token instead, for the
 native app (`Authorization: Bearer ...`). `POST /auth/logout` ends the session and `GET /auth/me`
-says who's signed in. Home Assistant and scripts send `X-Ticket-Key`. Keys are never accepted in
+says who's signed in. Home Assistant and scripts send `X-NextBox-Key`. Keys are never accepted in
 URLs.
 
 Security details:
@@ -114,14 +114,14 @@ Admins only manage plain users, and can't change roles or debug mode.
 - Events and bundles never contain passwords, hashes, tokens or `.env` values.
 - Tracebacks are visible to superadmins only.
 
-**Recovery from the desktop:** `ticket user add|passwd|role|enable|disable|remove|list`. The
+**Recovery from the desktop:** `nextbox user add|passwd|role|enable|disable|remove|list`. The
 first account ever created becomes the superadmin.
 
 Storage, all in the data dir: `users.json` (holds prefs), `sessions.json`, `events.jsonl`
 (the last 5,000 events), `server_settings.json`.
 
 ## 8. Photo read-back (Phase 2)
-1. `POST /scan` with a photo. Claude vision (`TICKET_VISION_MODEL`, default `claude-sonnet-5-5`)
+1. `POST /scan` with a photo. Claude vision (`NEXTBOX_VISION_MODEL`, default `claude-sonnet-5-5`)
    returns structured output: the label code and, for each row, a mark (done, tomorrow, drop or
    none) with a confidence score.
 2. The server finds the label by `label_id`, falling back to the code it read. If neither matches,
@@ -137,10 +137,10 @@ Storage, all in the data dir: `users.json` (holds prefs), `sessions.json`, `even
 ### Phase A: desktop
 - [x] A1 service, venv, pytest green (50 tests)
 - [x] Web sign-in: local accounts, 30-day sessions, bearer tokens for native apps
-- [ ] Sign-in: `ticket user add mike` on the desktop (NEEDS MIKE)
+- [ ] Sign-in: `nextbox user add mike` on the desktop (NEEDS MIKE)
 - [x] Settings, admin (support) and superadmin (debug) tools, §10 (19 tests)
 - [ ] A1 `.env` filled on the desktop (NEEDS MIKE)
-- [ ] A2 `ticket status` → dry-run today → first real print → layout tuning
+- [ ] A2 `nextbox status` → dry-run today → first real print → layout tuning
 - [x] A3 server changes: CORS, web app at `/app`, multipart `/scan`, python-multipart
 - [x] A4 `/scan` + confirm + mocked-vision tests
 - [ ] A4 live read-back with a real photo; confirm the Todoist `due_date` update keeps recurrence

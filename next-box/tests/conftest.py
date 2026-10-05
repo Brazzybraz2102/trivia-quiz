@@ -4,10 +4,10 @@ from datetime import date
 
 import pytest
 
-from ticket import printer
-from ticket.config import Settings
-from ticket.jobs import Context
-from ticket.store import Store
+from nextbox import printer
+from nextbox.config import Settings
+from nextbox.jobs import Context
+from nextbox.store import Store
 
 TODAY = date(2026, 9, 28)
 
@@ -66,7 +66,7 @@ def todo():
 
 @pytest.fixture
 def ctx(tmp_path, todo):
-    settings = Settings(todoist_token="x", printer_ip="", ticket_key="k", dry_run=True,
+    settings = Settings(todoist_token="x", printer_ip="", server_key="k", dry_run=True,
                         data_dir=tmp_path)
     return Context(settings=settings, store=Store(tmp_path), todoist_factory=lambda: todo,
                    today=lambda: TODAY)

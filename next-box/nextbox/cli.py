@@ -1,4 +1,4 @@
-"""`ticket` command line. Run `ticket --help`."""
+"""`nextbox` command line. Run `nextbox --help`."""
 from __future__ import annotations
 
 import argparse
@@ -19,7 +19,7 @@ from .store import Store
 
 def _notify(title: str, body: str) -> None:
     if shutil.which("notify-send"):
-        subprocess.run(["notify-send", "-a", "ticket", title, body], check=False)
+        subprocess.run(["notify-send", "-a", "Next Box", title, body], check=False)
 
 
 def _show(result: dict) -> None:
@@ -53,7 +53,7 @@ def _user(accounts: Accounts, action: str, username: str | None, role: str | Non
         if action in {"role", "enable", "disable"}:
             if action == "role":
                 if not role:
-                    print("usage: ticket user role <name> user|admin|superadmin", file=sys.stderr)
+                    print("usage: nextbox user role <name> user|admin|superadmin", file=sys.stderr)
                     return 2
                 accounts.update(username, role=role)
             else:
@@ -81,7 +81,7 @@ def _user(accounts: Accounts, action: str, username: str | None, role: str | Non
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="ticket", description="Todoist -> Brother QL label printer")
+    ap = argparse.ArgumentParser(prog="nextbox", description="Todoist -> Brother QL label printer")
     ap.add_argument("--dry-run", action="store_true", help="render the PNG only; never touch the printer")
     ap.add_argument("--json", action="store_true", help="print raw JSON results")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
                                   (args.label or "").lstrip("#") or None)
             print(json.dumps(rec, indent=2, ensure_ascii=False))
             if rec["needs_confirmation"]:
-                print(f"\n{len(rec['needs_confirmation'])} item(s) need you: ticket confirm {rec['id']}")
+                print(f"\n{len(rec['needs_confirmation'])} item(s) need you: nextbox confirm {rec['id']}")
             return 0
         if args.cmd == "confirm":
             rec = ctx.store.get_scan(args.scan_id)
@@ -177,16 +177,16 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "clip":
             text = jobs.read_clipboard().strip()
             if not text:
-                _notify("ticket", "Clipboard is empty")
+                _notify("Next Box", "Clipboard is empty")
                 return 1
             result = (jobs.add_and_print(ctx, text, dry_run=dry) if args.todo
                       else jobs.print_text(ctx, text, "CLIP", dry_run=dry))
-            _notify("ticket", f"{'Added + ' if args.todo else ''}{result['status']}: {text[:60]}")
+            _notify("Next Box", f"{'Added + ' if args.todo else ''}{result['status']}: {text[:60]}")
         else:  # pragma: no cover
             ap.error(args.cmd)
     except Exception as exc:
         if args.cmd == "clip":
-            _notify("ticket failed", str(exc))
+            _notify("Next Box failed", str(exc))
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
