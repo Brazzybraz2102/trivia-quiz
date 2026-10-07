@@ -80,8 +80,9 @@ def test_sign_in_with_cookie(ctx):
     assert cookie
     assert c.get("/auth/me").json()["username"] == "mike"
     assert c.post("/print/today", json={}).json()["status"] == "dry_run"
-    # the session file never holds the raw token
-    assert cookie not in (ctx.settings.data_dir / "sessions.json").read_text()
+    # the database never holds the raw token, only its hash
+    from conftest import dump
+    assert cookie not in dump(ctx.settings.data_dir)
 
 
 def test_wrong_password_and_rate_limit(ctx):

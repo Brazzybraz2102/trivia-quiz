@@ -15,8 +15,10 @@ def test_password_rules(tmp_path):
         a.set_password("mike", "long enough", create=True)
     assert a.verify("mike", "long enough") and not a.verify("mike", "wrong one!")
     assert not a.verify("nobody", "long enough")
-    assert "long enough" not in (tmp_path / "users.json").read_text()
-    assert oct((tmp_path / "users.json").stat().st_mode)[-3:] == "600"
+    from conftest import dump
+    assert "long enough" not in dump(tmp_path)
+    if (tmp_path / "nextbox.db").exists():  # SQLite: the database file is private
+        assert oct((tmp_path / "nextbox.db").stat().st_mode)[-3:] == "600"
 
 
 def test_cli_user_add(tmp_path, monkeypatch, capsys):

@@ -148,6 +148,7 @@ def scan_photo(ctx: Context, vision: VisionFn, image: bytes, media_type: str,
         "label_id": label["id"] if label else None,
         "label_code_read": result.label_code,
         "by": ctx.user,
+        "household_id": ctx.household,
         "vision": result.model_dump(),  # raw read-back, for debugging misreads
         "applied": [],
         "needs_confirmation": [],

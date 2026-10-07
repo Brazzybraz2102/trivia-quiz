@@ -1,28 +1,30 @@
-"""Local user accounts, roles and sign-in sessions. Everything lives in the data dir on the desktop.
+"""Accounts, households, roles and sign-in sessions, stored in the database (see db.py).
 
 Passwords are hashed with scrypt. Session tokens are random and only their SHA-256 is stored,
-so a copy of the data dir can't be used to sign in.
+so a copy of the database can't be used to sign in.
 
-Roles: user < admin < superadmin. Admins support people (reset passwords, disable accounts,
-read activity); superadmins also debug (diagnostics, error log, per-user debug mode).
+Everyone belongs to a household. Roles: user < admin (the household's owner/manager) <
+superadmin (Next Box staff). Admins manage their own household; staff support everyone.
 """
 from __future__ import annotations
 
-import contextlib
-import fcntl
 import hashlib
 import hmac
-import json
-import os
 import re
 import secrets
 import threading
 import time
-from pathlib import Path
+
+from sqlalchemy import and_, delete, func, insert, select, update
+
+from . import db
 
 SESSION_DAYS = 30
 MIN_PASSWORD = 8
 USERNAME_RE = re.compile(r"^[a-z0-9_.-]{2,32}$")
+EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$")
+DEFAULT_HOUSEHOLD = "home"  # self-hosted installs: everyone shares one household
+INVITE_DAYS = 7
 ROLES = ("user", "admin", "superadmin")
 _SCRYPT = {"n": 2**14, "r": 8, "p": 1, "dklen": 32}
 
@@ -71,57 +73,23 @@ class AuthError(ValueError):
 
 
 class Accounts:
-    def __init__(self, root: Path):
-        self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
-        self._users_path = self.root / "users.json"
-        self._sessions_path = self.root / "sessions.json"
-        self._thread_lock = threading.RLock()
-        self._depth = 0
+    def __init__(self, root):
+        self.db = db.database(root)
         self._failures: dict[str, list[float]] = {}
+        self._failures_lock = threading.Lock()
 
-    @contextlib.contextmanager
-    def _lock(self):
-        """Thread lock plus a file lock, so the CLI and the server never clobber each other."""
-        with self._thread_lock:
-            if self._depth:  # already holding the file lock in this thread
-                self._depth += 1
-                try:
-                    yield
-                finally:
-                    self._depth -= 1
-                return
-            with open(self.root / ".accounts.lock", "w") as fh:
-                fcntl.flock(fh, fcntl.LOCK_EX)
-                self._depth = 1
-                try:
-                    yield
-                finally:
-                    self._depth = 0
-                    fcntl.flock(fh, fcntl.LOCK_UN)
+    # --- rows ----------------------------------------------------------------
+    def _row(self, conn, username: str):
+        return conn.execute(select(db.users).where(db.users.c.username == username.strip().lower())).mappings().first()
 
-    # --- storage ----------------------------------------------------------
-    def _load(self, path: Path) -> dict:
-        return json.loads(path.read_text()) if path.exists() else {}
+    @staticmethod
+    def _public(row) -> dict:
+        out = {k: v for k, v in dict(row).items() if k not in {"salt", "hash", "connection"}}
+        out["prefs"] = {**default_prefs(), **(row["prefs"] or {})}
+        conn = row["connection"]
+        out["connection"] = {k: v for k, v in conn.items() if k != "secret"} if conn else None
+        return out
 
-    def _save(self, path: Path, data: dict) -> None:
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2))
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-
-    def _users(self) -> dict:
-        users = self._load(self._users_path)
-        for u in users.values():  # older records predate roles and prefs
-            u.setdefault("role", "user")
-            u.setdefault("disabled", False)
-            u.setdefault("beta", False)
-            u.setdefault("debug", False)
-            u.setdefault("must_change", False)
-            u["prefs"] = {**default_prefs(), **u.get("prefs", {})}
-        return users
-
-    # --- users ------------------------------------------------------------
     @staticmethod
     def _check_name(username: str) -> str:
         username = username.strip().lower()
@@ -134,65 +102,148 @@ class Accounts:
         if len(password) < MIN_PASSWORD:
             raise AuthError(f"password must be at least {MIN_PASSWORD} characters")
 
-    def list_users(self) -> list[str]:
-        return sorted(self._load(self._users_path))
+    @staticmethod
+    def _check_email(email: str | None) -> str | None:
+        if email is None or email == "":
+            return None
+        email = email.strip().lower()
+        if not EMAIL_RE.match(email):
+            raise AuthError("that doesn't look like an email address")
+        return email
+
+    # --- households ----------------------------------------------------------
+    def ensure_household(self, household_id: str, name: str = "Home") -> str:
+        with self.db.begin() as conn:
+            if not conn.execute(select(db.households.c.id).where(db.households.c.id == household_id)).first():
+                conn.execute(insert(db.households).values(id=household_id, name=name[:80], created=int(time.time()),
+                                                          plan="free"))
+        return household_id
+
+    def create_household(self, name: str) -> str:
+        return self.ensure_household(secrets.token_hex(6), name.strip()[:80] or "Home")
+
+    def household(self, household_id: str) -> dict | None:
+        with self.db.connect() as conn:
+            row = conn.execute(select(db.households).where(db.households.c.id == household_id)).mappings().first()
+        return dict(row) if row else None
+
+    def household_of(self, username: str) -> str | None:
+        u = self.get(username)
+        return u["household_id"] if u else None
+
+    def delete_household(self, household_id: str) -> list[str]:
+        """Remove the household and everyone in it. Returns the usernames removed."""
+        with self.db.begin() as conn:
+            names = [r[0] for r in conn.execute(select(db.users.c.username).where(db.users.c.household_id == household_id))]
+            if names:
+                conn.execute(delete(db.sessions).where(db.sessions.c.username.in_(names)))
+                conn.execute(delete(db.users).where(db.users.c.household_id == household_id))
+            conn.execute(delete(db.invites).where(db.invites.c.household_id == household_id))
+            conn.execute(delete(db.households).where(db.households.c.id == household_id))
+        return names
+
+    # --- invites ---------------------------------------------------------------
+    def create_invite(self, household_id: str, by: str, days: int = INVITE_DAYS) -> str:
+        code = "-".join(secrets.token_hex(2).upper() for _ in range(3))  # e.g. 3F9A-07C2-B1E4
+        now = int(time.time())
+        with self.db.begin() as conn:
+            conn.execute(insert(db.invites).values(code=code, household_id=household_id, created_by=by,
+                                                   created=now, expires=now + days * 86400, used_by=None))
+        return code
+
+    def invites(self, household_id: str) -> list[dict]:
+        with self.db.connect() as conn:
+            rows = conn.execute(select(db.invites).where(db.invites.c.household_id == household_id)
+                                .order_by(db.invites.c.created.desc())).mappings().all()
+        return [dict(r) for r in rows]
+
+    def _redeem(self, conn, code: str, username: str) -> str:
+        code = code.strip().upper()
+        row = conn.execute(select(db.invites).where(db.invites.c.code == code)).mappings().first()
+        if not row or row["used_by"] or row["expires"] < time.time():
+            raise AuthError("that invite code isn't valid any more; ask for a new one")
+        conn.execute(update(db.invites).where(db.invites.c.code == code).values(used_by=username))
+        return row["household_id"]
+
+    # --- users -----------------------------------------------------------------
+    def list_users(self, household_id: str | None = None) -> list[str]:
+        q = select(db.users.c.username).order_by(db.users.c.username)
+        if household_id is not None:
+            q = q.where(db.users.c.household_id == household_id)
+        with self.db.connect() as conn:
+            return [r[0] for r in conn.execute(q)]
 
     def has_users(self) -> bool:
-        return bool(self._load(self._users_path))
+        with self.db.connect() as conn:
+            return bool(conn.execute(select(func.count()).select_from(db.users)).scalar())
 
     def get(self, username: str) -> dict | None:
-        """Public view of a user: never includes the password hash or salt."""
-        u = self._users().get(username.strip().lower())
-        if not u:
-            return None
-        out = {"username": username.strip().lower(),
-               **{k: v for k, v in u.items() if k not in {"salt", "hash", "connection"}}}
-        conn = u.get("connection")
-        out["connection"] = ({k: v for k, v in conn.items() if k != "secret"} if conn else None)
-        return out
+        """Public view of a user: never includes the password hash, salt or connection secret."""
+        with self.db.connect() as conn:
+            row = self._row(conn, username)
+        return self._public(row) if row else None
 
-    # --- to-do app connection (secret is sealed by the Vault) ----------------
-    def connection(self, username: str) -> dict | None:
-        """Includes the sealed secret: server-side use only."""
-        u = self._users().get(username.strip().lower())
-        return u.get("connection") if u else None
+    def all_users(self, household_id: str | None = None) -> list[dict]:
+        q = select(db.users).order_by(db.users.c.username)
+        if household_id is not None:
+            q = q.where(db.users.c.household_id == household_id)
+        with self.db.connect() as conn:
+            return [self._public(r) for r in conn.execute(q).mappings()]
 
-    def set_connection(self, username: str, connection: dict | None) -> None:
-        with self._lock():
-            users = self._users()
-            if username not in users:
-                raise AuthError(f"no user {username}")
-            if connection is None:
-                users[username].pop("connection", None)
-            else:
-                users[username]["connection"] = connection
-            self._save(self._users_path, users)
-
-    def owner(self) -> str | None:
-        """The oldest active superadmin: whose to-do app Home Assistant and the CLI use."""
-        supers = [(u.get("created", 0), name) for name, u in self._users().items()
-                  if u["role"] == "superadmin" and not u["disabled"]]
-        return min(supers)[1] if supers else None
-
-    def all_users(self) -> list[dict]:
-        return [self.get(name) for name in self.list_users()]
+    def find_login(self, identifier: str) -> str | None:
+        """Sign in with a username or an email address."""
+        ident = identifier.strip().lower()
+        col = db.users.c.email if "@" in ident else db.users.c.username
+        with self.db.connect() as conn:
+            row = conn.execute(select(db.users.c.username).where(col == ident)).first()
+        return row[0] if row else None
 
     def create(self, username: str, password: str, role: str = "user", beta: bool = False,
-               must_change: bool = False) -> None:
+               must_change: bool = False, household_id: str | None = None, email: str | None = None) -> None:
         username = self._check_name(username)
         self._check_password(password)
+        email = self._check_email(email)
         if role not in ROLES:
             raise AuthError(f"role must be one of {', '.join(ROLES)}")
-        with self._lock():
-            users = self._users()
-            if username in users:
+        household_id = household_id or self.ensure_household(DEFAULT_HOUSEHOLD)
+        salt = secrets.token_bytes(16)
+        with self.db.begin() as conn:
+            if self._row(conn, username):
                 raise AuthError(f"user {username} already exists")
-            salt = secrets.token_bytes(16)
-            users[username] = {"salt": salt.hex(), "hash": _hash_password(password, salt),
-                               "created": int(time.time()), "role": role, "disabled": False,
-                               "beta": beta, "debug": False, "must_change": must_change,
-                               "last_login": None, "prefs": default_prefs()}
-            self._save(self._users_path, users)
+            if email and conn.execute(select(db.users.c.username).where(db.users.c.email == email)).first():
+                raise AuthError("that email already has an account")
+            conn.execute(insert(db.users).values(
+                username=username, email=email, household_id=household_id, role=role, disabled=False,
+                beta=beta, debug=False, must_change=must_change, salt=salt.hex(),
+                hash=_hash_password(password, salt), created=int(time.time()), last_login=None,
+                prefs=default_prefs(), connection=None, consent=None, support_until=None))
+
+    def sign_up(self, username: str, password: str, email: str | None = None,
+                invite: str | None = None, household_name: str = "") -> dict:
+        """Public sign-up: with an invite code you join that household, otherwise you start your own
+        (and manage it). The very first account on a fresh server is also staff (superadmin)."""
+        username = self._check_name(username)
+        self._check_password(password)
+        email = self._check_email(email)
+        first = not self.has_users()
+        if invite:
+            with self.db.begin() as conn:
+                if self._row(conn, username):
+                    raise AuthError(f"user {username} already exists")
+                household_id = self._redeem(conn, invite, username)
+            role = "user"
+        else:
+            household_id = self.create_household(household_name or f"{username}'s household")
+            role = "admin"
+        if first:
+            role = "superadmin"
+        try:
+            self.create(username, password, role=role, household_id=household_id, email=email)
+        except AuthError:
+            if not invite:
+                self.delete_household(household_id)
+            raise
+        return self.get(username)
 
     def set_password(self, username: str, password: str, create: bool = False,
                      must_change: bool = False) -> None:
@@ -202,15 +253,17 @@ class Accounts:
             return self.create(username, password, role=role)
         username = self._check_name(username)
         self._check_password(password)
-        with self._lock():
-            users = self._users()
-            if username not in users:
+        salt = secrets.token_bytes(16)
+        with self.db.begin() as conn:
+            if not self._row(conn, username):
                 raise AuthError(f"no user {username}")
-            salt = secrets.token_bytes(16)
-            users[username].update(salt=salt.hex(), hash=_hash_password(password, salt),
-                                   must_change=must_change)
-            self._save(self._users_path, users)
+            conn.execute(update(db.users).where(db.users.c.username == username).values(
+                salt=salt.hex(), hash=_hash_password(password, salt), must_change=must_change))
         self.revoke_user_sessions(username)  # a password change signs out every device
+
+    def _active_superadmins(self, conn) -> int:
+        return conn.execute(select(func.count()).select_from(db.users).where(
+            and_(db.users.c.role == "superadmin", db.users.c.disabled.is_(False)))).scalar()
 
     def update(self, username: str, **fields) -> dict:
         allowed = {"role", "disabled", "beta", "debug"}
@@ -219,15 +272,14 @@ class Accounts:
         if "role" in fields and fields["role"] not in ROLES:
             raise AuthError(f"role must be one of {', '.join(ROLES)}")
         username = username.strip().lower()
-        with self._lock():
-            users = self._users()
-            if username not in users:
+        with self.db.begin() as conn:
+            row = self._row(conn, username)
+            if not row:
                 raise AuthError(f"no user {username}")
             demoting = fields.get("role", "superadmin") != "superadmin" or fields.get("disabled")
-            if users[username]["role"] == "superadmin" and demoting and self._superadmins(users) <= 1:
+            if row["role"] == "superadmin" and demoting and self._active_superadmins(conn) <= 1:
                 raise AuthError("can't demote or disable the last superadmin")
-            users[username].update(fields)
-            self._save(self._users_path, users)
+            conn.execute(update(db.users).where(db.users.c.username == username).values(**fields))
         if fields.get("disabled"):
             self.revoke_user_sessions(username)
         return self.get(username)
@@ -238,51 +290,83 @@ class Accounts:
                 raise AuthError(f"unknown setting {k}")
             if not PREFS[k][1](v):
                 raise AuthError(f"invalid value for {k}")
-        with self._lock():
-            users = self._users()
-            users[username]["prefs"].update(changes)
-            self._save(self._users_path, users)
-            return users[username]["prefs"]
+        with self.db.begin() as conn:
+            row = self._row(conn, username)
+            prefs = {**default_prefs(), **(row["prefs"] or {}), **changes}
+            conn.execute(update(db.users).where(db.users.c.username == username).values(prefs=prefs))
+        return prefs
 
-    @staticmethod
-    def _superadmins(users: dict) -> int:
-        return sum(1 for u in users.values() if u["role"] == "superadmin" and not u["disabled"])
+    # --- to-do app connection (secret is sealed by the Vault) ----------------
+    def connection(self, username: str) -> dict | None:
+        """Includes the sealed secret: server-side use only."""
+        with self.db.connect() as conn:
+            row = self._row(conn, username)
+        return row["connection"] if row else None
+
+    def set_connection(self, username: str, connection: dict | None) -> None:
+        with self.db.begin() as conn:
+            if not self._row(conn, username):
+                raise AuthError(f"no user {username}")
+            conn.execute(update(db.users).where(db.users.c.username == username).values(connection=connection))
+
+    def owner(self, household_id: str | None = None) -> str | None:
+        """Self-hosted (no household given): the oldest active superadmin, whose to-do app Home
+        Assistant and the CLI use. With a household: its oldest active manager."""
+        roles = ("admin", "superadmin") if household_id else ("superadmin",)
+        q = (select(db.users.c.username).where(and_(db.users.c.role.in_(roles), db.users.c.disabled.is_(False)))
+             .order_by(db.users.c.created, db.users.c.username))
+        if household_id:
+            q = q.where(db.users.c.household_id == household_id)
+        with self.db.connect() as conn:
+            row = conn.execute(q).first()
+        return row[0] if row else None
 
     def remove_user(self, username: str) -> None:
         username = username.strip().lower()
-        with self._lock():
-            users = self._users()
-            if username not in users:
+        with self.db.begin() as conn:
+            row = self._row(conn, username)
+            if not row:
                 raise AuthError(f"no user {username}")
-            if users[username]["role"] == "superadmin" and self._superadmins(users) <= 1:
+            if row["role"] == "superadmin" and self._active_superadmins(conn) <= 1:
                 raise AuthError("can't remove the last superadmin")
-            users.pop(username)
-            self._save(self._users_path, users)
+            conn.execute(delete(db.users).where(db.users.c.username == username))
         self.revoke_user_sessions(username)
 
     def password_ok(self, username: str, password: str) -> bool:
         """Right password, whether or not the account is turned off."""
-        user = self._users().get(username.strip().lower())
+        user = None
+        with self.db.connect() as conn:
+            user = self._row(conn, username)
         # Hash even for unknown users so response time doesn't reveal which names exist.
         salt = bytes.fromhex(user["salt"]) if user else b"\0" * 16
         digest = _hash_password(password, salt)
         return bool(user) and hmac.compare_digest(digest, user["hash"])
 
     def verify(self, username: str, password: str) -> bool:
-        user = self._users().get(username.strip().lower())
-        return self.password_ok(username, password) and not user["disabled"]
+        if not self.password_ok(username, password):
+            return False
+        return not self.get(username)["disabled"]
 
     def record_consent(self, username: str, version: int) -> None:
-        with self._lock():
-            users = self._users()
-            users[username]["consent"] = {"version": version, "at": int(time.time())}
-            self._save(self._users_path, users)
+        with self.db.begin() as conn:
+            conn.execute(update(db.users).where(db.users.c.username == username).values(
+                consent={"version": version, "at": int(time.time())}))
 
     def touch_login(self, username: str) -> None:
-        with self._lock():
-            users = self._users()
-            users[username]["last_login"] = int(time.time())
-            self._save(self._users_path, users)
+        with self.db.begin() as conn:
+            conn.execute(update(db.users).where(db.users.c.username == username).values(last_login=int(time.time())))
+
+    # --- support access (product privacy) --------------------------------------
+    def grant_support(self, username: str, hours: int) -> int | None:
+        """The person lets Next Box staff see their tickets and activity for a while (0 = revoke)."""
+        until = int(time.time()) + hours * 3600 if hours > 0 else None
+        with self.db.begin() as conn:
+            conn.execute(update(db.users).where(db.users.c.username == username).values(support_until=until))
+        return until
+
+    def support_active(self, username: str) -> bool:
+        u = self.get(username)
+        return bool(u and u.get("support_until") and u["support_until"] > time.time())
 
     @staticmethod
     def temp_password() -> str:
@@ -291,74 +375,67 @@ class Accounts:
     # --- rate limit -------------------------------------------------------
     def too_many_failures(self, client: str, limit: int = 5, window: int = 300) -> bool:
         now = time.time()
-        recent = [t for t in self._failures.get(client, []) if now - t < window]
-        self._failures[client] = recent
-        return len(recent) >= limit
+        with self._failures_lock:
+            recent = [t for t in self._failures.get(client, []) if now - t < window]
+            self._failures[client] = recent
+            return len(recent) >= limit
 
     def record_failure(self, client: str) -> None:
-        self._failures.setdefault(client, []).append(time.time())
+        with self._failures_lock:
+            self._failures.setdefault(client, []).append(time.time())
 
     def clear_failures(self, client: str) -> None:
-        self._failures.pop(client, None)
+        with self._failures_lock:
+            self._failures.pop(client, None)
 
     # --- sessions ---------------------------------------------------------
     def create_session(self, username: str, ip: str = "", agent: str = "") -> str:
         token = secrets.token_urlsafe(32)
-        with self._lock():
-            sessions = self._prune(self._load(self._sessions_path))
-            sessions[_token_hash(token)] = {"user": username.lower(), "created": int(time.time()),
-                                            "expires": int(time.time()) + SESSION_DAYS * 86400,
-                                            "ip": ip, "agent": agent[:120]}
-            self._save(self._sessions_path, sessions)
+        now = int(time.time())
+        with self.db.begin() as conn:
+            conn.execute(delete(db.sessions).where(db.sessions.c.expires < now))
+            conn.execute(insert(db.sessions).values(token_hash=_token_hash(token), username=username.lower(),
+                                                    created=now, expires=now + SESSION_DAYS * 86400,
+                                                    ip=ip[:64], agent=agent[:200]))
         return token
 
     def session_user(self, token: str | None) -> str | None:
         if not token:
             return None
         h = _token_hash(token)
-        s = self._load(self._sessions_path).get(h)
         now = time.time()
-        if not s or s["expires"] < now:
-            return None
-        user = self._users().get(s["user"])
+        with self.db.connect() as conn:
+            s = conn.execute(select(db.sessions).where(db.sessions.c.token_hash == h)).mappings().first()
+            if not s or s["expires"] < now:
+                return None
+            user = self._row(conn, s["username"])
         if not user or user["disabled"]:
             return None
         if s["expires"] - now < (SESSION_DAYS - 1) * 86400:
             # Sliding expiry: anyone who uses the app at least monthly stays signed in.
-            with self._lock():
-                sessions = self._load(self._sessions_path)
-                if h in sessions:
-                    sessions[h]["expires"] = int(now) + SESSION_DAYS * 86400
-                    self._save(self._sessions_path, sessions)
-        return s["user"]
+            with self.db.begin() as conn:
+                conn.execute(update(db.sessions).where(db.sessions.c.token_hash == h).values(
+                    expires=int(now) + SESSION_DAYS * 86400))
+        return s["username"]
 
     def sessions_for(self, username: str, current: str | None = None) -> list[dict]:
         cur = _token_hash(current) if current else None
-        out = []
-        for h, s in self._prune(self._load(self._sessions_path)).items():
-            if s["user"] == username:
-                out.append({"id": h[:12], "created": s.get("created"), "ip": s.get("ip", ""),
-                            "agent": s.get("agent", ""), "current": h == cur})
-        return sorted(out, key=lambda s: s["created"] or 0, reverse=True)
+        with self.db.connect() as conn:
+            rows = conn.execute(select(db.sessions).where(and_(
+                db.sessions.c.username == username, db.sessions.c.expires > int(time.time())))
+                .order_by(db.sessions.c.created.desc())).mappings().all()
+        return [{"id": r["token_hash"][:12], "created": r["created"], "ip": r["ip"], "agent": r["agent"],
+                 "current": r["token_hash"] == cur} for r in rows]
 
     def end_session(self, token: str | None) -> None:
         if not token:
             return
-        with self._lock():
-            sessions = self._load(self._sessions_path)
-            if sessions.pop(_token_hash(token), None) is not None:
-                self._save(self._sessions_path, sessions)
+        with self.db.begin() as conn:
+            conn.execute(delete(db.sessions).where(db.sessions.c.token_hash == _token_hash(token)))
 
     def revoke_user_sessions(self, username: str, keep: str | None = None) -> int:
-        keep_h = _token_hash(keep) if keep else None
-        with self._lock():
-            sessions = self._load(self._sessions_path)
-            kept = {k: v for k, v in sessions.items() if v["user"] != username or k == keep_h}
-            if kept != sessions:
-                self._save(self._sessions_path, kept)
-            return len(sessions) - len(kept)
-
-    @staticmethod
-    def _prune(sessions: dict) -> dict:
-        now = time.time()
-        return {k: v for k, v in sessions.items() if v["expires"] > now}
+        q = delete(db.sessions).where(db.sessions.c.username == username)
+        if keep:
+            q = q.where(db.sessions.c.token_hash != _token_hash(keep))
+        with self.db.begin() as conn:
+            return conn.execute(q).rowcount

@@ -148,6 +148,7 @@ class Caller:
     debug: bool = False
     token: str | None = None
     prefs: dict = dataclasses.field(default_factory=default_prefs)
+    household: str = "home"
 
 
 def create_app(ctx: Context, vision: scan.VisionFn | None = None,
@@ -206,7 +207,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         user = accounts.get(name)
         if user["must_change"] and not request.url.path.startswith("/auth/"):
             raise HTTPException(403, "Choose your own password first (Settings → Account).")
-        return Caller(name, role=user["role"], debug=user["debug"], token=token, prefs=user["prefs"])
+        return Caller(name, role=user["role"], debug=user["debug"], token=token, prefs=user["prefs"],
+                      household=user["household_id"])
 
     def require(min_role: str):
         def dep(caller: Caller = Depends(auth)) -> Caller:
@@ -223,13 +225,19 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     admin_only, super_only = require("admin"), require("superadmin")
 
     def can_manage(caller: Caller, target: dict) -> bool:
-        """Superadmins manage anyone else; admins manage plain users only."""
+        """Staff (superadmin) manage anyone else; a household's admin manages its plain users only."""
         if target["username"] == caller.name:
             return False
-        return caller.role == "superadmin" or rank(target["role"]) < rank(caller.role)
+        if caller.role == "superadmin":
+            return True
+        return target["household_id"] == caller.household and rank(target["role"]) < rank(caller.role)
+
+    def scope(caller: Caller) -> str | None:
+        """Which household's people an admin screen shows: all of them for staff."""
+        return None if caller.role == "superadmin" else caller.household
 
     def audit(caller: Caller, action: str, **detail) -> None:
-        events.log(caller.name, action, kind="audit", detail=detail)
+        events.log(caller.name, action, kind="audit", detail=detail, household=caller.household)
 
     # -------------------------------------------------------------- running
     def acting_as(caller: Caller) -> str:
@@ -237,6 +245,11 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         if caller.role == "service":
             return accounts.owner() or caller.name
         return caller.name
+
+    def household_of(caller: Caller) -> str:
+        if caller.role == "service":
+            return accounts.household_of(acting_as(caller)) or "home"
+        return caller.household
 
     def rctx(caller: Caller) -> Context:
         s = server_settings.get()
@@ -248,7 +261,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             factory = ctx.tasks_factory
         else:
             factory = lambda: connections.provider_for(name)  # noqa: E731
-        return dataclasses.replace(ctx, user=name, prefs=prefs, printers=ctx.printers,
+        return dataclasses.replace(ctx, user=name, household=household_of(caller), prefs=prefs, printers=ctx.printers,
                                    printing_paused=s["printing_paused"],
                                    auto_print_enabled=s["auto_print_enabled"],
                                    tasks_factory=factory, _tasks=None)
@@ -436,7 +449,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.get("/status")
     def status(caller: Caller = Depends(auth)):
         s = server_settings.get()
-        everyone = registry.all()
+        everyone = registry.all(household_of(caller))
         mine = next((p for p in everyone if p.id == caller.prefs.get("default_printer")), everyone[0] if everyone else None)
         return {
             "printer_reachable": bool(mine) and printer.is_reachable(mine),
@@ -533,17 +546,17 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.get("/printing-options")
     def printing_options(caller: Caller = Depends(person)):
         admin = rank(caller.role) >= rank("admin")
-        return {"printers": [p.public(admin) for p in registry.all()], "colors": COLORS,
+        return {"printers": [p.public(admin) for p in registry.all(caller.household)], "colors": COLORS,
                 "reasons": REASONS, "drivers": DRIVERS}
 
     @app.get("/admin/printers/status")
     def printers_status(caller: Caller = Depends(admin_only)):
-        return {p.id: printer.is_reachable(p) for p in registry.all()}
+        return {p.id: printer.is_reachable(p) for p in registry.all(caller.household)}
 
     @app.post("/admin/printers")
     def add_printer(body: PrinterBody, caller: Caller = Depends(admin_only)):
         try:
-            cfg = registry.add(body.model_dump(exclude_none=True))
+            cfg = registry.add(body.model_dump(exclude_none=True), caller.household)
         except PrinterError as exc:
             raise HTTPException(400, str(exc)) from exc
         audit(caller, "add_printer", printer=cfg.id, name=cfg.name, driver=cfg.driver)
@@ -552,7 +565,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.patch("/admin/printers/{pid}")
     def edit_printer(pid: str, body: PrinterBody, caller: Caller = Depends(admin_only)):
         try:
-            cfg = registry.update(pid, body.model_dump(exclude_none=True))
+            cfg = registry.update(pid, body.model_dump(exclude_none=True), caller.household)
         except KeyError:
             raise HTTPException(404) from None
         except PrinterError as exc:
@@ -562,13 +575,13 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.delete("/admin/printers/{pid}")
     def delete_printer(pid: str, caller: Caller = Depends(admin_only)):
-        registry.remove(pid)
+        registry.remove(pid, caller.household)
         audit(caller, "remove_printer", printer=pid)
         return {"ok": True}
 
     @app.post("/admin/printers/{pid}/test")
     def test_printer(pid: str, dry_run: bool = False, caller: Caller = Depends(admin_only)):
-        cfg = registry.get(pid)
+        cfg = registry.get(pid, caller.household)
         if not cfg:
             raise HTTPException(404)
         c = dataclasses.replace(rctx(caller), printers=_OnlyPrinter(cfg),
@@ -615,10 +628,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.get("/admin/users")
     def admin_users(caller: Caller = Depends(admin_only)):
         prints: dict[str, int] = {}
-        for r in ctx.store.list_printed(10_000):
+        for r in ctx.store.list_printed(10_000, household=scope(caller)):
             prints[r.get("by", "")] = prints.get(r.get("by", ""), 0) + 1
         out = []
-        for u in accounts.all_users():
+        for u in accounts.all_users(scope(caller)):
             out.append({**{k: u[k] for k in ("username", "role", "disabled", "beta", "debug",
                                              "must_change", "created", "last_login")},
                         "sessions": len(accounts.sessions_for(u["username"])),
@@ -636,7 +649,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(403, "only a superadmin can create admins")
         temp = accounts.temp_password()
         try:
-            accounts.create(body.username, temp, role=body.role, beta=body.beta, must_change=True)
+            accounts.create(body.username, temp, role=body.role, beta=body.beta, must_change=True,
+                            household_id=caller.household)
         except AuthError as exc:
             raise HTTPException(400, str(exc))
         audit(caller, "create_user", target=body.username.lower(), role=body.role, beta=body.beta)
@@ -794,7 +808,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             name = connections.status(u).get("name", "not connected")
             apps[name] = apps.get(name, 0) + 1
         start = time.time()
-        printers_now = registry.all()
+        printers_now = registry.all(caller.household)
         reachable = any(printer.is_reachable(p) for p in printers_now) if printers_now else False
         usage = shutil.disk_usage(data_dir)
         size = sum(p.stat().st_size for p in data_dir.rglob("*") if p.is_file())
@@ -900,7 +914,7 @@ class _OnlyPrinter:
     def __init__(self, cfg):
         self.cfg = cfg
 
-    def all(self):
+    def all(self, household=None):
         return [self.cfg]
 
 

@@ -19,10 +19,12 @@ dependencies = [
     "pydantic>=2",
     "caldav>=3.3",
     "cryptography>=43",
+    "sqlalchemy>=2.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "radicale>=3.8"]
+postgres = ["psycopg[binary]>=3.2"]
 
 [project.scripts]
 nextbox = "nextbox.cli:main"

@@ -6,14 +6,13 @@ A Brother QL with a black+red roll can also print the overdue tags in red ink.
 """
 from __future__ import annotations
 
-import json
-import os
 import re
 import secrets
-import threading
 from dataclasses import asdict, fields
-from pathlib import Path
 
+from sqlalchemy import and_, delete, func, insert, select, update
+
+from . import db
 from .config import Settings
 from .printer import COLORS, DRIVERS, PrinterConfig, legacy_config
 
@@ -79,51 +78,67 @@ def validate(data: dict) -> PrinterConfig:
 
 
 class Printers:
-    def __init__(self, root: Path, settings: Settings):
-        self.path = Path(root) / "printers.json"
+    """Each household's printers, in the database."""
+
+    def __init__(self, root, settings: Settings):
+        self.db = db.database(root)
         self.settings = settings
-        self._lock = threading.Lock()
 
-    def _load(self) -> list[PrinterConfig]:
-        if not self.path.exists():
-            # First run after upgrading: the .env printer becomes the first entry.
-            return [legacy_config(self.settings)] if self.settings.printer_ip else []
-        return [PrinterConfig(**_clean(p)) for p in json.loads(self.path.read_text())]
+    def all(self, household: str = "home") -> list[PrinterConfig]:
+        with self.db.connect() as conn:
+            rows = [r[0] for r in conn.execute(select(db.printers.c.config).where(
+                db.printers.c.household_id == household).order_by(db.printers.c.position, db.printers.c.id))]
+        if not rows and household == "home" and self.settings.printer_ip and not self._seeded():
+            # First run after upgrading: the .env printer becomes the household's first printer
+            # (once; if it's removed later it stays removed).
+            legacy = legacy_config(self.settings)
+            self._insert(legacy, household)
+            return [legacy]
+        return [PrinterConfig(**_clean(r)) for r in rows]
 
-    def _save(self, items: list[PrinterConfig]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps([asdict(p) for p in items], indent=2))
-        os.replace(tmp, self.path)
+    def _seeded(self) -> bool:
+        with self.db.connect() as conn:
+            return bool(conn.execute(select(db.server_settings.c.key).where(
+                db.server_settings.c.key == "_printers_seeded")).first())
 
-    def all(self) -> list[PrinterConfig]:
-        return self._load()
+    def _insert(self, cfg: PrinterConfig, household: str) -> None:
+        with self.db.begin() as conn:
+            pos = conn.execute(select(func.count()).select_from(db.printers).where(
+                db.printers.c.household_id == household)).scalar()
+            conn.execute(insert(db.printers).values(id=cfg.id, household_id=household, position=pos,
+                                                    config=asdict(cfg)))
+            if not conn.execute(select(db.server_settings.c.key).where(
+                    db.server_settings.c.key == "_printers_seeded")).first():
+                conn.execute(insert(db.server_settings).values(key="_printers_seeded", value=True))
 
-    def get(self, pid: str) -> PrinterConfig | None:
-        return next((p for p in self._load() if p.id == pid), None)
+    def get(self, pid: str, household: str = "home") -> PrinterConfig | None:
+        return next((p for p in self.all(household) if p.id == pid), None)
 
-    def add(self, data: dict) -> PrinterConfig:
+    def add(self, data: dict, household: str = "home") -> PrinterConfig:
+        self.all(household)  # make sure a legacy .env printer is saved first
         cfg = validate({**data, "id": None})
-        with self._lock:
-            items = self._load()
-            items.append(cfg)
-            self._save(items)
+        self._insert(cfg, household)
         return cfg
 
-    def update(self, pid: str, data: dict) -> PrinterConfig:
-        with self._lock:
-            items = self._load()
-            for i, p in enumerate(items):
-                if p.id == pid:
-                    items[i] = validate({**asdict(p), **data, "id": pid})
-                    self._save(items)
-                    return items[i]
-        raise KeyError(pid)
+    def update(self, pid: str, data: dict, household: str = "home") -> PrinterConfig:
+        current = self.get(pid, household)
+        if current is None:
+            raise KeyError(pid)
+        cfg = validate({**asdict(current), **data, "id": pid})
+        with self.db.begin() as conn:
+            conn.execute(update(db.printers).where(and_(db.printers.c.id == pid,
+                                                        db.printers.c.household_id == household)).values(config=asdict(cfg)))
+        return cfg
 
-    def remove(self, pid: str) -> None:
-        with self._lock:
-            items = [p for p in self._load() if p.id != pid]
-            self._save(items)
+    def remove(self, pid: str, household: str = "home") -> None:
+        self.all(household)
+        with self.db.begin() as conn:
+            conn.execute(delete(db.printers).where(and_(db.printers.c.id == pid,
+                                                        db.printers.c.household_id == household)))
+
+    def delete_for_household(self, household: str) -> None:
+        with self.db.begin() as conn:
+            conn.execute(delete(db.printers).where(db.printers.c.household_id == household))
 
 
 def choose(printers: list[PrinterConfig], prefs: dict, reason: str) -> tuple[PrinterConfig | None, str]:

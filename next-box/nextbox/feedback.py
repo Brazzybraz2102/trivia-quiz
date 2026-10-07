@@ -1,26 +1,25 @@
 """Anonymous feedback.
 
-Two files, on purpose:
+Two tables, on purpose:
 
-- feedback.json            the public board: what people said, scrubbed, dated by day only.
-- feedback_identities.json who said it (username, IP, device, any error details they attached).
-                           The ONLY place a person is linked to their feedback. chmod 600,
-                           read only to show "yours" to the author and for a superadmin reveal.
+- feedback             the public board: what people said, scrubbed, dated by day only.
+- feedback_identities  who said it (username, IP, device, any error details they attached).
+                       The ONLY place a person is linked to their feedback. Read only to show
+                       "yours" to the author and for an audited staff reveal.
 
 Nothing else (events log, debug bundles, server access log) records who sent feedback.
 """
 from __future__ import annotations
 
-import contextlib
-import fcntl
-import json
-import os
 import re
 import secrets
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from datetime import date
-from pathlib import Path
+
+from sqlalchemy import and_, delete, func, insert, select, update
+
+from . import db
 
 TYPES = ("bug", "confusing", "idea", "praise", "other")
 STATUSES = ("new", "seen", "planned", "fixed", "wontfix", "hidden")
@@ -56,32 +55,8 @@ class FeedbackError(ValueError):
 
 
 class Feedback:
-    def __init__(self, root: Path):
-        self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
-        self.public_path = self.root / "feedback.json"
-        self.identity_path = self.root / "feedback_identities.json"
-
-    # --- storage -------------------------------------------------------------
-    @contextlib.contextmanager
-    def _lock(self) -> Iterator[None]:
-        with open(self.root / ".feedback.lock", "w") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(fh, fcntl.LOCK_UN)
-
-    def _load(self, path: Path) -> dict:
-        return json.loads(path.read_text()) if path.exists() else {}
-
-    def _save(self, path: Path, data: dict) -> None:
-        tmp = path.with_suffix(".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as fh:
-            fh.write(json.dumps(data, indent=2, ensure_ascii=False))
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
+    def __init__(self, root):
+        self.db = db.database(root)
 
     # --- submit --------------------------------------------------------------
     def submit(self, *, mode: str, kind: str, page: str, rating: int | None, fields: dict,
@@ -102,36 +77,41 @@ class Feedback:
             body = {"message": scrub(message, names)}
             if not body["message"]:
                 raise FeedbackError("Write something first.")
-        with self._lock():
-            identities = self._load(self.identity_path)
-            sender = who or f"ip:{ip}"
-            hour_ago = time.time() - 3600
-            if enforce_limit and sum(
-                    1 for i in identities.values() if i["sender"] == sender and i["ts"] > hour_ago) >= PER_HOUR:
-                raise FeedbackError("That's a lot of feedback this hour. Please try again later.")
-            board = self._load(self.public_path)
+        sender = who or f"ip:{ip}"
+        with self.db.begin() as conn:
+            if enforce_limit:
+                recent = conn.execute(select(func.count()).select_from(db.feedback_identities).where(and_(
+                    db.feedback_identities.c.sender == sender,
+                    db.feedback_identities.c.ts > time.time() - 3600))).scalar()
+                if recent >= PER_HOUR:
+                    raise FeedbackError("That's a lot of feedback this hour. Please try again later.")
             fid = secrets.token_hex(4)
-            while fid in board:
+            while conn.execute(select(db.feedback.c.id).where(db.feedback.c.id == fid)).first():
                 fid = secrets.token_hex(4)
-            seq = max((i.get("n", 0) for i in board.values()), default=0) + 1  # order, not time
-            item = {"id": fid, "n": seq, "date": (today or date.today()).isoformat(),  # day only: times correlate
-                    "mode": mode, "type": kind, "page": re.sub(r"[^a-z_-]", "", page.lower())[:30],
-                    "rating": rating, **body, "status": "new", "reply": "", "reply_date": None}
-            board[fid] = item
-            identities[fid] = {"sender": sender, "user": who, "ts": round(ts or time.time()), "ip": ip,
-                               "agent": agent[:200], "debug": debug or None}
-            self._save(self.public_path, board)
-            self._save(self.identity_path, identities)
+            seq = (conn.execute(select(func.max(db.feedback.c.n))).scalar() or 0) + 1  # order, not time
+            day = (today or date.today()).isoformat()  # day only: exact times correlate with activity
+            item = {"id": fid, "n": seq, "date": day, "mode": mode, "type": kind,
+                    "page": re.sub(r"[^a-z_-]", "", page.lower())[:30], "rating": rating, **body,
+                    "status": "new", "reply": "", "reply_date": None}
+            conn.execute(insert(db.feedback).values(id=fid, n=seq, date=day, item=item))
+            conn.execute(insert(db.feedback_identities).values(
+                id=fid, sender=sender[:80], user=who, ts=round(ts or time.time()), ip=ip[:64],
+                agent=agent[:200], debug=debug or None))
         return item
 
     # --- read ----------------------------------------------------------------
     def board(self, viewer: str | None, *, include_hidden: bool = False, kind: str | None = None,
-              status: str | None = None) -> list[dict]:
+              status: str | None = None, limit: int = 300) -> list[dict]:
         """Anonymous items. `mine` tells the viewer which are theirs; nobody else learns it."""
-        board = self._load(self.public_path)
-        mine = {fid for fid, i in self._load(self.identity_path).items() if viewer and i["user"] == viewer}
+        with self.db.connect() as conn:
+            rows = [r[0] for r in conn.execute(select(db.feedback.c.item).order_by(
+                db.feedback.c.date.desc(), db.feedback.c.n.desc()).limit(limit * 2))]
+            mine = set()
+            if viewer:
+                mine = {r[0] for r in conn.execute(select(db.feedback_identities.c.id).where(
+                    db.feedback_identities.c.user == viewer))}
         out = []
-        for item in board.values():
+        for item in rows:
             if item["status"] == "hidden" and not include_hidden and item["id"] not in mine:
                 continue
             if kind and item["type"] != kind:
@@ -139,53 +119,48 @@ class Feedback:
             if status and item["status"] != status:
                 continue
             out.append({**item, "mine": item["id"] in mine})
-        out.sort(key=lambda i: (i["date"], i.get("n", 0)), reverse=True)  # newest first
-        return out
+        return out[:limit]
 
     def is_author(self, fid: str, viewer: str) -> bool:
-        ident = self._load(self.identity_path).get(fid)
-        return bool(ident and viewer and ident["user"] == viewer)
+        if not viewer:
+            return False
+        with self.db.connect() as conn:
+            return bool(conn.execute(select(db.feedback_identities.c.id).where(and_(
+                db.feedback_identities.c.id == fid, db.feedback_identities.c.user == viewer))).first())
 
     def identity(self, fid: str) -> dict:
-        ident = self._load(self.identity_path).get(fid)
-        if not ident:
+        with self.db.connect() as conn:
+            row = conn.execute(select(db.feedback_identities).where(db.feedback_identities.c.id == fid)).mappings().first()
+        if not row:
             raise KeyError(fid)
-        return ident
+        return {k: row[k] for k in ("sender", "user", "ts", "ip", "agent", "debug")}
 
     # --- change --------------------------------------------------------------
     def respond(self, fid: str, status: str | None = None, reply: str | None = None,
                 names: Iterable[str] = (), today: date | None = None) -> dict:
         if status is not None and status not in STATUSES:
             raise FeedbackError(f"status must be one of {', '.join(STATUSES)}")
-        with self._lock():
-            board = self._load(self.public_path)
-            if fid not in board:
+        with self.db.begin() as conn:
+            row = conn.execute(select(db.feedback.c.item).where(db.feedback.c.id == fid)).first()
+            if not row:
                 raise KeyError(fid)
+            item = dict(row[0])
             if status is not None:
-                board[fid]["status"] = status
+                item["status"] = status
             if reply is not None:
-                board[fid]["reply"] = scrub(reply, names)
-                board[fid]["reply_date"] = (today or date.today()).isoformat() if reply.strip() else None
-            self._save(self.public_path, board)
-            return board[fid]
+                item["reply"] = scrub(reply, names)
+                item["reply_date"] = (today or date.today()).isoformat() if reply.strip() else None
+            conn.execute(update(db.feedback).where(db.feedback.c.id == fid).values(item=item))
+        return item
 
     def withdraw(self, fid: str) -> None:
-        with self._lock():
-            board, identities = self._load(self.public_path), self._load(self.identity_path)
-            if fid not in board:
+        with self.db.begin() as conn:
+            if not conn.execute(delete(db.feedback).where(db.feedback.c.id == fid)).rowcount:
                 raise KeyError(fid)
-            board.pop(fid)
-            identities.pop(fid, None)
-            self._save(self.public_path, board)
-            self._save(self.identity_path, identities)
+            conn.execute(delete(db.feedback_identities).where(db.feedback_identities.c.id == fid))
 
     def forget_user(self, username: str) -> int:
         """When an account is deleted, its feedback stays but nothing links it to anyone."""
-        with self._lock():
-            identities = self._load(self.identity_path)
-            gone = [fid for fid, i in identities.items() if i["user"] == username]
-            for fid in gone:
-                identities.pop(fid)
-            if gone:
-                self._save(self.identity_path, identities)
-            return len(gone)
+        with self.db.begin() as conn:
+            return conn.execute(delete(db.feedback_identities).where(
+                db.feedback_identities.c.user == username)).rowcount

@@ -14,6 +14,11 @@ from cryptography.fernet import Fernet, InvalidToken
 
 class Vault:
     def __init__(self, root: Path):
+        env_key = os.environ.get("NEXTBOX_SECRET_KEY", "").strip()
+        if env_key:  # servers without a lasting disk keep the key in an environment secret
+            self.path = None
+            self._f = Fernet(env_key.encode())
+            return
         self.path = Path(root) / "secret.key"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():

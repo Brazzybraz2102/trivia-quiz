@@ -1,105 +1,95 @@
-"""Activity, audit and error log (events.jsonl in the data dir) plus server-wide switches.
+"""Activity, audit and error log, plus server-wide switches (in the database).
 
 Events never contain passwords, tokens or .env values. Full tracebacks are kept only for
-errors, so a superadmin can debug what a beta tester hit.
+errors, so staff can debug what a beta tester hit. Feedback never goes here: see feedback.py.
 """
 from __future__ import annotations
 
-import json
-import os
-import threading
 import time
-from pathlib import Path
 
-MAX_EVENTS = 5000
+from sqlalchemy import and_, delete, insert, select
+
+from . import db
+
 _SERVER_DEFAULTS = {
     "printing_paused": False,     # every print becomes a dry run (kill switch)
-    "auto_print_enabled": True,   # Home Assistant's once-a-day print
+    "auto_print_enabled": True,   # the once-a-day automatic print
     "announcement": "",           # banner shown to everyone who's signed in
 }
 
 
+def _row(r) -> dict:
+    ev = {"ts": r["ts"], "user": r["user"], "kind": r["kind"], "action": r["action"], "ok": r["ok"]}
+    for k in ("detail", "error", "trace"):
+        if r[k]:
+            ev[k] = r[k]
+    if r["household_id"]:
+        ev["household_id"] = r["household_id"]
+    return ev
+
+
 class Events:
-    def __init__(self, root: Path):
-        self.path = Path(root) / "events.jsonl"
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+    def __init__(self, root):
+        self.db = db.database(root)
 
     def log(self, user: str, action: str, *, ok: bool = True, kind: str = "activity",
-            detail: dict | None = None, error: str = "", trace: str = "") -> dict:
-        """kind: activity | audit (admin actions) | error | auth. Feedback never goes here:
-        see feedback.py, which keeps who-said-what in a single file."""
+            detail: dict | None = None, error: str = "", trace: str = "",
+            household: str | None = None) -> dict:
+        """kind: activity | audit (admin actions) | error | auth."""
         ev = {"ts": round(time.time(), 3), "user": user, "kind": kind, "action": action, "ok": ok}
+        with self.db.begin() as conn:
+            conn.execute(insert(db.events).values(
+                ts=ev["ts"], user=user[:64], household_id=household, kind=kind, action=action[:64], ok=ok,
+                detail=detail or None, error=error[:500] or None, trace=trace[-6000:] or None))
         if detail:
             ev["detail"] = detail
         if error:
             ev["error"] = error[:500]
-        if trace:
-            ev["trace"] = trace[-6000:]
-        with self._lock:
-            with open(self.path, "a") as fh:
-                fh.write(json.dumps(ev, ensure_ascii=False) + "\n")
-            self._trim()
         return ev
-
-    def _trim(self) -> None:
-        if self.path.stat().st_size < 4_000_000:
-            return
-        lines = self.path.read_text().splitlines()
-        if len(lines) > MAX_EVENTS:
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text("\n".join(lines[-MAX_EVENTS:]) + "\n")
-            os.replace(tmp, self.path)
 
     def take(self, kind: str) -> list[dict]:
         """Remove and return every event of one kind (used to move old feedback out of the log)."""
-        if not self.path.exists():
-            return []
-        with self._lock:
-            kept, taken = [], []
-            for line in self.path.read_text().splitlines():
-                try:
-                    ev = json.loads(line)
-                except ValueError:
-                    kept.append(line)
-                    continue
-                (taken if ev.get("kind") == kind else kept).append(ev if ev.get("kind") == kind else line)
-            if taken:
-                tmp = self.path.with_suffix(".tmp")
-                tmp.write_text("".join(f"{x}\n" for x in kept))
-                os.replace(tmp, self.path)
-            return taken
+        with self.db.begin() as conn:
+            rows = conn.execute(select(db.events).where(db.events.c.kind == kind).order_by(db.events.c.id)).mappings().all()
+            conn.execute(delete(db.events).where(db.events.c.kind == kind))
+        return [_row(r) for r in rows]
 
     def query(self, *, user: str | None = None, kind: str | None = None, ok: bool | None = None,
-              limit: int = 200) -> list[dict]:
-        if not self.path.exists():
-            return []
-        out = []
-        for line in reversed(self.path.read_text().splitlines()):
-            try:
-                ev = json.loads(line)
-            except ValueError:
-                continue
-            if user and ev.get("user") != user:
-                continue
-            if kind and ev.get("kind") != kind:
-                continue
-            if ok is not None and ev.get("ok") != ok:
-                continue
-            out.append(ev)
-            if len(out) >= limit:
-                break
-        return out
+              limit: int = 200, household: str | None = None, since: float | None = None) -> list[dict]:
+        conds = []
+        if user:
+            conds.append(db.events.c.user == user)
+        if kind:
+            conds.append(db.events.c.kind == kind)
+        if ok is not None:
+            conds.append(db.events.c.ok.is_(ok))
+        if household:
+            conds.append(db.events.c.household_id == household)
+        if since:
+            conds.append(db.events.c.ts >= since)
+        q = select(db.events).order_by(db.events.c.id.desc()).limit(limit)
+        if conds:
+            q = q.where(and_(*conds))
+        with self.db.connect() as conn:
+            return [_row(r) for r in conn.execute(q).mappings()]
+
+    def delete_for_user(self, username: str) -> int:
+        with self.db.begin() as conn:
+            return conn.execute(delete(db.events).where(db.events.c.user == username)).rowcount
+
+    def prune(self, days: int = 180) -> int:
+        with self.db.begin() as conn:
+            return conn.execute(delete(db.events).where(db.events.c.ts < time.time() - days * 86400)).rowcount
 
 
 class ServerSettings:
-    def __init__(self, root: Path):
-        self.path = Path(root) / "server_settings.json"
-        self._lock = threading.Lock()
+    def __init__(self, root):
+        self.db = db.database(root)
 
     def get(self) -> dict:
-        data = json.loads(self.path.read_text()) if self.path.exists() else {}
-        return {**_SERVER_DEFAULTS, **{k: v for k, v in data.items() if k in _SERVER_DEFAULTS}}
+        with self.db.connect() as conn:
+            stored = {r.key: r.value for r in conn.execute(select(db.server_settings))}
+        return {**_SERVER_DEFAULTS, **{k: v for k, v in stored.items() if k in _SERVER_DEFAULTS}}
 
     def update(self, changes: dict) -> dict:
         for k, v in changes.items():
@@ -109,9 +99,8 @@ class ServerSettings:
                 raise ValueError(f"invalid value for {k}")
             if k == "announcement" and len(v) > 300:
                 raise ValueError("announcement is limited to 300 characters")
-        with self._lock:
-            data = {**self.get(), **changes}
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, indent=2))
-            os.replace(tmp, self.path)
-        return data
+        with self.db.begin() as conn:
+            for k, v in changes.items():
+                conn.execute(delete(db.server_settings).where(db.server_settings.c.key == k))
+                conn.execute(insert(db.server_settings).values(key=k, value=v))
+        return self.get()

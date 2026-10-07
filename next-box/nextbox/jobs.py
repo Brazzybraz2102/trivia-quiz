@@ -30,6 +30,7 @@ class Context:
     tasks_factory: Callable[[], TaskProvider] | None = None  # this person's to-do app
     today: Callable[[], date] = date.today
     user: str = "cli"                 # whose tickets these are (a username)
+    household: str = "home"           # their household: printers and tickets belong to it
     prefs: dict = field(default_factory=default_prefs)
     printing_paused: bool = False     # server-wide kill switch: everything becomes a dry run
     auto_print_enabled: bool = True
@@ -107,7 +108,7 @@ def _is_late(task: dict, today: date) -> bool:
 
 def _target(ctx: Context, reason: str) -> tuple[PrinterConfig, str]:
     """Which printer this ticket goes to, from the person's label-color rules."""
-    available = ctx.printers.all() if ctx.printers is not None else [legacy_config(ctx.settings)]
+    available = ctx.printers.all(ctx.household) if ctx.printers is not None else [legacy_config(ctx.settings)]
     cfg, note = choose(available, ctx.prefs, reason)
     return (cfg or legacy_config(ctx.settings)), note
 
@@ -119,7 +120,6 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
     red = cfg.ink == "black_red"
     img = finalize(draw(red), cfg.width_px, red=red)
     png = ctx.store.png_path(label_id)
-    img.save(png)
     sent = printer.print_image(img, ctx.settings, dry_run=dry, cfg=cfg)
     record = {
         "id": label_id,
@@ -129,6 +129,7 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
         "source": source,
         "dry_run": not sent,
         "by": ctx.user,
+        "household_id": ctx.household,
         "printer": {"id": cfg.id, "name": cfg.name, "color": cfg.stock_color},
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "png": str(png),
@@ -138,7 +139,7 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
         record["note"] = note
     if text:
         record["text"] = text
-    ctx.store.save_printed(record)
+    ctx.store.save_printed(record, png=img)
     return {"status": "printed" if sent else "dry_run", **record}
 
 
@@ -185,13 +186,13 @@ def print_today(ctx: Context, source: str = "manual", dry_run: bool | None = Non
     if source == "auto" and not dry and not printer.is_reachable(_target(ctx, "today")[0]):
         # Don't use up today's print on a printer that's off; the next walk-in will print.
         return {"status": "skipped", "reason": "printer is offline; today's ticket will print next time"}
-    if source == "auto" and not ctx.store.claim_auto(today.isoformat(), dry):
+    if source == "auto" and not ctx.store.claim_auto(today.isoformat(), dry, scope=ctx.user):
         return {"status": "skipped", "reason": f"auto print already ran on {today.isoformat()}"}
     try:
         tasks = ctx.tasks.today()
     except Exception:
         if source == "auto":
-            ctx.store.release_auto(today.isoformat(), dry)  # nothing printed, so no reprint risk
+            ctx.store.release_auto(today.isoformat(), dry, scope=ctx.user)  # nothing printed, so no reprint risk
         raise
     title = today.strftime("%A")
     subtitle = today.strftime("%B %-d")

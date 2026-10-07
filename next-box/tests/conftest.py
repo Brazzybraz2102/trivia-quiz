@@ -67,6 +67,39 @@ SAMPLE = [
 ]
 
 
+def rows(data_dir, table: str) -> list[dict]:
+    """Every row of a database table, for tests that check what's stored."""
+    from sqlalchemy import select
+
+    from nextbox import db
+    with db.database(data_dir).connect() as conn:
+        return [dict(r) for r in conn.execute(select(db.metadata.tables[table])).mappings()]
+
+
+def dump(data_dir, *, skip: tuple = ()) -> str:
+    """All stored data as text (every table except `skip`), for "is this anywhere?" checks."""
+    import json
+
+    from nextbox import db
+    return "\n".join(f"{t}: {json.dumps(rows(data_dir, t), default=str)}"
+                     for t in db.metadata.tables if t not in skip)
+
+
+@pytest.fixture(autouse=True)
+def fresh_database():
+    """SQLite: every test has its own temp data dir. PostgreSQL (DATABASE_URL set): one shared
+    server, so wipe the tables before each test."""
+    import os
+
+    from nextbox import db
+    if os.environ.get("DATABASE_URL"):
+        engine = db.database(os.environ["DATABASE_URL"])
+        db.metadata.drop_all(engine)
+        db.metadata.create_all(engine)
+    yield
+    db.reset_engines()
+
+
 @pytest.fixture(autouse=True)
 def no_real_printer(monkeypatch):
     def boom(*a, **k):

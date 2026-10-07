@@ -78,8 +78,8 @@ def test_connect_checks_first_and_never_stores_the_token_in_clear(world):
     st = sam.put("/connection", json={"provider": "todoist", "fields": {"token": "sam-secret-token"}}).json()
     assert st["connected"] and st["name"] == "Todoist" and st["account"] == "fake@example.com"
     assert "secret" not in st and "sam-secret-token" not in str(st)
-    raw = (ctx.settings.data_dir / "users.json").read_text()
-    assert "sam-secret-token" not in raw
+    from conftest import dump
+    assert "sam-secret-token" not in dump(ctx.settings.data_dir)
     assert oct(stat.S_IMODE((ctx.settings.data_dir / "secret.key").stat().st_mode)) == "0o600"
     # Changing the server key (NEXTBOX_KEY) doesn't break saved connections.
     ctx.settings.server_key = "rotated"
@@ -239,12 +239,12 @@ def test_photos_are_rotated_resized_and_bombs_refused():
 
 def test_sessions_slide_while_in_use(world):
     ctx, a, apps, app, login = world
-    import json
+    from sqlalchemy import update
+
+    from conftest import rows
+    from nextbox import db
     sam = login("sam", "sam password")
-    path = ctx.settings.data_dir / "sessions.json"
-    sessions = json.loads(path.read_text())
-    for v in sessions.values():
-        v["expires"] = int(time.time()) + 3600  # about to expire
-    path.write_text(json.dumps(sessions))
+    with db.database(ctx.settings.data_dir).begin() as conn:
+        conn.execute(update(db.sessions).values(expires=int(time.time()) + 3600))  # about to expire
     assert sam.get("/auth/me").status_code == 200
-    assert min(v["expires"] for v in json.loads(path.read_text()).values()) > time.time() + 20 * 86400
+    assert min(r["expires"] for r in rows(ctx.settings.data_dir, "sessions")) > time.time() + 20 * 86400

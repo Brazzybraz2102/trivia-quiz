@@ -4,6 +4,7 @@ import stat
 
 from fastapi.testclient import TestClient
 
+from conftest import dump, rows
 from nextbox.auth import Accounts
 from nextbox.events import Events
 from nextbox.feedback import Feedback, scrub
@@ -59,21 +60,20 @@ def test_guided_and_open_feedback_are_public_and_anonymous(ctx):
     assert mine == {"bug": False, "praise": True}  # jo only learns which one is hers
 
 
-def test_identity_lives_in_one_private_file_only(ctx):
+def test_identity_lives_in_one_table_only(ctx):
     app, login = setup(ctx)
     sam = login("sam", "sam password")
     fid = sam.post("/feedback", json=GUIDED).json()["id"]
     data = ctx.settings.data_dir
-    ident = json.loads((data / "feedback_identities.json").read_text())[fid]
+    ident = {r["id"]: r for r in rows(data, "feedback_identities")}[fid]
     assert ident["user"] == "sam" and ident["agent"] == "Phone-of-sam" and ident["ip"]
     assert ident["debug"] is not None
-    assert oct(stat.S_IMODE((data / "feedback_identities.json").stat().st_mode)) == "0o600"
-    # No other file links sam to this feedback or holds its text.
-    for p in data.rglob("*"):
-        if p.is_file() and p.name not in {"feedback_identities.json", "feedback.json"}:
-            body = p.read_text(errors="ignore")
-            assert f'"{fid}"' not in body and "missed row 2" not in body, p.name
-    assert "sam" not in (data / "feedback.json").read_text()
+    if (data / "nextbox.db").exists():  # SQLite: the database file is private
+        assert oct(stat.S_IMODE((data / "nextbox.db").stat().st_mode)) == "0o600"
+    # No other table links sam to this feedback or holds its text.
+    others = dump(data, skip=("feedback_identities", "feedback"))
+    assert f'"{fid}"' not in others and "missed row 2" not in others
+    assert "sam" not in json.dumps(rows(data, "feedback"))
 
 
 def test_feedback_before_sign_in_and_rate_limit(ctx):
@@ -116,7 +116,7 @@ def test_withdraw_respond_hide_and_reveal(ctx):
     assert reveal["detail"] == {"feedback": fid} and "sam" not in json.dumps(reveal)
 
     assert sam.delete(f"/feedback/{other}").json()["ok"]
-    assert other not in json.loads((ctx.settings.data_dir / "feedback_identities.json").read_text())
+    assert other not in [r["id"] for r in rows(ctx.settings.data_dir, "feedback_identities")]
 
 
 def test_deleting_an_account_unlinks_its_feedback(ctx):
@@ -136,7 +136,7 @@ def test_old_feedback_moves_out_of_the_events_log(ctx):
         ev.log("sam", "feedback", kind="feedback", detail={"message": f"old note {i} from sam", "page": "print"})
     ev.log("sam", "print_today", detail={})
     create_app(ctx)
-    log = (ctx.settings.data_dir / "events.jsonl").read_text()
+    log = json.dumps(rows(ctx.settings.data_dir, "events"))
     assert "old note" not in log and "print_today" in log
     board = Feedback(ctx.settings.data_dir).board(None)
     assert len(board) == 12 and all("sam" not in i["message"] for i in board)
