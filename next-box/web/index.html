@@ -74,6 +74,14 @@
   .linkish { background:none; border:0; color:var(--accent); font:inherit; cursor:pointer; padding:0; text-decoration:underline; }
   .fbitem .q { color:var(--muted); font-size:13px; margin-top:6px; }
   .fbitem .reply { border-left:3px solid var(--accent); padding-left:10px; margin-top:8px; }
+  #revmark { text-align:center; font-size:11px; color:var(--muted); padding:18px 16px 70px; opacity:.8; }
+  .bars { display:flex; align-items:flex-end; gap:3px; height:90px; margin-top:12px; }
+  .bars div { flex:1; background:var(--accent); border-radius:3px 3px 0 0; min-height:2px; position:relative; }
+  .swatch { display:inline-block; width:11px; height:11px; border-radius:3px; border:1px solid var(--line); vertical-align:-1px; margin-right:4px; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--muted); margin-right:4px; }
+  .dot.on { background:var(--ok); } .dot.off { background:var(--warn); }
+  .tickets { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; }
+  .tickets img { width:100%; border:1px solid var(--line); border-radius:6px; background:#fff; }
   .center { max-width:400px; margin:12vh auto 0; padding:0 16px; }
   .center label { display:block; margin-top:10px; font-size:14px; }
   .center input { margin-top:4px; }
@@ -114,6 +122,7 @@
   <button data-tab="board">Feedback</button>
   <button data-tab="settings">Settings</button>
   <button data-tab="admin" data-min="admin" hidden>Admin</button>
+  <button data-tab="usage" data-min="superadmin" hidden>Usage</button>
   <button data-tab="debug" data-min="superadmin" hidden>Debug</button>
 </nav>
 <main>
@@ -173,6 +182,14 @@
       </div>
     </div>
 
+    <div class="card" id="labelCard"><h2>Printers &amp; label colors</h2>
+      <p class="muted" id="printersLoaded">…</p>
+      <label class="setting"><div class="label"><b>My usual printer</b><span>Used whenever a color below isn't loaded anywhere.</span></div><select id="defPrinter" aria-label="My usual printer"></select></label>
+      <h3>Which labels for what</h3>
+      <div id="colorRules"></div>
+      <label class="setting"><div class="label"><b>Overdue tasks on their own ticket</b><span>Today's list prints in two parts, so overdue (expired) tasks come out on their color.</span></div><input type="checkbox" data-pref="split_overdue"></label>
+    </div>
+
     <div class="card"><h2>Account</h2>
       <p>Signed in as <b id="who"></b> <span id="whoRole" class="badge"></span></p>
       <h3>Change password</h3>
@@ -181,6 +198,9 @@
         <div class="row"><input type="password" id="pwNew" placeholder="New password (8+ characters)" autocomplete="new-password" minlength="8" required></div>
         <div class="row"><button class="go" type="submit">Change password</button><span id="pwMsg" class="muted"></span></div>
       </form>
+      <h3>What the admin can see</h3>
+      <p class="muted" id="noticeText"></p>
+      <p class="muted" id="noticeWhen"></p>
       <h3>Signed-in devices</h3>
       <div id="sessions" class="muted">…</div>
       <div class="row"><button class="plain" id="signoutOthers">Sign out other devices</button>
@@ -212,6 +232,19 @@
   </section>
 
   <section id="admin">
+    <div class="card"><h2>Printers</h2>
+      <div id="printerList" class="muted">…</div>
+      <details style="margin-top:10px"><summary><b>Add a printer</b></summary>
+        <div class="field"><label for="npDriver">Kind of printer</label><select id="npDriver"></select></div>
+        <div class="field"><label for="npName">Name</label><input type="text" id="npName" placeholder="Office, Kitchen, Red roll…"></div>
+        <div class="field"><label for="npAddress">Address</label><input type="text" id="npAddress" autocapitalize="none"><div class="muted" id="npHint"></div></div>
+        <div class="field"><label for="npColor">Label color loaded</label><select id="npColor"></select></div>
+        <div class="field" id="npInkRow"><label><input type="checkbox" id="npInk"> Black + red roll (DK-22251): print overdue tags in red</label></div>
+        <div class="field"><label for="npWidth">Print width (dots)</label><input type="number" id="npWidth" style="width:120px"> <span class="muted">58 mm ≈ 384, 80 mm ≈ 576, 62 mm QL = 696, 4 in @203 dpi = 812</span></div>
+        <div class="field" id="npHeightRow"><label for="npHeight">Label height (mm, die-cut only)</label><input type="number" id="npHeight" style="width:120px" placeholder="0 = continuous"></div>
+        <div class="row"><button class="go" id="npGo">Add printer</button><span class="err" id="npMsg"></span></div>
+      </details>
+    </div>
     <div class="card"><h2>People</h2>
       <div id="users">…</div>
     </div>
@@ -225,6 +258,17 @@
     <div class="card" id="activityCard" hidden><h2>Activity: <span id="actUser"></span></h2>
       <div id="activity"></div></div>
     <div class="card"><h2>Feedback</h2><p class="muted">Respond, set a status or hide posts on the <button class="linkish" data-goto="board">Feedback tab</button>. Names are never shown.</p></div>
+  </section>
+
+  <section id="usage">
+    <div class="card"><h2>How people use Next Box</h2>
+      <p class="muted">Everyone has accepted the data notice (see People). Feedback stays anonymous and isn't included here.</p>
+      <div class="row"><select id="uDays" aria-label="Period"><option value="7">last 7 days</option><option value="30" selected>last 30 days</option><option value="90">last 90 days</option></select></div>
+      <div id="uTotals" class="kv" style="margin-top:10px"></div>
+      <div id="uChart" class="bars"></div>
+    </div>
+    <div id="uPeople"></div>
+    <div class="card" id="uDetail" hidden><h2>Tickets: <span id="uWho"></span></h2><div id="uTickets"></div></div>
   </section>
 
   <section id="debug">
@@ -249,6 +293,12 @@
 </main>
 <button class="go" id="fb" data-feedback>Feedback</button>
 </div>
+
+<dialog id="noticeDialog" aria-labelledby="noticeTitle">
+  <h2 id="noticeTitle">Before you start</h2>
+  <p id="noticeBody"></p>
+  <div class="row"><button class="go" id="noticeOk">I understand</button></div>
+</dialog>
 
 <dialog id="fbDialog" aria-labelledby="fbTitle">
   <form method="dialog" id="fbForm">
@@ -279,6 +329,7 @@
     <div class="row"><button class="go" type="button" id="fbSend">Post anonymously</button><button class="plain" type="button" id="fbClose">Close</button></div>
   </form>
 </dialog>
+<footer id="revmark" aria-label="Version"></footer>
 <div id="toast"></div>
 <script src="app.js"></script>
 </body>

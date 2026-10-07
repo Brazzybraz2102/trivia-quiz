@@ -62,7 +62,140 @@ async function boot() {
   loadPrefs(me.prefs);
   refreshStatus();
   loadConnection();
+  loadLabels();
+  $("#noticeText").textContent = me.data_notice;
+  $("#noticeWhen").textContent = me.consented ? `You accepted this on ${when(me.consented_at)}.` : "";
+  if (!me.consented) { $("#noticeBody").textContent = me.data_notice; $("#noticeDialog").showModal(); }
 }
+
+$("#noticeOk").onclick = async () => {
+  try { await api("/auth/consent", { method: "POST" }); $("#noticeDialog").close(); boot(); }
+  catch (e) { toast(e.message); }
+};
+$("#noticeDialog").addEventListener("cancel", (e) => e.preventDefault());  // must be acknowledged
+
+// ---------------------------------------------------------------- revision mark
+api("/version").then((v) => {
+  $("#revmark").textContent = ["Next Box rev " + v.version, v.build, v.credit].filter(Boolean).join(" · ");
+}).catch(() => {});
+
+// ---------------------------------------------------------------- printers & label colors
+const SWATCH = { white: "#fff", red: "#e53935", orange: "#fb8c00", yellow: "#fdd835", green: "#43a047", blue: "#1e88e5",
+                 pink: "#ec407a", purple: "#8e24aa", clear: "transparent", other: "#9e9e9e" };
+const sw = (c) => `<span class="swatch" style="background:${SWATCH[c] || "#ccc"}"></span>`;
+let printOpts = null;
+
+async function loadLabels() {
+  try { printOpts = await api("/printing-options"); } catch (e) { $("#printersLoaded").textContent = e.message; return; }
+  const ps = printOpts.printers;
+  $("#printersLoaded").innerHTML = ps.length
+    ? "Loaded right now: " + ps.map((p) => `${sw(p.stock_color)}${esc(p.name)} (${esc(p.stock_color)} labels${p.ink === "black_red" ? ", red ink" : ""})`).join(", ")
+    : "No printers set up yet. An admin can add them under Admin → Printers.";
+  $("#defPrinter").innerHTML = `<option value="">First printer</option>` + ps.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
+  $("#defPrinter").value = me.prefs.default_printer || "";
+  const rules = me.prefs.color_rules || {};
+  $("#colorRules").innerHTML = Object.entries(printOpts.reasons).map(([k, label]) => `
+    <label class="setting"><div class="label"><b>${esc(label)}</b>
+      <span>${rules[k] && rules[k] !== "any" ? (ps.some((p) => p.stock_color === rules[k]) ? "" : `No printer has ${esc(rules[k])} labels loaded right now.`) : ""}</span></div>
+      <select data-rule="${esc(k)}" aria-label="${esc(label)} label color">
+        <option value="any">usual printer</option>${printOpts.colors.map((c) => `<option value="${c}" ${rules[k] === c ? "selected" : ""}>${c} labels</option>`).join("")}
+      </select></label>`).join("");
+  $$("#colorRules select").forEach((sel) => sel.onchange = async () => {
+    const next = {}; $$("#colorRules select").forEach((x) => next[x.dataset.rule] = x.value);
+    try { me.prefs = await api("/settings", { method: "PATCH", json: { color_rules: next } }); toast("Saved"); loadLabels(); }
+    catch (e) { toast(e.message); }
+  });
+}
+$("#defPrinter").onchange = async () => {
+  try { me.prefs = await api("/settings", { method: "PATCH", json: { default_printer: $("#defPrinter").value } }); toast("Saved"); }
+  catch (e) { toast(e.message); }
+};
+
+async function loadPrinters() {
+  try {
+    printOpts = await api("/printing-options");
+    const status = await api("/admin/printers/status").catch(() => ({}));
+    const ps = printOpts.printers;
+    $("#printerList").innerHTML = ps.map((p) => `<div class="user" data-pid="${esc(p.id)}"><div class="top">
+        <span class="dot ${status[p.id] ? "on" : "off"}" title="${status[p.id] ? "reachable" : "not answering"}"></span>
+        <b>${esc(p.name)}</b> <span class="muted">${esc(printOpts.drivers[p.driver]?.name || p.driver)}</span></div>
+      <div class="muted">${esc(p.address)} · ${p.width_px} dots${p.ink === "black_red" ? " · black + red roll" : ""}</div>
+      <div class="row">${sw(p.stock_color)}<select class="small" data-p="color" aria-label="Label color">${printOpts.colors.map((c) => `<option ${c === p.stock_color ? "selected" : ""}>${c}</option>`).join("")}</select>
+        <button class="plain small" data-p="preview">Test (preview)</button><button class="plain small" data-p="print">Test print</button>
+        <button class="plain small" data-p="remove">Remove</button></div></div>`).join("") || "No printers yet. Add one below.";
+    if (!$("#npDriver").options.length) {
+      $("#npDriver").innerHTML = Object.entries(printOpts.drivers).map(([k, d]) => `<option value="${k}">${esc(d.name)}</option>`).join("");
+      $("#npColor").innerHTML = printOpts.colors.map((c) => `<option>${c}</option>`).join("");
+      $("#npDriver").onchange = driverHints; driverHints();
+    }
+  } catch (e) { $("#printerList").textContent = e.message; }
+}
+function driverHints() {
+  const d = printOpts.drivers[$("#npDriver").value];
+  $("#npHint").textContent = "e.g. " + d.address; $("#npWidth").value = d.width;
+  $("#npInkRow").hidden = $("#npDriver").value !== "brother_ql";
+  $("#npHeightRow").hidden = !["zpl", "tspl"].includes($("#npDriver").value);
+}
+$("#npGo").onclick = async () => {
+  $("#npMsg").textContent = "";
+  try {
+    await api("/admin/printers", { method: "POST", json: { driver: $("#npDriver").value, name: $("#npName").value,
+      address: $("#npAddress").value, stock_color: $("#npColor").value, ink: $("#npInk").checked ? "black_red" : "black",
+      width_px: Number($("#npWidth").value) || null, label_height_mm: Number($("#npHeight").value) || 0 } });
+    $("#npName").value = $("#npAddress").value = ""; toast("Printer added"); loadPrinters(); loadLabels();
+  } catch (e) { $("#npMsg").textContent = e.message; }
+};
+$("#printerList").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-p]"); if (!b) return;
+  const pid = b.closest("[data-pid]").dataset.pid;
+  try {
+    if (b.dataset.p === "remove") { if (!confirm("Remove this printer?")) return; await api(`/admin/printers/${pid}`, { method: "DELETE" }); }
+    else {
+      const real = b.dataset.p === "print";
+      if (real && !confirm("Send a real test print?")) return;
+      const r = await api(`/admin/printers/${pid}/test?dry_run=${!real}`, { method: "POST" });
+      $("#nuOut").innerHTML = `<p>${r.status === "printed" ? "Printed" : "Preview"} on ${esc(r.printer.name)}:</p><img src="${png(r.id)}" style="max-width:100%;border:1px solid var(--line);border-radius:6px">`;
+    }
+    loadPrinters(); loadLabels();
+  } catch (err) { toast(err.message); }
+});
+$("#printerList").addEventListener("change", async (e) => {
+  const sel = e.target.closest("select[data-p=color]"); if (!sel) return;
+  try { await api(`/admin/printers/${sel.closest("[data-pid]").dataset.pid}`, { method: "PATCH", json: { stock_color: sel.value } }); toast("Saved"); loadPrinters(); loadLabels(); }
+  catch (err) { toast(err.message); }
+});
+
+// ---------------------------------------------------------------- usage (superadmin)
+const REASON_NAMES = { overdue: "overdue", urgent: "urgent", today: "daily", list: "lists", task: "single", note: "notes", new_task: "new tasks", text: "notes" };
+async function loadUsage() {
+  try {
+    const u = await api(`/super/usage?days=${$("#uDays").value}`);
+    const t = u.totals;
+    $("#uTotals").innerHTML = [["People", `${t.people} (${t.active} active)`], ["Tickets", `${t.tickets} (${t.printed} printed, ${t.tickets - t.printed} previews)`], ["Read-backs", t.scans]]
+      .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+    const max = Math.max(1, ...u.series.map((d) => d.tickets + d.scans));
+    $("#uChart").innerHTML = u.series.map((d) => `<div style="height:${Math.round((d.tickets + d.scans) / max * 100)}%" title="${d.date}: ${d.tickets} tickets, ${d.scans} scans, ${d.people} people"></div>`).join("");
+    $("#uPeople").innerHTML = u.people.map((p) => `<div class="card"><div class="top" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <b>${esc(p.username)}</b><span class="badge ${p.role !== "user" ? "hot" : ""}">${esc(p.role)}</span>${p.beta ? `<span class="badge">beta</span>` : ""}
+        <span class="muted" style="margin-left:auto">active ${when(p.last_active)}</span></div>
+      <div class="muted">${p.app ? esc(p.app) : "no to-do app"} · ${p.consented_at ? "notice accepted " + when(p.consented_at) : "<span class='err'>notice not accepted yet</span>"}</div>
+      <div style="margin-top:6px">${p.tickets} tickets (${p.printed} printed) · ${p.scans} read-backs · marks: ${p.marks_applied} auto, ${p.marks_confirmed} confirmed, ${p.marks_skipped} skipped</div>
+      <div class="muted">${Object.entries(p.by_reason).map(([k, v]) => `${esc(REASON_NAMES[k] || k)} ${v}`).join(" · ") || "no tickets yet"}</div>
+      <div class="muted">most used: ${p.top_actions.map(([a, n]) => `${esc(a)} ×${n}`).join(", ") || "nothing yet"}</div>
+      <div class="muted">settings: ${p.prefs.max_rows} rows${p.prefs.split_overdue ? ", overdue split" : ""}${p.prefs.always_dry_run ? ", preview only" : ""}, labels: ${Object.entries(p.prefs.color_rules || {}).map(([k, c]) => `${esc(REASON_NAMES[k] || k)}→${esc(c)}`).join(", ") || "default"}</div>
+      <div class="row"><button class="plain small" data-u="${esc(p.username)}">View tickets</button></div></div>`).join("");
+  } catch (e) { $("#uPeople").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+$("#uDays").onchange = loadUsage;
+$("#uPeople").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-u]"); if (!b) return;
+  const d = await api(`/super/users/${encodeURIComponent(b.dataset.u)}/tickets?limit=24`);
+  $("#uWho").textContent = b.dataset.u; $("#uDetail").hidden = false;
+  $("#uTickets").innerHTML = `<div class="tickets">${d.tickets.map((r) => `<div><img loading="lazy" src="${png(r.id)}" alt="">
+      <div class="muted">${esc(r.created_at.replace("T", " "))}${r.printer ? " · " + esc(r.printer.name) : ""}${r.dry_run ? " · preview" : ""}</div></div>`).join("") || "<p class='muted'>No tickets.</p>"}</div>
+    <h3>Read-backs</h3>${d.scans.map((r) => `<div class="muted">${esc(r.created_at.replace("T", " "))}: ${r.applied.length} applied, ${r.needs_confirmation.length} needed a tap${r.errors.length ? ", " + r.errors.length + " problems" : ""}</div>`).join("") || "<p class='muted'>None.</p>"}`;
+  $("#uDetail").scrollIntoView({ behavior: "smooth" });
+});
 
 // ---------------------------------------------------------------- to-do app connection
 let providers = [], conn = null;
@@ -143,7 +276,8 @@ $("#mustForm").onsubmit = async (e) => {
 $("#logout").onclick = async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); showLogin("Signed out."); };
 
 // ---------------------------------------------------------------- tabs
-const loaders = { printed: loadHistory, settings: loadSessions, admin: loadAdmin, debug: loadDebug, board: () => loadBoard() };
+const loaders = { printed: loadHistory, settings: () => { loadSessions(); loadLabels(); }, admin: () => { loadAdmin(); loadPrinters(); },
+                  debug: loadDebug, board: () => loadBoard(), usage: () => loadUsage() };
 $$("nav button").forEach((b) => b.onclick = () => {
   $$("nav button").forEach((x) => x.classList.toggle("on", x === b));
   $$("section").forEach((s) => s.classList.toggle("on", s.id === b.dataset.tab));
@@ -153,7 +287,7 @@ $$("nav button").forEach((b) => b.onclick = () => {
 async function refreshStatus() {
   try {
     const s = await api("/status");
-    $("#status").textContent = `printer ${s.printer_reachable ? "online" : "offline"}${s.dry_run_forced ? " · preview only" : ""}`;
+    $("#status").textContent = `${s.printer || "printer"} ${s.printer_reachable ? "online" : "offline"}${s.dry_run_forced ? " · preview only" : ""}`;
   } catch (e) { $("#status").textContent = `server: ${e.message}`; }
 }
 
@@ -162,8 +296,10 @@ function showPrint(r) {
   const box = $("#printResult");
   box.hidden = false;
   if (r.status === "skipped") { box.innerHTML = `<b>Skipped</b> ${esc(r.reason)}`; return; }
-  box.innerHTML = `<b>${r.status === "printed" ? "Printed" : "Preview"}</b> #${esc(r.id)} · ${r.manifest.length} rows
-    <img src="${png(r.id)}" alt="ticket preview">`;
+  const one = (t) => `<p><b>${t.status === "printed" ? "Printed" : "Preview"}</b> #${esc(t.id)} · ${t.manifest.length} rows
+    ${t.printer ? ` · ${sw(t.printer.color)}${esc(t.printer.name)}` : ""}</p>${t.note ? `<p class="muted">${esc(t.note)}</p>` : ""}
+    <img src="${png(t.id)}" alt="ticket preview">`;
+  box.innerHTML = [...(r.also || []), r].map(one).join("<hr>");
 }
 
 $$("[data-act]").forEach((b) => b.onclick = async () => {

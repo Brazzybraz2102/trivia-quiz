@@ -28,6 +28,7 @@ class Settings:
     host: str = "0.0.0.0"
     port: int = 8787
     retention_days: int = 90  # tickets and scans older than this are deleted at startup
+    credit: str = "Created by Mike"  # the small mark at the bottom of every page
 
     def redacted(self) -> dict:
         """Safe to print: never includes secret values."""
@@ -59,4 +60,5 @@ def load_settings(env_file: Path | None = None) -> Settings:
         host=e("NEXTBOX_HOST", "0.0.0.0"),
         port=int(e("NEXTBOX_PORT", "8787")),
         retention_days=int(e("NEXTBOX_RETENTION_DAYS", "90")),
+        credit=e("NEXTBOX_CREDIT", "Created by Mike")[:80],
     )

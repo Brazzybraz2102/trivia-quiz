@@ -1,7 +1,19 @@
 # Next Box
 
-Print your to-do list on a Brother QL-1110NWB. Mark it up with a pen, snap a photo, and the
+Print your to-do list on a thermal label printer. Mark it up with a pen, snap a photo, and the
 changes go back to your to-do app. Everything runs on your desktop, on your home network only.
+
+**Printers:**
+- Brother QL / PT
+- ESC/POS receipt printers: Epson, Star and most 58/80 mm models
+- ZPL label printers: Zebra and compatibles
+- TSPL label printers: TSC, Munbyn, iDPRT, Xprinter
+- any printer installed on the computer, through CUPS: Dymo, Rollo, USB printers
+
+Bluetooth-only phone printers like Phomemo and Niimbot can't be used: they keep how they work private.
+
+Load different **label colors** in different printers and send each kind of ticket to its color.
+The default sends overdue tasks to red labels.
 
 Each person signs in and connects **their own** to-do app:
 - **Todoist**
@@ -121,6 +133,34 @@ scripts/hotkey.sh '<Super><Shift>t'             # then for real
    ```
    Run it twice. Dry-run and real auto prints are tracked separately, so this test doesn't use up
    the real print for the day.
+
+## Printers and label colors
+- **Adding printers (admins):** **Admin → Printers → Add a printer**. Pick the kind, enter its
+  address (an IP like `192.168.1.60`, a USB device like `/dev/usb/lp0`, or the CUPS printer name)
+  and say which **label color** is loaded. Use **Test (preview)** first, then **Test print**.
+  When you swap a roll, change its color there.
+- **Choosing colors (everyone):** **Settings → Printers & label colors** sets which color each
+  kind of ticket uses: overdue, urgent, daily list, lists, single tasks, notes, new tasks.
+  **Overdue tasks on their own ticket** splits today's list, so expired tasks come out on red.
+- **No printer with that color loaded?** The ticket goes to your usual printer and the app tells
+  you why.
+- **Brother QL with a black+red roll (DK-22251):** tick "Black + red roll" and overdue tags print
+  in red ink.
+- **Hardware testing so far:** only the Brother QL path has been used with a real printer. The
+  other drivers are built from their published command sets and tested by checking the bytes they
+  produce. Do a Test print when you add one.
+
+## What you can see as the admin
+Everyone sees a notice on their first sign-in, and their "I understand" is recorded:
+- **The notice says:** you can see their tickets (including the tasks on them), read-backs,
+  settings and activity.
+- **Your view:** **Usage** (super admin) shows per-person activity, tickets by kind, read-back
+  results, settings and label colors. **View tickets** shows the actual tickets.
+- **What stays private:** to-do app passwords and tokens are never visible. Feedback stays
+  anonymous; only "Who sent this?" reveals a sender, and that's audited.
+
+The small mark at the bottom of every page shows the version and build. Change its wording with
+`NEXTBOX_CREDIT` in `.env`.
 
 ## Everyday use
 | Want | Do |

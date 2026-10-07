@@ -6,8 +6,9 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-WIDTH = 696
+WIDTH = 696   # tickets are drawn at this width, then fitted to each printer (see finalize)
 MARGIN = 16
+ACCENT = (220, 0, 0)  # red ink on two-color printers; prints black everywhere else
 FONT_DIRS = [
     Path("/usr/share/fonts/truetype/dejavu"),
     Path("/usr/share/fonts/dejavu-sans-fonts"),
@@ -54,18 +55,38 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> list[st
     return lines
 
 
+def finalize(img: Image.Image, width: int = WIDTH, red: bool = False) -> Image.Image:
+    """Fit a drawn ticket to a printer's dot width. 1-bit, or black/red/white for two-color rolls."""
+    if img.width != width:
+        img = img.resize((width, max(1, round(img.height * width / img.width))), Image.LANCZOS)
+    rgb = img.convert("RGB")
+    if not red:
+        return rgb.convert("L").point(lambda p: 0 if p < 128 else 255, mode="1")
+    out = Image.new("RGB", rgb.size, "white")
+    src, dst = rgb.load(), out.load()
+    for y in range(rgb.height):
+        for x in range(rgb.width):
+            r, g, b = src[x, y]
+            if r > 150 and g < 110 and b < 110:
+                dst[x, y] = (255, 0, 0)
+            elif (r + g + b) / 3 < 128:
+                dst[x, y] = (0, 0, 0)
+    return out
+
+
 def render_label(title: str, subtitle: str = "", rows: list[Row] | None = None,
-                 body: str = "", code: str = "", legend: bool = True) -> Image.Image:
-    """Return a 1-bit image. Rows get numbered checkboxes; body is free text."""
+                 body: str = "", code: str = "", legend: bool = True,
+                 accent_subtitle: bool = False) -> Image.Image:
+    """Draw a ticket at WIDTH; pass it to finalize() for a printer. Rows get numbered checkboxes."""
     title_f, sub_f, row_f, meta_f, small_f = _font(46, True), _font(26), _font(34), _font(24, True), _font(20)
-    canvas = Image.new("L", (WIDTH, 4000), 255)
+    canvas = Image.new("RGB", (WIDTH, 4000), "white")
     d = ImageDraw.Draw(canvas)
     y = MARGIN
     for line in _wrap(d, title, title_f, WIDTH - 2 * MARGIN):
         d.text((MARGIN, y), line, font=title_f, fill=0)
         y += 54
     if subtitle:
-        d.text((MARGIN, y), subtitle, font=sub_f, fill=0)
+        d.text((MARGIN, y), subtitle, font=sub_f, fill=ACCENT if accent_subtitle else 0)
         y += 34
     y += 6
     d.line((MARGIN, y, WIDTH - MARGIN, y), fill=0, width=4)
@@ -108,8 +129,7 @@ def render_label(title: str, subtitle: str = "", rows: list[Row] | None = None,
         d.text((WIDTH - MARGIN - w, y), f"#{code}", font=meta_f, fill=0)
         y += 32
     y += MARGIN
-    img = canvas.crop((0, 0, WIDTH, y))
-    return img.point(lambda p: 0 if p < 128 else 255, mode="1")
+    return canvas.crop((0, 0, WIDTH, y))
 
 
 @dataclass
@@ -118,6 +138,7 @@ class DayRow:
     time: str = ""        # "9:00a"; blank rows get a write-in line
     urgent: bool = False  # p1/p2: bold with a leading "!"
     tag: str = ""         # "overdue 2d", "↻"
+    late: bool = False    # overdue: its tag is drawn in the accent (red) color
 
 
 def _dotted(d: ImageDraw.ImageDraw, y: int, x0: int, x1: int) -> None:
@@ -126,7 +147,7 @@ def _dotted(d: ImageDraw.ImageDraw, y: int, x0: int, x1: int) -> None:
 
 
 def render_day(day_name: str, date_text: str, rows: list[DayRow], code: str, footer: str = "",
-               subtitle: str = "", waiting: list[str] | None = None) -> Image.Image:
+               subtitle: str = "", waiting: list[str] | None = None, accent: bool = False) -> Image.Image:
     """The daily sheet: big day name, legend on top, time column, checkboxes on the right.
     Read-back matches rows top to bottom against the manifest, so row order is the contract."""
     day_f, date_f, sub_f = _font(84, True), _font(40, True), _font(28)
@@ -134,7 +155,7 @@ def render_day(day_name: str, date_text: str, rows: list[DayRow], code: str, foo
     text_f, text_bold_f, tag_f = _font(31), _font(31, True), _font(22)
     wait_bold_f, wait_f, code_f, foot_f = _font(25, True), _font(25), _font(26, True), _font(20)
 
-    canvas = Image.new("L", (WIDTH, 5000), 255)
+    canvas = Image.new("RGB", (WIDTH, 5000), "white")
     d = ImageDraw.Draw(canvas)
     left, right = MARGIN + 4, WIDTH - MARGIN - 4
     y = MARGIN + 6
@@ -175,13 +196,14 @@ def render_day(day_name: str, date_text: str, rows: list[DayRow], code: str, foo
         lines = _wrap(d, text, font, text_max)
         tag_w = d.textlength(row.tag, font=tag_f) + 12 if row.tag else 0
         tag_on_own_line = bool(row.tag) and d.textlength(lines[-1], font=font) + tag_w > text_max
+        tag_fill = ACCENT if (accent and row.late) else 0
         for i, line in enumerate(lines):
             d.text((text_x, y), line, font=font, fill=0)
             if i == len(lines) - 1 and row.tag and not tag_on_own_line:
-                d.text((text_x + d.textlength(line, font=font) + 12, y + 8), row.tag, font=tag_f, fill=0)
+                d.text((text_x + d.textlength(line, font=font) + 12, y + 8), row.tag, font=tag_f, fill=tag_fill)
             y += 40
         if tag_on_own_line:
-            d.text((text_x, y - 4), row.tag, font=tag_f, fill=0)
+            d.text((text_x, y - 4), row.tag, font=tag_f, fill=tag_fill)
             y += 28
         if row.time:
             d.text((left, top + 2), row.time, font=time_f, fill=0)
@@ -219,5 +241,4 @@ def render_day(day_name: str, date_text: str, rows: list[DayRow], code: str, foo
         fw = d.textlength(footer, font=foot_f)
         d.text((right - fw, y + 5), footer, font=foot_f, fill=0)
     y += 36 + MARGIN
-    img = canvas.crop((0, 0, WIDTH, y))
-    return img.point(lambda p: 0 if p < 128 else 255, mode="1")
+    return canvas.crop((0, 0, WIDTH, y))

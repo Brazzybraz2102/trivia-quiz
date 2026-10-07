@@ -33,7 +33,9 @@ from .config import PROJECT_DIR
 from .connections import Builder, Connections, NotConnected
 from .events import Events, ServerSettings
 from .feedback import Feedback, FeedbackError
-from .jobs import Context
+from .jobs import Context, print_text
+from .printer import COLORS, DRIVERS
+from .printers import REASONS, PrinterError, Printers
 from .providers import PROVIDERS, ProviderError
 from .store import normalize_id
 from .vault import Vault
@@ -110,6 +112,28 @@ class ConnectBody(BaseModel):
     fields: dict[str, str]
 
 
+class PrinterBody(BaseModel):
+    name: str | None = None
+    driver: str | None = None
+    address: str | None = None
+    width_px: int | None = None
+    dpi: int | None = None
+    stock_color: str | None = None
+    ink: str | None = None
+    model: str | None = None
+    label: str | None = None
+    label_height_mm: float | None = None
+    gap_mm: float | None = None
+    cut: bool | None = None
+
+
+# Shown to everyone once; their "I understand" is recorded. Bump the version if it changes.
+DATA_NOTICE_VERSION = 1
+DATA_NOTICE = ("The admin can see how you use Next Box: your printed tickets (including the tasks on "
+               "them), photo read-backs, settings and activity. Your to-do app password or token is "
+               "never visible to anyone, and feedback stays anonymous.")
+
+
 class UserPatch(BaseModel):
     role: str | None = None
     disabled: bool | None = None
@@ -152,6 +176,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     server_settings = ServerSettings(data_dir)
     vault = Vault(data_dir)
     feedback_store = Feedback(data_dir)
+    registry = ctx.printers or Printers(data_dir, ctx.settings)
+    build = _build_id()
     _migrate_feedback(events, feedback_store, accounts)
     connections = Connections(ctx.settings, accounts, vault, **({"builder": builder} if builder else {}))
 
@@ -222,7 +248,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             factory = ctx.tasks_factory
         else:
             factory = lambda: connections.provider_for(name)  # noqa: E731
-        return dataclasses.replace(ctx, user=name, prefs=prefs,
+        return dataclasses.replace(ctx, user=name, prefs=prefs, printers=ctx.printers,
                                    printing_paused=s["printing_paused"],
                                    auto_print_enabled=s["auto_print_enabled"],
                                    tasks_factory=factory, _tasks=None)
@@ -301,9 +327,25 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                                 else "no accounts yet: run `nextbox user add <name>` on the desktop")
         user = accounts.get(name)
         s = server_settings.get()
+        consent = user.get("consent") or {}
         return {"username": name, "role": user["role"], "beta": user["beta"], "debug": user["debug"],
                 "must_change": user["must_change"], "prefs": user["prefs"],
-                "announcement": s["announcement"], "printing_paused": s["printing_paused"]}
+                "announcement": s["announcement"], "printing_paused": s["printing_paused"],
+                "data_notice": DATA_NOTICE,
+                "consented": consent.get("version") == DATA_NOTICE_VERSION, "consented_at": consent.get("at")}
+
+    @app.post("/auth/consent")
+    def consent(request: Request):
+        name = accounts.session_user(_token(request))
+        if not name:
+            raise HTTPException(401, "sign in required")
+        accounts.record_consent(name, DATA_NOTICE_VERSION)
+        events.log(name, "data_notice_accepted", kind="auth", detail={"version": DATA_NOTICE_VERSION})
+        return {"ok": True}
+
+    @app.get("/version")
+    def version():
+        return {"version": _version(), "build": build, "credit": ctx.settings.credit}
 
     @app.post("/auth/password")
     def change_password(body: PasswordBody, request: Request, response: Response,
@@ -394,8 +436,11 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.get("/status")
     def status(caller: Caller = Depends(auth)):
         s = server_settings.get()
+        everyone = registry.all()
+        mine = next((p for p in everyone if p.id == caller.prefs.get("default_printer")), everyone[0] if everyone else None)
         return {
-            "printer_reachable": printer.is_reachable(ctx.settings.printer_ip),
+            "printer_reachable": bool(mine) and printer.is_reachable(mine),
+            "printer": mine.name if mine else None,
             "dry_run_forced": ctx.settings.dry_run or s["printing_paused"]
                               or bool(caller.prefs.get("always_dry_run")),
             "printing_paused": s["printing_paused"],
@@ -444,7 +489,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         if not re.fullmatch(r"[A-Z0-9-]{4,16}", label_id) or not path.exists():
             raise HTTPException(404)
         rec = ctx.store.get_printed(label_id)
-        if not rec or rec.get("by") != acting_as(caller):
+        # People see their own tickets; the superadmin sees everyone's (everyone agreed, see DATA_NOTICE).
+        if not rec or (rec.get("by") != acting_as(caller) and caller.role != "superadmin"):
             raise HTTPException(404)
         return FileResponse(path, media_type="image/png")
 
@@ -482,6 +528,53 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def confirm_scan(scan_id: str, body: ConfirmBody, caller: Caller = Depends(auth)):
         _own_scan(scan_id, caller)
         return run(caller, "scan_confirm", scan.confirm, rctx(caller), scan_id, body.decisions)
+
+    # ----------------------------------------------------------- printers & label colors
+    @app.get("/printing-options")
+    def printing_options(caller: Caller = Depends(person)):
+        admin = rank(caller.role) >= rank("admin")
+        return {"printers": [p.public(admin) for p in registry.all()], "colors": COLORS,
+                "reasons": REASONS, "drivers": DRIVERS}
+
+    @app.get("/admin/printers/status")
+    def printers_status(caller: Caller = Depends(admin_only)):
+        return {p.id: printer.is_reachable(p) for p in registry.all()}
+
+    @app.post("/admin/printers")
+    def add_printer(body: PrinterBody, caller: Caller = Depends(admin_only)):
+        try:
+            cfg = registry.add(body.model_dump(exclude_none=True))
+        except PrinterError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        audit(caller, "add_printer", printer=cfg.id, name=cfg.name, driver=cfg.driver)
+        return cfg.public(True)
+
+    @app.patch("/admin/printers/{pid}")
+    def edit_printer(pid: str, body: PrinterBody, caller: Caller = Depends(admin_only)):
+        try:
+            cfg = registry.update(pid, body.model_dump(exclude_none=True))
+        except KeyError:
+            raise HTTPException(404) from None
+        except PrinterError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        audit(caller, "edit_printer", printer=pid)
+        return cfg.public(True)
+
+    @app.delete("/admin/printers/{pid}")
+    def delete_printer(pid: str, caller: Caller = Depends(admin_only)):
+        registry.remove(pid)
+        audit(caller, "remove_printer", printer=pid)
+        return {"ok": True}
+
+    @app.post("/admin/printers/{pid}/test")
+    def test_printer(pid: str, dry_run: bool = False, caller: Caller = Depends(admin_only)):
+        cfg = registry.get(pid)
+        if not cfg:
+            raise HTTPException(404)
+        c = dataclasses.replace(rctx(caller), printers=_OnlyPrinter(cfg),
+                                prefs={**caller.prefs, "default_printer": cfg.id, "color_rules": {"note": "any"}})
+        text = f"{cfg.name}\n{DRIVERS[cfg.driver]['name']}\n{cfg.stock_color} labels · {cfg.width_px} dots"
+        return run(caller, "test_print", print_text, c, text, "TEST PRINT", dry_run=dry_run)
 
     # ----------------------------------------------------------- to-do app connection
     @app.get("/providers")
@@ -624,6 +717,66 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         audit(caller, "respond_feedback", feedback=fid, status=body.status, replied=body.reply is not None)
         return item
 
+    # ----------------------------------------------------------- usage (superadmin)
+    @app.get("/super/usage")
+    def usage(days: int = 30, caller: Caller = Depends(super_only)):
+        days = max(1, min(days, 365))
+        since = date.fromtimestamp(time.time() - days * 86400).isoformat()
+        tickets = [r for r in ctx.store.list_printed(100_000) if r["created_at"][:10] >= since]
+        scans_ = [r for r in ctx.store.list_scans(100_000) if r["created_at"][:10] >= since]
+        acts = [e for e in events.query(limit=5000) if e["kind"] in ("activity", "auth") and e["ok"]
+                and date.fromtimestamp(e["ts"]).isoformat() >= since]
+        series: dict[str, dict] = {}
+        for i in range(min(days, 30)):
+            d = date.fromtimestamp(time.time() - i * 86400).isoformat()
+            series[d] = {"date": d, "tickets": 0, "scans": 0, "people": set()}
+        for r in tickets:
+            if r["created_at"][:10] in series:
+                series[r["created_at"][:10]]["tickets"] += 1
+        for r in scans_:
+            if r["created_at"][:10] in series:
+                series[r["created_at"][:10]]["scans"] += 1
+        for e in acts:
+            d = date.fromtimestamp(e["ts"]).isoformat()
+            if d in series:
+                series[d]["people"].add(e["user"])
+        people = []
+        for u in accounts.all_users():
+            name = u["username"]
+            mine = [r for r in tickets if r.get("by") == name]
+            my_scans = [r for r in scans_ if r.get("by") == name]
+            my_acts = [e for e in acts if e["user"] == name]
+            features: dict[str, int] = {}
+            for e in my_acts:
+                features[e["action"]] = features.get(e["action"], 0) + 1
+            by_reason: dict[str, int] = {}
+            for r in mine:
+                by_reason[r.get("reason", r["kind"])] = by_reason.get(r.get("reason", r["kind"]), 0) + 1
+            people.append({
+                "username": name, "role": u["role"], "beta": u["beta"],
+                "app": connections.status(name).get("name"),
+                "consented_at": (u.get("consent") or {}).get("at"),
+                "last_active": max([u.get("last_login") or 0] + [int(e["ts"]) for e in my_acts]) or None,
+                "tickets": len(mine), "printed": sum(1 for r in mine if not r["dry_run"]),
+                "by_reason": by_reason, "scans": len(my_scans),
+                "marks_applied": sum(len(r["applied"]) for r in my_scans),
+                "marks_confirmed": sum(1 for r in my_scans for p in r["needs_confirmation"] if p["status"] == "applied"),
+                "marks_skipped": sum(1 for r in my_scans for p in r["needs_confirmation"] if p["status"] == "skipped"),
+                "top_actions": sorted(features.items(), key=lambda kv: -kv[1])[:6],
+                "prefs": u["prefs"],
+            })
+        return {"days": days, "totals": {"people": len(people), "active": len({e["user"] for e in acts}),
+                                         "tickets": len(tickets), "printed": sum(1 for r in tickets if not r["dry_run"]),
+                                         "scans": len(scans_)},
+                "series": [{**v, "people": len(v["people"])} for v in sorted(series.values(), key=lambda v: v["date"])],
+                "people": sorted(people, key=lambda p: -(p["last_active"] or 0))}
+
+    @app.get("/super/users/{username}/tickets")
+    def user_tickets(username: str, limit: int = 30, caller: Caller = Depends(super_only)):
+        _target(username)
+        return {"tickets": ctx.store.list_printed(min(limit, 200), by=username.lower()),
+                "scans": ctx.store.list_scans(min(limit, 200), by=username.lower())}
+
     # ----------------------------------------------------------- superadmin (debug)
     @app.get("/super/diagnostics")
     def diagnostics(caller: Caller = Depends(super_only)):
@@ -641,7 +794,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             name = connections.status(u).get("name", "not connected")
             apps[name] = apps.get(name, 0) + 1
         start = time.time()
-        reachable = printer.is_reachable(ctx.settings.printer_ip)
+        printers_now = registry.all()
+        reachable = any(printer.is_reachable(p) for p in printers_now) if printers_now else False
         usage = shutil.disk_usage(data_dir)
         size = sum(p.stat().st_size for p in data_dir.rglob("*") if p.is_file())
         auto = json.loads((data_dir / "auto.json").read_text()) if (data_dir / "auto.json").exists() else {}
@@ -650,7 +804,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             "uptime_s": int(time.time() - STARTED),
             "config": ctx.settings.redacted(),
             "printer": {"reachable": reachable, "ms": int((time.time() - start) * 1000),
-                        "ip": ctx.settings.printer_ip or None, "label": ctx.settings.label},
+                        "ip": ", ".join(f"{p.name} ({p.stock_color})" for p in printers_now) or None,
+                        "label": ctx.settings.label},
             "todoist": todoist,
             "apps": apps,
             "vision": {"model": ctx.settings.vision_model, "key_set": bool(ctx.settings.anthropic_api_key)},
@@ -740,6 +895,26 @@ def _migrate_feedback(events: Events, store: Feedback, accounts: Accounts) -> No
             continue
 
 
+class _OnlyPrinter:
+    """A one-printer registry, for test prints."""
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def all(self):
+        return [self.cfg]
+
+
+def _build_id() -> str:
+    """Short git commit of this copy, for the revision mark ("" when it isn't a git checkout)."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(PROJECT_DIR), "rev-parse", "--short", "HEAD"],
+                           capture_output=True, text=True, timeout=3)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def _safe_args(args: tuple, kwargs: dict) -> dict:
     """Arguments worth seeing when debugging; contexts, images and functions are skipped."""
     out = {}
@@ -772,4 +947,4 @@ def build_default_app() -> FastAPI:
         raise SystemExit("NEXTBOX_KEY is not set in .env; refusing to start an unauthenticated server")
     store = Store(settings.data_dir)
     store.prune(settings.retention_days)
-    return create_app(Context(settings=settings, store=store))
+    return create_app(Context(settings=settings, store=store, printers=Printers(settings.data_dir, settings)))

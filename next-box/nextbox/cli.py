@@ -13,6 +13,7 @@ from pathlib import Path
 from . import jobs, printer, scan
 from .auth import Accounts, AuthError, default_prefs
 from .connections import Connections
+from .printers import Printers
 from .providers import READY
 from .vault import Vault
 from .config import load_settings
@@ -151,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     conns = Connections(settings, accounts, Vault(settings.data_dir))
     who = (args.user or accounts.owner() or "cli").lower()
     ctx = Context(settings=settings, store=Store(settings.data_dir), user=who,
+                  printers=Printers(settings.data_dir, settings),
                   tasks_factory=lambda: conns.provider_for(who),
                   prefs=(accounts.get(who) or {}).get("prefs") or default_prefs())
     dry = args.dry_run or None

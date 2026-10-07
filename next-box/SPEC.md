@@ -131,6 +131,54 @@ Settings form.
 - **Dependencies:** pinned in `constraints.txt`. The installer also upgrades pip and setuptools.
 - **systemd:** `Restart=always`, `UMask=0077`, `ProtectSystem=strict` with write access only to the data dir.
 
+## 14. Printers and label colors
+**Drivers** (`nextbox/printer.py`) and how they connect:
+
+| Driver | Connects by |
+|---|---|
+| `brother_ql` | network, or `usb://0x04f9:…`; optional black+red ink |
+| `escpos` | GS v 0 raster, network or `/dev/usb/lp*` |
+| `zpl` | ^GF graphic field over port 9100 |
+| `tspl` | BITMAP, network or device |
+| `cups` | `lp -d <queue> -o fit-to-page`: Dymo, Rollo, any printer with a driver |
+
+**How a ticket is printed:**
+- Tickets are drawn at 696 px, then `finalize()` fits them to each printer's dot width.
+- Two-color Brother rolls keep red pixels; everything else is 1-bit.
+- Every send goes through `_send_raster`, one job at a time.
+- Only the Brother path is hardware-tested. The others are tested at the byte level, plus a real
+  TCP send and a stand-in `lp`.
+
+**Printer list:** `printers.json`, managed by admins. Each printer has a name, driver, address,
+width and dpi, plus the **label color loaded** and ink. Addresses must be one of:
+- host[:port]
+- `/dev/usb/lp*`, `/dev/lp*`, `ttyUSB`, `ttyACM` or `rfcomm`
+- `usb://0xVVVV:0xPPPP`, for Brother only
+- a CUPS queue name
+
+Anything else is refused. On the first run after upgrading, `PRINTER_IP` becomes the first printer.
+
+**Routing:** every ticket has a reason: overdue, urgent, today (daily list), list, task, note or
+new_task. Each person's `color_rules` maps reasons to label colors (default: overdue → red), and
+`choose()` sends the ticket to a printer with that color loaded. If none has it, the ticket goes
+to their usual printer with a note.
+
+**Overdue on their own ticket:** with `split_overdue` on, today's list prints overdue tasks as a
+separate "Overdue" ticket. One auto print can therefore produce two tickets; it's still one
+guarded auto print.
+
+## 15. Admin visibility (everyone agreed)
+- **The notice:** at first sign-in everyone sees `DATA_NOTICE` and taps "I understand". It's
+  recorded as `consent: {version, at}`. Bump `DATA_NOTICE_VERSION` if what's visible changes.
+- **The superadmin can see:**
+  - `/super/usage`: per-person activity, tickets by reason, read-back outcomes, settings, last
+    active, notice date, and a daily chart
+  - `/super/users/{name}/tickets`: everyone's ticket images and scans
+- **Still never visible:** to-do app secrets. Feedback identity stays in
+  `feedback_identities.json` and is never part of usage.
+- **Revision mark:** `/version` returns version, git build and `NEXTBOX_CREDIT`. It's shown at
+  the bottom of every page.
+
 ## 13. Feedback: public, anonymous, one identity file
 **Where people can give feedback:** a Feedback button on every screen for everyone, plus a link on
 the sign-in page. There are two modes:
@@ -233,13 +281,16 @@ Storage, all in the data dir: `users.json` (holds prefs), `sessions.json`, `even
 
 ## 9. Phase checklist
 ### Phase A: desktop
-- [x] A1 service, venv, pytest green (80 tests)
+- [x] A1 service, venv, pytest green (97 tests)
 - [x] Web sign-in: local accounts, 30-day sessions, bearer tokens for native apps
 - [ ] Sign-in: `nextbox user add mike` on the desktop (NEEDS MIKE)
 - [x] Settings, admin (support) and superadmin (debug) tools, §10 (19 tests)
 - [x] Per-person to-do app connections: Todoist and CalDAV, encrypted secrets, per-person tickets (§11)
 - [x] Audit fixes (§12)
 - [x] Anonymous feedback on every page, guided and open, public board, single identity file (§13)
+- [x] Any thermal printer, label colors by reason, overdue on red, black+red ink (§14)
+- [x] Usage view + recorded data notice; revision mark (§15)
+- [ ] Real-hardware test of the ESC/POS, ZPL, TSPL and CUPS drivers (NEEDS MIKE: a test print on each)
 - [ ] Google Tasks / Microsoft To Do / TickTick (NEEDS MIKE: register Next Box once with each)
 - [ ] HTTPS on the LAN via Tailscale; nightly data-dir backup
 - [ ] A1 `.env` filled on the desktop (NEEDS MIKE)

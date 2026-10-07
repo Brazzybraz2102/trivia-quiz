@@ -35,11 +35,23 @@ PREFS = {
     "default_filter": ("", lambda v: isinstance(v, str) and len(v) <= 200),
     "auto_apply": (True, lambda v: isinstance(v, bool)),
     "confidence": (0.7, lambda v: isinstance(v, (int, float)) and 0.5 <= v <= 0.95),
+    "default_printer": ("", lambda v: isinstance(v, str) and len(v) <= 40),
+    "color_rules": ({}, lambda v: _valid_rules(v)),     # reason -> label color, e.g. overdue -> red
+    "split_overdue": (False, lambda v: isinstance(v, bool)),  # overdue tasks on their own ticket
 }
 
 
+def _valid_rules(v) -> bool:
+    from .printer import COLORS
+    from .printers import REASONS
+    return isinstance(v, dict) and all(k in REASONS and c in (*COLORS, "any") for k, c in v.items())
+
+
 def default_prefs() -> dict:
-    return {k: d for k, (d, _) in PREFS.items()}
+    from .printers import DEFAULT_RULES
+    prefs = {k: (dict(d) if isinstance(d, dict) else d) for k, (d, _) in PREFS.items()}
+    prefs["color_rules"] = dict(DEFAULT_RULES)
+    return prefs
 
 
 def rank(role: str) -> int:
@@ -259,6 +271,12 @@ class Accounts:
     def verify(self, username: str, password: str) -> bool:
         user = self._users().get(username.strip().lower())
         return self.password_ok(username, password) and not user["disabled"]
+
+    def record_consent(self, username: str, version: int) -> None:
+        with self._lock():
+            users = self._users()
+            users[username]["consent"] = {"version": version, "at": int(time.time())}
+            self._save(self._users_path, users)
 
     def touch_login(self, username: str) -> None:
         with self._lock():
