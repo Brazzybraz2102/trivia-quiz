@@ -3,9 +3,9 @@
 Each person's to-do app ↔ Brother QL-1110NWB label printer, running on Mike's desktop and reachable only on the home LAN.
 
 ## 1. Rules (these override everything else)
-1. **Each person's own to-do app is the only source of truth.** There's no local task database.
-   The data dir only keeps print history, ticket manifests (row → task ID), scan results and the
-   auto-print guard.
+1. **Each person's own to-do app is the only source of truth.** Tasks are never copied into the
+   database. The database (§16) only keeps accounts, print history, ticket manifests (row → task
+   ID), scan results, the auto-print guard, printers, feedback and the activity log.
 2. **Nothing prints unless Mike asks.** The one exception is the once-a-day `source="auto"` print
    of today's list when Home Assistant sees him enter the office. The server guards it
    (`Store.claim_auto`), so a second auto call that day returns `skipped`. There are no
@@ -13,7 +13,7 @@ Each person's to-do app ↔ Brother QL-1110NWB label printer, running on Mike's 
 3. **Deleting a task always needs explicit confirmation**, including when read-back finds one.
 4. **Dry-run for development**: `--dry-run`, `NEXTBOX_DRY_RUN=1`, or `dry_run: true` in the API.
 5. **Server secrets live only in `.env`** (chmod 600). Each person's to-do app token or password is
-   encrypted with `secret.key` (data dir, 600) inside `users.json`. Neither is ever shown, logged
+   encrypted with `secret.key` (data dir, 600) in `users.connection`. Neither is ever shown, logged
    or put in a debug bundle. The data dir is 700.
 6. **LAN only**: no cloud relay and no remote access. The server binds to 0.0.0.0:8787.
 7. **Sign-in**: people sign in to the web app with local accounts that live only on the desktop.
@@ -72,8 +72,8 @@ says who's signed in. Home Assistant and scripts send `X-NextBox-Key`. Keys are 
 URLs.
 
 Security details:
-- Passwords are hashed with scrypt, and the session file only holds SHA-256 hashes of tokens.
-- `users.json` and `sessions.json` are chmod 600.
+- Passwords are hashed with scrypt, and the `sessions` table only holds SHA-256 hashes of tokens.
+- The SQLite database file is chmod 600.
 - After 5 failed logins from one IP in 5 minutes, that IP gets 429.
 - Changing or removing an account signs out all of its sessions.
 - A cookie-authenticated write whose `Origin` is a different site is refused with 403.
@@ -149,7 +149,7 @@ Settings form.
 - Only the Brother path is hardware-tested. The others are tested at the byte level, plus a real
   TCP send and a stand-in `lp`.
 
-**Printer list:** `printers.json`, managed by admins. Each printer has a name, driver, address,
+**Printer list:** the `printers` table, managed by admins. Each printer has a name, driver, address,
 width and dpi, plus the **label color loaded** and ink. Addresses must be one of:
 - host[:port]
 - `/dev/usb/lp*`, `/dev/lp*`, `ttyUSB`, `ttyACM` or `rfcomm`
@@ -175,7 +175,7 @@ guarded auto print.
     active, notice date, and a daily chart
   - `/super/users/{name}/tickets`: everyone's ticket images and scans
 - **Still never visible:** to-do app secrets. Feedback identity stays in
-  `feedback_identities.json` and is never part of usage.
+  `feedback_identities` and is never part of usage.
 - **Revision mark:** `/version` returns version, git build and `NEXTBOX_CREDIT`. It's shown at
   the bottom of every page.
 
@@ -200,12 +200,12 @@ against other activity). The author sees a "yours" badge and can withdraw their 
 
 Admin replies are scrubbed the same way.
 
-**`feedback_identities.json` (600) is the only place a person is linked to their feedback.** It
+**The `feedback_identities` table is the only place a person is linked to their feedback.** It
 holds the sender's username (or nothing before sign-in), exact time, IP address, device, and any
 error details they chose to attach.
 
 Nothing else records who sent what:
-- feedback is never written to `events.jsonl`, and older versions' feedback events are moved out
+- feedback is never written to `events`, and older versions' feedback events are moved out
   automatically
 - the server's request log is off
 - debug bundles leave feedback out
@@ -263,8 +263,8 @@ Admins only manage plain users, and can't change roles or debug mode.
 **Recovery from the desktop:** `nextbox user add|passwd|role|enable|disable|remove|list`. The
 first account ever created becomes the superadmin.
 
-Storage, all in the data dir: `users.json` (holds prefs), `sessions.json`, `events.jsonl`
-(the last 5,000 events), `server_settings.json`.
+Storage: the `users` (holds prefs), `sessions`, `events` (kept 180 days) and `server_settings`
+tables. See §16.
 
 ## 8. Photo read-back (Phase 2)
 1. `POST /scan` with a photo. Claude vision (`NEXTBOX_VISION_MODEL`, default `claude-sonnet-5-5`)
@@ -306,3 +306,19 @@ Storage, all in the data dir: `users.json` (holds prefs), `sessions.json`, `even
 ### Phase B: phone apps (Expo): not started
 - [ ] B1–B5. The Expo app from `ticket-app.zip` isn't in this repo yet. Its `src/api.ts` should call
       the endpoints above; the Read back screen maps onto `/scan` + `/scan/{id}/confirm`.
+
+## 16. Database
+Everything Next Box keeps is in one database (`nextbox/db.py`, SQLAlchemy Core):
+- **SQLite** by default: `<data dir>/nextbox.db` (`~/.local/share/nextbox/nextbox.db`), WAL mode,
+  chmod 600. Nothing to install.
+- **PostgreSQL** when `DATABASE_URL` is set (`pip install -e '.[postgres]'`). Same code, same tables.
+
+Tables: households, users, sessions, invites, tickets (record JSON + PNG), scans, auto_guard,
+events, server_settings, printers, feedback, feedback_identities. `nextbox db diagram` draws them.
+
+**Learning kit** (`nextbox/dbtools.py`, tutorial in `DATABASE.md`):
+- `nextbox db demo` builds a separate practice database (`<data dir>/practice/nextbox.db`) full
+  of fake households, people, tickets and events.
+- `nextbox db sql "..."` is read-only on the real database. Writes need `--practice --write`.
+- Output always hides password hashes, salts, session hashes and to-do app secrets.
+- `nextbox db backup` makes an online copy in `<data dir>/backups/` (600).

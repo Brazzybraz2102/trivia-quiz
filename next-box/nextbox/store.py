@@ -26,12 +26,12 @@ def normalize_id(label_id: str) -> str:
 
 
 class Store:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, url: str | None = None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / "png").mkdir(exist_ok=True)  # local cache of ticket images; the database is the record
         os.chmod(self.root, 0o700)  # tickets hold people's task names
-        self.db = db.database(self.root)
+        self.db = db.database(url or self.root)
 
     def new_id(self, day: date | None = None) -> str:
         """e.g. 260930-X5C8: printed date + 4 unambiguous characters (no 0/O, 1/I)."""

@@ -12,13 +12,13 @@ from pathlib import Path
 
 from . import jobs, printer, scan
 from .auth import Accounts, AuthError, default_prefs
+from .config import load_settings
 from .connections import Connections
+from .jobs import Context
 from .printers import Printers
 from .providers import READY
-from .vault import Vault
-from .config import load_settings
-from .jobs import Context
 from .store import Store
+from .vault import Vault
 
 
 def _notify(title: str, body: str) -> None:
@@ -103,6 +103,52 @@ def _connect(conns: Connections, username: str, provider: str) -> int:
     return 0
 
 
+def _db(data_dir, args) -> int:
+    from . import dbtools
+    practice = getattr(args, "practice", False)
+    try:
+        if args.db_cmd == "where":
+            loc = dbtools.describe_location(data_dir)
+            print(f"Real database:     {loc}")
+            print(f"Practice database: {dbtools.practice_dir(data_dir) / 'nextbox.db'}  (build it: nextbox db demo)")
+            if loc.endswith(".db"):
+                print("\nOpen it with:  sqlite3 -readonly '" + loc + "'   or the free app DB Browser for SQLite")
+            return 0
+        if practice and not (dbtools.practice_dir(data_dir) / "nextbox.db").exists():
+            print("No practice database yet. Build it with: nextbox db demo", file=sys.stderr)
+            return 1
+        if args.db_cmd == "tables":
+            for name, count, note in dbtools.tables(data_dir, practice):
+                print(f"{name:<20} {count:>6} rows   {note}")
+        elif args.db_cmd == "diagram":
+            print(dbtools.DIAGRAM)
+        elif args.db_cmd == "schema":
+            print(dbtools.schema(data_dir, args.table, practice))
+        elif args.db_cmd == "sql":
+            cols, rows, note = dbtools.run_sql(data_dir, args.query, practice=practice, write=args.write)
+            if cols:
+                print(dbtools.format_table(cols, rows))
+            print(f"\n({note})")
+        elif args.db_cmd == "demo":
+            counts = dbtools.build_practice(data_dir)
+            print("Practice database ready:", dbtools.practice_dir(data_dir) / "nextbox.db")
+            print("  " + ", ".join(f"{k} {v}" for k, v in counts.items() if v))
+            print('Try:  nextbox db sql --practice "SELECT username, role, household_id FROM users"')
+        elif args.db_cmd == "backup":
+            print("Saved", dbtools.backup(data_dir))
+        return 0
+    except PermissionError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # show SQL mistakes plainly; that's how you learn
+        msg = str(getattr(exc, "orig", exc))
+        if "readonly" in msg or "read-only" in msg:
+            msg = ("that query changes data, and this is read-only. To practice changes use the practice "
+                   "database: nextbox db sql --practice --write \"...\"")
+        print(f"error: {msg}", file=sys.stderr)
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="nextbox", description="Your to-do list on a Brother QL label printer")
     ap.add_argument("--dry-run", action="store_true", help="render the PNG only; never touch the printer")
@@ -137,6 +183,22 @@ def main(argv: list[str] | None = None) -> int:
     cn.add_argument("provider", choices=sorted(READY))
     dc = sub.add_parser("disconnect", help="forget someone's to-do app connection")
     dc.add_argument("username")
+    dbp = sub.add_parser("db", help="look inside the database and practice SQL (see DATABASE.md)")
+    dbs = dbp.add_subparsers(dest="db_cmd", required=True)
+    dbs.add_parser("where", help="where the database is and how to open it")
+    for name, helptext in (("tables", "every table, its row count and what it's for"),
+                           ("diagram", "how the tables connect")):
+        x = dbs.add_parser(name, help=helptext)
+        x.add_argument("--practice", action="store_true", help="the practice database instead of the real one")
+    sch = dbs.add_parser("schema", help="the columns of one table")
+    sch.add_argument("table")
+    sch.add_argument("--practice", action="store_true")
+    q = dbs.add_parser("sql", help="run a SQL query (read-only on the real database)")
+    q.add_argument("query")
+    q.add_argument("--practice", action="store_true", help="query the practice database")
+    q.add_argument("--write", action="store_true", help="allow INSERT/UPDATE/DELETE (practice database only)")
+    dbs.add_parser("demo", help="(re)build the practice database with realistic fake data")
+    dbs.add_parser("backup", help="save a copy of the real database in the data folder's backups/")
     pn = sub.add_parser("prune", help="delete tickets and scans older than N days")
     pn.add_argument("--days", type=int, default=None)
     us = sub.add_parser("user", help="manage web sign-in accounts")
@@ -157,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
                   prefs=(accounts.get(who) or {}).get("prefs") or default_prefs())
     dry = args.dry_run or None
 
+    if args.cmd == "db":
+        return _db(settings.data_dir, args)
     if args.cmd == "connect":
         return _connect(conns, args.username.lower(), args.provider)
     if args.cmd == "disconnect":

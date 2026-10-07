@@ -2,7 +2,8 @@
 
 Read SPEC.md first. Its §1 rules override everything:
 
-- Each person's own to-do app is the only source of truth. Don't add a task cache or database.
+- Each person's own to-do app is the only source of truth. Never copy tasks into the database (`nextbox/db.py`,
+  SPEC §16); it holds accounts, tickets, scans, printers, feedback and events only.
   New apps go in `nextbox/providers/` behind `TaskProvider`. Never let one person reach another's tasks or tickets.
 - Never send a real print unless Mike says "print it". Use `nextbox --dry-run ...` or `NEXTBOX_DRY_RUN=1`.
 - Never add an automatic print, cron or retry. The only automatic print is HA's `source="auto"`, guarded by `Store.claim_auto`.
@@ -14,12 +15,14 @@ Read SPEC.md first. Its §1 rules override everything:
 - Everyone accepted the data notice (server.py `DATA_NOTICE`): the superadmin may see their tickets, scans,
   settings and activity. If you make more visible, update the notice and bump `DATA_NOTICE_VERSION`.
 - Printers: every real send goes through `printer._send_raster`. Validate addresses in `printers.validate`.
-- Feedback is anonymous: `feedback_identities.json` is the ONLY place a person is linked to feedback.
-  Never log feedback to events, never put usernames in `feedback.json`, and audit reveals by feedback id only.
+- Feedback is anonymous: the `feedback_identities` table is the ONLY place a person is linked to feedback.
+  Never log feedback to events, never put usernames in `feedback`, and audit reveals by feedback id only.
+- `nextbox db sql` stays read-only on the real database and keeps masking hashes and secrets (`dbtools.py`).
 
 Dev loop:
 ```
 .venv/bin/python -m pytest -q
+DATABASE_URL=postgresql://... .venv/bin/python -m pytest -q   # same suite on PostgreSQL
 .venv/bin/nextbox --dry-run today      # PNG path printed; open it
 .venv/bin/nextbox status
 systemctl --user restart nextbox       # after code changes, if the service is installed

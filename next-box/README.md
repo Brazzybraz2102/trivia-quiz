@@ -101,7 +101,7 @@ If you're ever locked out of the web app, fix it from the desktop:
 2. Problems show up on the **Feedback tab** for everyone, without names. Set a status and reply
    publicly. If you need to know who sent a post (for example, to look at their errors), a
    superadmin taps **Who sent this?**. That's recorded in the audit log. The private details,
-   including any errors the person chose to attach, live only in `feedback_identities.json`.
+   including any errors the person chose to attach, live only in the `feedback_identities` table.
    **Activity** (Admin tab) shows what a person did.
 3. For anything odd, a superadmin turns on **Debug** for that person, asks them to repeat it, then:
    - looks at the **Debug tab → Event log** (filter by their name)
@@ -173,6 +173,22 @@ The small mark at the bottom of every page shows the version and build. Change i
 | Read back | Mark ✓ done, → tomorrow or ✗ drop, then web app → Read back → photo. Deletes and anything uncertain wait for Confirm/Skip. CLI: `nextbox scan photo.jpg`, then `nextbox confirm <scan-id>` |
 | History | web app → Printed, or `nextbox printed` |
 | Sign out | web app → Account → Sign out |
+
+## The database (and learning SQL)
+Everything Next Box keeps (accounts, printed tickets, scans, printers, feedback, activity) is in
+one SQLite file: `~/.local/share/nextbox/nextbox.db`. Your tasks are never copied there; they stay
+in each person's to-do app.
+
+```bash
+.venv/bin/nextbox db where        # where the database is
+.venv/bin/nextbox db tables       # what's in it
+.venv/bin/nextbox db demo         # build a practice database full of fake data
+.venv/bin/nextbox db sql --practice "SELECT username, role FROM users"
+.venv/bin/nextbox db backup       # safe copy, even while the service runs
+```
+
+`DATABASE.md` is a step-by-step SQL course on the practice database. Queries on the real database
+are read-only, and password hashes and to-do app secrets are always hidden.
 
 ## Troubleshooting
 - `printer_reachable: false`: check that the printer is on the same Wi-Fi and give it a DHCP reservation so its IP stays fixed.
