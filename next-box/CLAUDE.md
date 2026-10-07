@@ -11,6 +11,8 @@ Read SPEC.md first. Its §1 rules override everything:
 - LAN only. People sign in with local accounts (`nextbox/auth.py`). Don't add web sign-up or a cloud login.
 - Roles are enforced server-side in `server.py` (`require`, `can_manage`). Don't add "log in as user".
   Never put hashes, tokens or `.env` values in events, diagnostics or debug bundles. Log admin actions with `audit()`.
+- Feedback is anonymous: `feedback_identities.json` is the ONLY place a person is linked to feedback.
+  Never log feedback to events, never put usernames in `feedback.json`, and audit reveals by feedback id only.
 
 Dev loop:
 ```

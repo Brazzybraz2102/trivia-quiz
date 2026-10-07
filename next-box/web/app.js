@@ -54,7 +54,6 @@ async function boot() {
   }
   $("#roleBadge").hidden = me.role === "user";
   $("#betaBadge").hidden = !me.beta;
-  $("#fb").hidden = !me.beta;
   $("#announce").hidden = !me.announcement;
   $("#announce").textContent = me.announcement || "";
   $("#paused").hidden = !me.printing_paused;
@@ -144,7 +143,7 @@ $("#mustForm").onsubmit = async (e) => {
 $("#logout").onclick = async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); showLogin("Signed out."); };
 
 // ---------------------------------------------------------------- tabs
-const loaders = { printed: loadHistory, settings: loadSessions, admin: loadAdmin, debug: loadDebug };
+const loaders = { printed: loadHistory, settings: loadSessions, admin: loadAdmin, debug: loadDebug, board: () => loadBoard() };
 $$("nav button").forEach((b) => b.onclick = () => {
   $$("nav button").forEach((x) => x.classList.toggle("on", x === b));
   $$("section").forEach((s) => s.classList.toggle("on", s.id === b.dataset.tab));
@@ -286,17 +285,110 @@ $("#signoutOthers").onclick = async () => {
   loadSessions();
 };
 
-async function sendFeedback(text) {
-  if (!text.trim()) return toast("Write something first");
-  await api("/feedback", { method: "POST", json: { message: text, include_debug: $("#fbDebug").checked,
-    page: document.querySelector("nav button.on")?.dataset.tab || "" } });
-  toast("Thanks! Sent to the admins.");
+// ---------------------------------------------------------------- feedback (anonymous)
+let fbMode = "guided";
+const currentPage = () => (me ? document.querySelector("nav button.on")?.dataset.tab : "login") || "";
+
+function pick(group, el) { $$(`${group} button`).forEach((b) => b.classList.toggle("on", b === el)); }
+$$("#fbType button").forEach((b) => b.onclick = () => pick("#fbType", b));
+$$("#fbRating button").forEach((b) => b.onclick = () => b.classList.contains("on") ? b.classList.remove("on") : pick("#fbRating", b));
+$$(".seg button").forEach((b) => b.onclick = () => {
+  fbMode = b.dataset.mode; pick(".seg", b);
+  $("#fbGuided").hidden = fbMode !== "guided"; $("#fbOpen").hidden = fbMode !== "open";
+});
+
+function openFeedback() {
+  $("#fbErr").textContent = ""; $("#fbDone").hidden = true; $("#fbSend").hidden = false;
+  $("#fbForm").querySelectorAll("textarea").forEach((t) => t.value = "");
+  $$("#fbRating button").forEach((b) => b.classList.remove("on"));
+  $("#fbDebugRow").hidden = !me;  // error details exist only for signed-in people
+  $("#fbDebug").checked = false;
+  $("#fbDialog").showModal();
 }
-$("#fbSend").onclick = async () => { try { await sendFeedback($("#fbText").value); $("#fbText").value = ""; } catch (e) { toast(e.message); } };
-$("#fb").onclick = async () => {
-  const text = prompt("What happened? (Your recent errors are attached.)");
-  if (text) try { await sendFeedback(text); } catch (e) { toast(e.message); }
+document.addEventListener("click", (e) => { if (e.target.closest("[data-feedback]")) { e.preventDefault(); openFeedback(); } });
+document.addEventListener("click", (e) => { const g = e.target.closest("[data-goto]"); if (g) $(`nav button[data-tab=${g.dataset.goto}]`).click(); });
+$("#fbClose").onclick = () => $("#fbDialog").close();
+
+$("#fbSend").onclick = async () => {
+  const body = { mode: fbMode, page: currentPage(), include_debug: $("#fbDebug").checked };
+  if (fbMode === "guided") {
+    Object.assign(body, { type: $("#fbType button.on")?.dataset.v || "other",
+      rating: $("#fbRating button.on") ? Number($("#fbRating button.on").dataset.v) : null,
+      trying: $("#fbTrying").value, happened: $("#fbHappened").value, expected: $("#fbExpected").value });
+  } else {
+    Object.assign(body, { type: "other", message: $("#fbMessage").value });
+  }
+  $("#fbSend").disabled = true; $("#fbErr").textContent = "";
+  try {
+    const item = await api("/feedback", { method: "POST", json: body });
+    $("#fbDone").innerHTML = `<p class="ok"><b>Posted anonymously. Thank you!</b> Here's exactly what everyone will see:</p>${feedbackCard(item, false)}`;
+    $("#fbDone").hidden = false; $("#fbSend").hidden = true;
+    if (document.querySelector("nav button.on")?.dataset.tab === "board") loadBoard();
+  } catch (e) { $("#fbErr").textContent = e.message; }
+  finally { $("#fbSend").disabled = false; }
 };
+
+const KIND = { bug: "Something broke", confusing: "Confusing", idea: "Idea", praise: "Love it", other: "Other" };
+const STATUS = { new: "new", seen: "seen", planned: "planned", fixed: "fixed", wontfix: "won't fix", hidden: "hidden" };
+
+function feedbackCard(f, controls = true) {
+  const admin = controls && me && RANK[me.role] >= RANK.admin;
+  const q = (label, v) => v ? `<div class="q">${label}</div><div>${esc(v)}</div>` : "";
+  return `<div class="card fbitem" data-fid="${esc(f.id)}">
+    <div class="top" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      <span class="badge ${f.type === "bug" ? "bad" : ""}">${esc(KIND[f.type] || f.type)}</span>
+      <span class="badge ${f.status === "fixed" ? "hot" : ""}">${esc(STATUS[f.status] || f.status)}</span>
+      ${f.rating ? `<span class="muted">rated ${f.rating}/5</span>` : ""}
+      ${f.mine ? `<span class="badge">yours</span>` : ""}
+      <span class="muted" style="margin-left:auto">${esc(f.date)}${f.page ? " · " + esc(f.page) : ""}</span></div>
+    ${f.mode === "guided" ? q("Trying to", f.trying) + q("What happened", f.happened) + q("Expected", f.expected)
+                          : `<div style="margin-top:6px">${esc(f.message)}</div>`}
+    ${f.reply ? `<div class="reply"><b>Reply</b> <span class="muted">${esc(f.reply_date || "")}</span><div>${esc(f.reply)}</div></div>` : ""}
+    ${controls ? `<div class="row">
+      ${f.mine || admin ? `<button class="plain small" data-fb="withdraw">${f.mine ? "Withdraw" : "Remove"}</button>` : ""}
+      ${admin ? `<select class="small" data-fb="status" aria-label="Status">${Object.keys(STATUS).map((k) => `<option value="${k}" ${k === f.status ? "selected" : ""}>${STATUS[k]}</option>`).join("")}</select>
+        <button class="plain small" data-fb="reply">Reply</button>` : ""}
+      ${me && me.role === "superadmin" ? `<button class="plain small" data-fb="reveal">Who sent this?</button>` : ""}
+    </div><div class="revealed muted"></div>` : ""}
+  </div>`;
+}
+
+async function loadBoard() {
+  const q = new URLSearchParams();
+  if ($("#bType").value) q.set("type", $("#bType").value);
+  if ($("#bStatus").value) q.set("status", $("#bStatus").value);
+  try {
+    const items = await api(`/feedback?${q}`);
+    $("#boardList").innerHTML = items.map((f) => feedbackCard(f)).join("") || `<p class="muted">No feedback yet. Be the first.</p>`;
+  } catch (e) { $("#boardList").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+$("#bType").onchange = loadBoard; $("#bStatus").onchange = loadBoard;
+
+$("#boardList").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-fb]"); if (!b) return;
+  const card = b.closest("[data-fid]"), fid = card.dataset.fid;
+  try {
+    if (b.dataset.fb === "withdraw") {
+      if (!confirm("Remove this feedback for everyone?")) return;
+      await api(`/feedback/${fid}`, { method: "DELETE" }); toast("Removed"); loadBoard();
+    } else if (b.dataset.fb === "reply") {
+      const text = prompt("Public reply (names and contact details are removed):");
+      if (text === null) return;
+      await api(`/admin/feedback/${fid}`, { method: "PATCH", json: { reply: text } }); loadBoard();
+    } else if (b.dataset.fb === "reveal") {
+      if (!confirm("Look up who sent this? It's recorded in the audit log (by feedback number only).")) return;
+      const who = await api(`/super/feedback/${fid}/identity`);
+      card.querySelector(".revealed").textContent =
+        `Sent by ${who.user || "someone not signed in"} · ${new Date(who.ts * 1000).toLocaleString()} · ${who.ip || "?"} · ${who.agent || "?"}` +
+        (who.debug?.recent_errors?.length ? ` · recent errors: ${who.debug.recent_errors.map((x) => x.action + ": " + x.error).join("; ")}` : "");
+    }
+  } catch (err) { toast(err.message); }
+});
+$("#boardList").addEventListener("change", async (e) => {
+  const sel = e.target.closest("select[data-fb=status]"); if (!sel) return;
+  try { await api(`/admin/feedback/${sel.closest("[data-fid]").dataset.fid}`, { method: "PATCH", json: { status: sel.value } }); toast("Saved"); loadBoard(); }
+  catch (err) { toast(err.message); }
+});
 
 // ---------------------------------------------------------------- admin
 function canManage(u) {
@@ -328,7 +420,6 @@ async function loadAdmin() {
     }).join("");
     $$("#users [data-a]").forEach((el) => (el.tagName === "SELECT" ? el.onchange = () => userAction(el, el.value) : el.onclick = () => userAction(el)));
   } catch (e) { $("#users").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
-  loadFeedback();
 }
 
 async function userAction(el, value) {
@@ -392,16 +483,6 @@ async function loadActivity(u) {
   $("#activityCard").scrollIntoView({ behavior: "smooth" });
 }
 
-async function loadFeedback() {
-  try {
-    const items = await api("/admin/feedback?limit=50");
-    $("#feedback").innerHTML = items.map((f) => `<div class="user"><div class="top"><b>${esc(f.user)}</b>
-      <span class="muted">${when(f.ts)}${f.detail.page ? " · on " + esc(f.detail.page) : ""}</span></div>
-      <div>${esc(f.detail.message)}</div>
-      ${(f.detail.recent_errors || []).length ? `<div class="muted">recent errors: ${f.detail.recent_errors.map((x) => esc(x.action + ": " + x.error)).join("; ")}</div>` : ""}</div>`).join("")
-      || `<p class="muted">No feedback yet.</p>`;
-  } catch (e) { $("#feedback").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
-}
 
 // ---------------------------------------------------------------- debug (superadmin)
 async function loadDebug() {

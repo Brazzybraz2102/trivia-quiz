@@ -131,6 +131,48 @@ Settings form.
 - **Dependencies:** pinned in `constraints.txt`. The installer also upgrades pip and setuptools.
 - **systemd:** `Restart=always`, `UMask=0077`, `ProtectSystem=strict` with write access only to the data dir.
 
+## 13. Feedback: public, anonymous, one identity file
+**Where people can give feedback:** a Feedback button on every screen for everyone, plus a link on
+the sign-in page. There are two modes:
+- **Guided:** what kind (something broke / confusing / idea / love it / other), an optional 1–5
+  rating, then "what were you trying to do", "what happened" and "what did you expect".
+- **Just tell us:** one open box.
+
+The page it came from is recorded automatically. Rate limit: 10 posts an hour per person, or per
+IP address before sign-in.
+
+**The board (Feedback tab):** everyone who's signed in sees all feedback without names. Each post
+shows its kind, status, rating, the page and the **day** only (exact times could be matched
+against other activity). The author sees a "yours" badge and can withdraw their own posts.
+
+**What's removed before saving:**
+- emails, links, IP addresses and phone numbers
+- @handles and long tokens
+- every account's username, plus the sender's own
+
+Admin replies are scrubbed the same way.
+
+**`feedback_identities.json` (600) is the only place a person is linked to their feedback.** It
+holds the sender's username (or nothing before sign-in), exact time, IP address, device, and any
+error details they chose to attach.
+
+Nothing else records who sent what:
+- feedback is never written to `events.jsonl`, and older versions' feedback events are moved out
+  automatically
+- the server's request log is off
+- debug bundles leave feedback out
+- deleting an account removes its identity entries; its posts stay, unlinked
+
+**Who can do what:**
+- **Admins:** set a status (new / seen / planned / fixed / won't fix / hidden), reply publicly,
+  or remove a post. Hidden posts are seen only by admins and the author. Admins never see who
+  wrote anything.
+- **Superadmins:** can look up who sent a specific post ("Who sent this?"). Each lookup is
+  written to the audit log by feedback ID only, so the audit log never names the sender.
+
+**Limit:** scrubbing can't catch everything, such as a stranger's name or a street address. The
+form asks people to leave personal details out, and admins can hide any post that slips through.
+
 ## 10. Roles, settings, support and debugging
 **Everyone** (Settings tab):
 - **Account:** change password (signs out other devices), list signed-in devices, sign out
@@ -139,8 +181,7 @@ Settings form.
   times; default list filter.
 - **Read-back:** apply confident marks automatically, on or off; confidence needed (50–95%).
   Drops always wait for confirmation, whatever these say.
-- **Theme:** per device. **Feedback:** a form, plus a floating button for beta testers; recent
-  errors are attached if allowed.
+- **Theme:** per device. **Feedback:** see §13.
 
 **Admin** (support):
 - add people with a one-time temporary password (the person must choose their own at first sign-in)
@@ -149,7 +190,7 @@ Settings form.
 - sign people out
 - mark beta testers
 - read a person's activity, without tracebacks
-- read the feedback inbox
+- respond to feedback publicly, set its status, hide posts that slipped personal details through (§13)
 
 Admins only manage plain users, and can't change roles or debug mode.
 
@@ -158,7 +199,7 @@ Admins only manage plain users, and can't change roles or debug mode.
 - per-user **debug mode**: that person's events also record request arguments and results
 - delete people
 - **diagnostics**: printer, Todoist and Claude key checks, counts, storage, version, redacted config
-- the full **event log**: activity, errors with tracebacks, audit, auth and feedback
+- the full **event log**: activity, errors with tracebacks, audit and auth (never feedback, §13)
 - a one-click **debug bundle** per person: profile, sessions, events, their tickets and scans with the raw read-back
 - **server switches**: pause all printing (every print becomes a preview), Home Assistant auto
   print on or off, and an announcement banner
@@ -192,12 +233,13 @@ Storage, all in the data dir: `users.json` (holds prefs), `sessions.json`, `even
 
 ## 9. Phase checklist
 ### Phase A: desktop
-- [x] A1 service, venv, pytest green (74 tests)
+- [x] A1 service, venv, pytest green (80 tests)
 - [x] Web sign-in: local accounts, 30-day sessions, bearer tokens for native apps
 - [ ] Sign-in: `nextbox user add mike` on the desktop (NEEDS MIKE)
 - [x] Settings, admin (support) and superadmin (debug) tools, §10 (19 tests)
 - [x] Per-person to-do app connections: Todoist and CalDAV, encrypted secrets, per-person tickets (§11)
 - [x] Audit fixes (§12)
+- [x] Anonymous feedback on every page, guided and open, public board, single identity file (§13)
 - [ ] Google Tasks / Microsoft To Do / TickTick (NEEDS MIKE: register Next Box once with each)
 - [ ] HTTPS on the LAN via Tailscale; nightly data-dir backup
 - [ ] A1 `.env` filled on the desktop (NEEDS MIKE)

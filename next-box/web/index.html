@@ -64,6 +64,16 @@
   .field { margin-top:8px; }
   .field label { display:block; font-size:14px; font-weight:600; }
   .field .muted { font-size:12px; }
+  dialog { border:1px solid var(--line); border-radius:14px; padding:18px; max-width:520px; width:calc(100% - 32px); background:var(--card); color:var(--fg); }
+  dialog::backdrop { background:rgba(0,0,0,.4); }
+  dialog h2 { margin:0 0 6px; font-size:18px; }
+  .seg { display:flex; gap:4px; margin:10px 0; }
+  .seg button, .chips button { border:1px solid var(--line); background:none; color:var(--fg); border-radius:99px; padding:6px 12px; font:inherit; font-size:14px; cursor:pointer; }
+  .seg button.on, .chips button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; margin-top:4px; }
+  .linkish { background:none; border:0; color:var(--accent); font:inherit; cursor:pointer; padding:0; text-decoration:underline; }
+  .fbitem .q { color:var(--muted); font-size:13px; margin-top:6px; }
+  .fbitem .reply { border-left:3px solid var(--accent); padding-left:10px; margin-top:8px; }
   .center { max-width:400px; margin:12vh auto 0; padding:0 16px; }
   .center label { display:block; margin-top:10px; font-size:14px; }
   .center input { margin-top:4px; }
@@ -79,6 +89,7 @@
     <label>Password<input type="password" id="pass" name="password" autocomplete="current-password" required></label>
     <div class="row"><button class="go" type="submit">Sign in</button></div>
   </form>
+  <p class="muted" style="text-align:center"><button class="linkish" data-feedback>Having trouble? Send feedback</button></p>
 </div>
 
 <div id="mustChange" class="center" hidden>
@@ -100,6 +111,7 @@
   <button data-tab="print" class="on">Print</button>
   <button data-tab="scan">Read back</button>
   <button data-tab="printed">Printed</button>
+  <button data-tab="board">Feedback</button>
   <button data-tab="settings">Settings</button>
   <button data-tab="admin" data-min="admin" hidden>Admin</button>
   <button data-tab="debug" data-min="superadmin" hidden>Debug</button>
@@ -137,6 +149,18 @@
   </section>
 
   <section id="printed"><div id="hist" class="hist"></div></section>
+
+  <section id="board">
+    <div class="card"><h2>What people are saying</h2>
+      <p class="muted">Everyone's feedback, without names. Identifying details are removed before anything is posted.</p>
+      <div class="row">
+        <select id="bType" aria-label="Kind"><option value="">all kinds</option><option value="bug">bugs</option><option value="confusing">confusing</option><option value="idea">ideas</option><option value="praise">praise</option><option value="other">other</option></select>
+        <select id="bStatus" aria-label="Status"><option value="">any status</option><option value="new">new</option><option value="seen">seen</option><option value="planned">planned</option><option value="fixed">fixed</option><option value="wontfix">won't fix</option></select>
+        <button class="go" data-feedback>Add feedback</button>
+      </div>
+    </div>
+    <div id="boardList"></div>
+  </section>
 
   <section id="settings">
     <div class="card" id="appCard"><h2>Your to-do app</h2>
@@ -182,10 +206,8 @@
     </div>
 
     <div class="card"><h2>Help</h2>
-      <p class="muted">Something wrong or confusing? This goes straight to the admins, with your recent errors attached if you allow it.</p>
-      <textarea id="fbText" placeholder="What happened? What did you expect?"></textarea>
-      <div class="row"><label class="muted"><input type="checkbox" id="fbDebug" checked> Include recent error details</label></div>
-      <div class="row"><button class="go" id="fbSend">Send feedback</button></div>
+      <p class="muted">Something wrong, confusing or great? Feedback is shared with everyone, never with your name.</p>
+      <div class="row"><button class="go" data-feedback>Send feedback</button></div>
     </div>
   </section>
 
@@ -202,7 +224,7 @@
     </div>
     <div class="card" id="activityCard" hidden><h2>Activity: <span id="actUser"></span></h2>
       <div id="activity"></div></div>
-    <div class="card"><h2>Feedback inbox</h2><div id="feedback">…</div></div>
+    <div class="card"><h2>Feedback</h2><p class="muted">Respond, set a status or hide posts on the <button class="linkish" data-goto="board">Feedback tab</button>. Names are never shown.</p></div>
   </section>
 
   <section id="debug">
@@ -218,15 +240,45 @@
     </div>
     <div class="card"><h2>Event log</h2>
       <div class="row"><input type="text" id="evUser" placeholder="user" style="max-width:160px" autocapitalize="none">
-        <select id="evKind"><option value="">all kinds</option><option>activity</option><option>error</option><option>audit</option><option>auth</option><option>feedback</option></select>
+        <select id="evKind"><option value="">all kinds</option><option>activity</option><option>error</option><option>audit</option><option>auth</option></select>
         <label class="muted"><input type="checkbox" id="evErr"> failures only</label>
         <button class="plain" id="evGo">Load</button></div>
       <div id="events"></div>
     </div>
   </section>
 </main>
-<button class="go" id="fb" hidden>Feedback</button>
+<button class="go" id="fb" data-feedback>Feedback</button>
 </div>
+
+<dialog id="fbDialog" aria-labelledby="fbTitle">
+  <form method="dialog" id="fbForm">
+    <h2 id="fbTitle">Send feedback</h2>
+    <p class="muted">Posted for everyone to see, <b>without your name</b>. Emails, phone numbers, links and names are removed. Please leave out other personal details.</p>
+    <div class="seg" role="tablist">
+      <button type="button" class="on" data-mode="guided" role="tab">Guided</button>
+      <button type="button" data-mode="open" role="tab">Just tell us</button>
+    </div>
+    <div id="fbGuided">
+      <div class="field"><label>What kind?</label>
+        <div class="chips" id="fbType">
+          <button type="button" data-v="bug" class="on">Something broke</button><button type="button" data-v="confusing">Confusing</button>
+          <button type="button" data-v="idea">Idea</button><button type="button" data-v="praise">Love it</button><button type="button" data-v="other">Other</button>
+        </div></div>
+      <div class="field"><label>How's Next Box working for you? (optional)</label>
+        <div class="chips" id="fbRating"><button type="button" data-v="1">1</button><button type="button" data-v="2">2</button><button type="button" data-v="3">3</button><button type="button" data-v="4">4</button><button type="button" data-v="5">5</button></div></div>
+      <div class="field"><label for="fbTrying">What were you trying to do?</label><textarea id="fbTrying" rows="2"></textarea></div>
+      <div class="field"><label for="fbHappened">What happened?</label><textarea id="fbHappened" rows="2"></textarea></div>
+      <div class="field"><label for="fbExpected">What did you expect?</label><textarea id="fbExpected" rows="2"></textarea></div>
+    </div>
+    <div id="fbOpen" hidden>
+      <div class="field"><label for="fbMessage">Tell us anything</label><textarea id="fbMessage" rows="5"></textarea></div>
+    </div>
+    <label class="muted" id="fbDebugRow"><input type="checkbox" id="fbDebug"> Attach my recent errors. This stays private and is only used to fix the problem.</label>
+    <p class="err" id="fbErr"></p>
+    <div id="fbDone" hidden></div>
+    <div class="row"><button class="go" type="button" id="fbSend">Post anonymously</button><button class="plain" type="button" id="fbClose">Close</button></div>
+  </form>
+</dialog>
 <div id="toast"></div>
 <script src="app.js"></script>
 </body>

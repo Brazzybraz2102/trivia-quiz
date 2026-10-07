@@ -177,7 +177,8 @@ def main(argv: list[str] | None = None) -> int:
 
             from .server import build_default_app
 
-            uvicorn.run(build_default_app(), host=settings.host, port=settings.port)
+            # No access log: request lines (IP + time) would let someone match people to feedback.
+            uvicorn.run(build_default_app(), host=settings.host, port=settings.port, access_log=False)
             return 0
         if args.cmd == "printed":
             for r in ctx.store.list_printed(args.n, by=who):

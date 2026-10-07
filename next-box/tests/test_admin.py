@@ -107,15 +107,6 @@ def test_signout_others(ctx):
     assert a.get("/auth/me").status_code == 200 and b.get("/auth/me").status_code == 401
 
 
-def test_feedback_reaches_admins(ctx):
-    setup(ctx)
-    c = login(ctx, "tester", "tester pass")
-    assert c.post("/feedback", json={"message": "scan missed my checkmark"}).json()["ok"]
-    assert login(ctx, "tester", "tester pass").get("/admin/feedback").status_code == 403
-    inbox = login(ctx, "helper", "helper pass").get("/admin/feedback").json()
-    assert inbox[0]["detail"]["message"] == "scan missed my checkmark"
-
-
 # --- admin (support) --------------------------------------------------------
 def test_users_and_service_key_cant_use_admin(ctx):
     setup(ctx)

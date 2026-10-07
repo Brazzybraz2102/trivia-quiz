@@ -27,7 +27,8 @@ class Events:
 
     def log(self, user: str, action: str, *, ok: bool = True, kind: str = "activity",
             detail: dict | None = None, error: str = "", trace: str = "") -> dict:
-        """kind: activity | audit (admin actions) | error | feedback | auth"""
+        """kind: activity | audit (admin actions) | error | auth. Feedback never goes here:
+        see feedback.py, which keeps who-said-what in a single file."""
         ev = {"ts": round(time.time(), 3), "user": user, "kind": kind, "action": action, "ok": ok}
         if detail:
             ev["detail"] = detail
@@ -49,6 +50,25 @@ class Events:
             tmp = self.path.with_suffix(".tmp")
             tmp.write_text("\n".join(lines[-MAX_EVENTS:]) + "\n")
             os.replace(tmp, self.path)
+
+    def take(self, kind: str) -> list[dict]:
+        """Remove and return every event of one kind (used to move old feedback out of the log)."""
+        if not self.path.exists():
+            return []
+        with self._lock:
+            kept, taken = [], []
+            for line in self.path.read_text().splitlines():
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    kept.append(line)
+                    continue
+                (taken if ev.get("kind") == kind else kept).append(ev if ev.get("kind") == kind else line)
+            if taken:
+                tmp = self.path.with_suffix(".tmp")
+                tmp.write_text("".join(f"{x}\n" for x in kept))
+                os.replace(tmp, self.path)
+            return taken
 
     def query(self, *, user: str | None = None, kind: str | None = None, ok: bool | None = None,
               limit: int = 200) -> list[dict]:

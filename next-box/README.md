@@ -69,8 +69,8 @@ first sign in. There's no public sign-up page.
 
 | Role | Can do |
 |---|---|
-| user | print, read back, their own Settings, send feedback |
-| admin | support: add people, reset passwords, turn accounts off/on, sign people out, mark beta testers, see activity and feedback |
+| user | print, read back, their own Settings, send and read anonymous feedback |
+| admin | support: add people, reset passwords, turn accounts off/on, sign people out, mark beta testers, see activity, reply to feedback (never sees who wrote it) |
 | superadmin | debug: everything above, plus roles, per-user debug mode, diagnostics, the error log, debug bundles, pause all printing, auto-print switch, banner |
 
 If you're ever locked out of the web app, fix it from the desktop:
@@ -84,9 +84,13 @@ If you're ever locked out of the web app, fix it from the desktop:
 | See accounts | `nextbox user list` |
 
 ### Helping a beta tester
-1. Admin tab: mark them **beta**. They get a Feedback button on every screen.
-2. When they report a problem, read it in the **Feedback inbox** along with their recent errors.
-   **Activity** shows what they did.
+1. Admin tab: mark them **beta**. Everyone has a **Feedback** button on every screen, guided
+   or open-ended.
+2. Problems show up on the **Feedback tab** for everyone, without names. Set a status and reply
+   publicly. If you need to know who sent a post (for example, to look at their errors), a
+   superadmin taps **Who sent this?**. That's recorded in the audit log. The private details,
+   including any errors the person chose to attach, live only in `feedback_identities.json`.
+   **Activity** (Admin tab) shows what a person did.
 3. For anything odd, a superadmin turns on **Debug** for that person, asks them to repeat it, then:
    - looks at the **Debug tab → Event log** (filter by their name)
    - or downloads their **Debug bundle** and hands it to Claude

@@ -17,6 +17,7 @@ import shutil
 import sys
 import time
 import traceback
+from datetime import date
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -31,6 +32,7 @@ from .auth import ROLES, Accounts, AuthError, default_prefs, rank
 from .config import PROJECT_DIR
 from .connections import Builder, Connections, NotConnected
 from .events import Events, ServerSettings
+from .feedback import Feedback, FeedbackError
 from .jobs import Context
 from .providers import PROVIDERS, ProviderError
 from .store import normalize_id
@@ -54,9 +56,20 @@ class PasswordBody(BaseModel):
 
 
 class FeedbackBody(BaseModel):
-    message: str
-    include_debug: bool = True
+    mode: str = "open"          # "guided" or "open"
+    type: str = "other"
     page: str = ""
+    rating: int | None = None
+    trying: str = ""
+    happened: str = ""
+    expected: str = ""
+    message: str = ""
+    include_debug: bool = False  # recent errors, kept privately with the sender's identity
+
+
+class FeedbackResponse(BaseModel):
+    status: str | None = None
+    reply: str | None = None
 
 
 class TodayBody(BaseModel):
@@ -138,6 +151,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     events = Events(data_dir)
     server_settings = ServerSettings(data_dir)
     vault = Vault(data_dir)
+    feedback_store = Feedback(data_dir)
+    _migrate_feedback(events, feedback_store, accounts)
     connections = Connections(ctx.settings, accounts, vault, **({"builder": builder} if builder else {}))
 
     # ------------------------------------------------------------------ auth
@@ -328,17 +343,52 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         events.log(caller.name, "settings", detail={"changed": changes})
         return prefs
 
+    # ------------------------------------------------------------- feedback (anonymous)
+    def optional_person(request: Request) -> Caller | None:
+        """Feedback works on every page, including before sign-in."""
+        name = accounts.session_user(_token(request))
+        user = accounts.get(name) if name else None
+        return Caller(name, role=user["role"]) if user else None
+
     @app.post("/feedback")
-    def feedback(body: FeedbackBody, request: Request, caller: Caller = Depends(person)):
-        msg = body.message.strip()
-        if not msg:
-            raise HTTPException(400, "message is empty")
-        detail = {"message": msg[:2000], "page": body.page[:100],
-                  "agent": request.headers.get("user-agent", "")[:200]}
-        if body.include_debug:
-            detail["recent_errors"] = [{k: e.get(k) for k in ("ts", "action", "error")}
-                                       for e in events.query(user=caller.name, kind="error", limit=5)]
-        events.log(caller.name, "feedback", kind="feedback", detail=detail)
+    def send_feedback(body: FeedbackBody, request: Request):
+        caller = optional_person(request)
+        origin = request.headers.get("origin")
+        if origin and urlparse(origin).netloc != request.headers.get("host"):
+            raise HTTPException(403, "cross-site request refused")
+        debug = None
+        if body.include_debug and caller:
+            debug = {"recent_errors": [{k: e.get(k) for k in ("ts", "action", "error")}
+                                       for e in events.query(user=caller.name, kind="error", limit=5)]}
+        try:
+            item = feedback_store.submit(
+                mode=body.mode, kind=body.type, page=body.page, rating=body.rating,
+                fields={"trying": body.trying, "happened": body.happened, "expected": body.expected},
+                message=body.message, who=caller.name if caller else None,
+                ip=request.client.host if request.client else "", agent=request.headers.get("user-agent", ""),
+                names=accounts.list_users(), debug=debug)
+        except FeedbackError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        # Deliberately not written to the events log: that would link the person to the post.
+        return {**item, "mine": True}
+
+    @app.get("/feedback")
+    def feedback_board(type: str | None = None, status: str | None = None,
+                       caller: Caller = Depends(person)):
+        return feedback_store.board(caller.name, include_hidden=rank(caller.role) >= rank("admin"),
+                                    kind=type or None, status=status or None)
+
+    @app.delete("/feedback/{fid}")
+    def withdraw_feedback(fid: str, caller: Caller = Depends(person)):
+        is_admin = rank(caller.role) >= rank("admin")
+        if not (feedback_store.is_author(fid, caller.name) or is_admin):
+            raise HTTPException(403, "you can only withdraw your own feedback")
+        try:
+            feedback_store.withdraw(fid)
+        except KeyError:
+            raise HTTPException(404) from None
+        if is_admin and not feedback_store.is_author(fid, caller.name):
+            audit(caller, "remove_feedback", feedback=fid)
         return {"ok": True}
 
     @app.get("/status")
@@ -544,6 +594,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             accounts.remove_user(target["username"])
         except AuthError as exc:
             raise HTTPException(400, str(exc))
+        feedback_store.forget_user(target["username"])  # their posts stay, unlinked
         audit(caller, "delete_user", target=target["username"])
         return {"ok": True}
 
@@ -558,8 +609,20 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return evs
 
     @app.get("/admin/feedback")
-    def admin_feedback(limit: int = 100, caller: Caller = Depends(admin_only)):
-        return events.query(kind="feedback", limit=min(limit, 500))
+    def admin_feedback(caller: Caller = Depends(admin_only)):
+        return feedback_store.board(caller.name, include_hidden=True)
+
+    @app.patch("/admin/feedback/{fid}")
+    def respond_feedback(fid: str, body: FeedbackResponse, caller: Caller = Depends(admin_only)):
+        try:
+            item = feedback_store.respond(fid, status=body.status, reply=body.reply,
+                                          names=accounts.list_users())
+        except KeyError:
+            raise HTTPException(404) from None
+        except FeedbackError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        audit(caller, "respond_feedback", feedback=fid, status=body.status, replied=body.reply is not None)
+        return item
 
     # ----------------------------------------------------------- superadmin (debug)
     @app.get("/super/diagnostics")
@@ -600,6 +663,17 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             "auto_print_last": auto,
             "server_settings": server_settings.get(),
         }
+
+    @app.get("/super/feedback/{fid}/identity")
+    def reveal_feedback(fid: str, caller: Caller = Depends(super_only)):
+        """Who sent it, from the one file that knows. Audited by feedback id only, so the audit
+        log itself never names the sender."""
+        try:
+            ident = feedback_store.identity(fid)
+        except KeyError:
+            raise HTTPException(404) from None
+        audit(caller, "reveal_feedback_sender", feedback=fid)
+        return ident
 
     @app.get("/super/events")
     def super_events(user: str | None = None, kind: str | None = None, errors_only: bool = False,
@@ -648,6 +722,22 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             return RedirectResponse("/app/")
 
     return app
+
+
+def _migrate_feedback(events: Events, store: Feedback, accounts: Accounts) -> None:
+    """Older versions logged feedback (with names) in events.jsonl. Move it to the anonymous
+    board and the identity file, and remove it from the log."""
+    for ev in events.take("feedback"):
+        d = ev.get("detail") or {}
+        try:
+            store.submit(mode="open", kind="other", page=d.get("page", ""), rating=None, fields={},
+                         message=d.get("message", ""), who=ev.get("user"), ip="", agent=d.get("agent", ""),
+                         names=accounts.list_users(),
+                         debug={"recent_errors": d["recent_errors"]} if d.get("recent_errors") else None,
+                         today=date.fromtimestamp(ev.get("ts", time.time())), ts=ev.get("ts"),
+                         enforce_limit=False)
+        except FeedbackError:
+            continue
 
 
 def _safe_args(args: tuple, kwargs: dict) -> dict:
