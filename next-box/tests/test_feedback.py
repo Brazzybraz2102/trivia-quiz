@@ -99,7 +99,9 @@ def test_withdraw_respond_hide_and_reveal(ctx):
     assert jo.delete(f"/feedback/{fid}").status_code == 403
     r = helper.patch(f"/admin/feedback/{fid}", json={"status": "planned", "reply": "Thanks sam, fixing it"})
     assert r.json()["status"] == "planned" and "sam" not in r.json()["reply"]
-    assert jo.get("/feedback").json()[0]["reply"].startswith("Thanks [someone]")
+    replied = {i["id"]: i for i in jo.get("/feedback").json()}[fid]
+    assert replied["reply"].startswith("Thanks [someone]")
+    assert [i["id"] for i in jo.get("/feedback").json()] == [other, fid]  # newest first, stable
     helper.patch(f"/admin/feedback/{other}", json={"status": "hidden"})  # personal details slipped through
     assert other not in [i["id"] for i in jo.get("/feedback").json()]
     assert other in [i["id"] for i in sam.get("/feedback").json()]       # author still sees it

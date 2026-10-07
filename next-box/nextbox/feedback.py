@@ -113,7 +113,8 @@ class Feedback:
             fid = secrets.token_hex(4)
             while fid in board:
                 fid = secrets.token_hex(4)
-            item = {"id": fid, "date": (today or date.today()).isoformat(),  # day only: times correlate
+            seq = max((i.get("n", 0) for i in board.values()), default=0) + 1  # order, not time
+            item = {"id": fid, "n": seq, "date": (today or date.today()).isoformat(),  # day only: times correlate
                     "mode": mode, "type": kind, "page": re.sub(r"[^a-z_-]", "", page.lower())[:30],
                     "rating": rating, **body, "status": "new", "reply": "", "reply_date": None}
             board[fid] = item
@@ -138,7 +139,7 @@ class Feedback:
             if status and item["status"] != status:
                 continue
             out.append({**item, "mine": item["id"] in mine})
-        out.sort(key=lambda i: (i["date"], i["id"]), reverse=True)
+        out.sort(key=lambda i: (i["date"], i.get("n", 0)), reverse=True)  # newest first
         return out
 
     def is_author(self, fid: str, viewer: str) -> bool:
