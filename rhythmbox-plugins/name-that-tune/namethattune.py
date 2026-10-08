@@ -1,0 +1,475 @@
+# namethattune.py - a music quiz built from your Rhythmbox library
+#
+# Plays a short snippet of a random song and asks you to pick its title or
+# artist from four choices. Faster answers score more.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+import time
+
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("RB", "3.0")
+from gi.repository import GObject, GLib, Gio, Gtk, Gdk, GdkPixbuf, Peas, RB
+
+import gettext
+gettext.install("rhythmbox", RB.locale_dir())
+
+import ntt_game
+from ntt_game import Game, Track, SNIPPET_SECONDS
+
+ACTION = "name-that-tune"
+# Plugins that would announce the song and spoil the answer.
+SPOILER_PLUGINS = ("notification",)
+TICK_MS = 100
+
+CSS = b"""
+.ntt-title { font-size: 22px; font-weight: bold; }
+.ntt-big { font-size: 36px; font-weight: bold; }
+.ntt-dim { opacity: 0.7; }
+.ntt-choice { padding: 14px 10px; font-size: 15px; }
+.ntt-correct, .ntt-correct:disabled {
+    background-image: none; background-color: #2e7d32; color: #ffffff;
+}
+.ntt-wrong, .ntt-wrong:disabled {
+    background-image: none; background-color: #c62828; color: #ffffff;
+}
+"""
+
+
+def entry_location(entry):
+    return entry.get_string(RB.RhythmDBPropType.LOCATION) if entry else None
+
+
+class QuizWindow(Gtk.Window):
+    def __init__(self, shell):
+        Gtk.Window.__init__(self, title=_("Name That Tune"))
+        self.shell = shell
+        self.player = shell.props.shell_player
+        self.game = None
+        self.timer_id = 0
+        self.seek_id = 0
+        self.started_at = None
+        self.saved = None
+        self.unloaded_plugins = []
+        self.art_store = RB.ExtDB(name="album-art")
+
+        self.set_default_size(480, 560)
+        self.set_border_width(18)
+        self.set_transient_for(shell.props.window)
+
+        provider = Gtk.CssProvider()
+        provider.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
+        self.stack.add_named(self._build_start(), "start")
+        self.stack.add_named(self._build_question(), "question")
+        self.stack.add_named(self._build_results(), "results")
+        self.add(self.stack)
+
+        self.connect("destroy", self._on_destroy)
+        self.show_all()
+        self.stack.set_visible_child_name("start")
+
+    # -- pages -------------------------------------------------------------
+
+    def _label(self, text="", css=None, **kw):
+        label = Gtk.Label(label=text, wrap=True, justify=Gtk.Justification.CENTER, **kw)
+        if css:
+            for c in css.split():
+                label.get_style_context().add_class(c)
+        return label
+
+    def _build_start(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18,
+                      valign=Gtk.Align.CENTER)
+        icon = Gtk.Image.new_from_icon_name("audio-x-generic", Gtk.IconSize.DIALOG)
+        icon.set_pixel_size(96)
+        box.pack_start(icon, False, False, 0)
+        box.pack_start(self._label(_("Name That Tune"), "ntt-title"), False, False, 0)
+        box.pack_start(self._label(
+            _("You'll hear %d seconds of a random song from your library. "
+              "Pick the right title or artist. The faster you answer, the "
+              "more points you get.") % SNIPPET_SECONDS, "ntt-dim"),
+            False, False, 0)
+
+        row = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER)
+        row.pack_start(Gtk.Label(label=_("Rounds")), False, False, 0)
+        self.rounds_spin = Gtk.SpinButton.new_with_range(3, 30, 1)
+        self.rounds_spin.set_value(ntt_game.ROUNDS)
+        row.pack_start(self.rounds_spin, False, False, 0)
+        box.pack_start(row, False, False, 0)
+
+        self.start_error = self._label("", "ntt-dim")
+        box.pack_start(self.start_error, False, False, 0)
+
+        start = Gtk.Button(label=_("Start"), halign=Gtk.Align.CENTER)
+        start.get_style_context().add_class("suggested-action")
+        start.set_size_request(160, -1)
+        start.connect("clicked", lambda b: self.start_game())
+        box.pack_start(start, False, False, 0)
+        return box
+
+    def _build_question(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+
+        top = Gtk.Box(spacing=6)
+        self.round_label = Gtk.Label(xalign=0)
+        self.score_label = Gtk.Label(xalign=1)
+        top.pack_start(self.round_label, True, True, 0)
+        top.pack_start(self.score_label, True, True, 0)
+        box.pack_start(top, False, False, 0)
+
+        self.progress = Gtk.ProgressBar()
+        box.pack_start(self.progress, False, False, 0)
+
+        self.art = Gtk.Image()
+        self.art.set_size_request(160, 160)
+        box.pack_start(self.art, False, False, 6)
+
+        self.prompt_label = self._label("", "ntt-title")
+        box.pack_start(self.prompt_label, False, False, 0)
+
+        grid = Gtk.Grid(row_spacing=8, column_spacing=8,
+                        row_homogeneous=True, column_homogeneous=True)
+        self.choice_buttons = []
+        for i in range(ntt_game.CHOICES):
+            button = Gtk.Button(hexpand=True)
+            button.get_style_context().add_class("ntt-choice")
+            label = Gtk.Label(wrap=True, justify=Gtk.Justification.CENTER,
+                              max_width_chars=22)
+            button.add(label)
+            button.connect("clicked", self._on_choice)
+            grid.attach(button, i % 2, i // 2, 1, 1)
+            self.choice_buttons.append(button)
+        box.pack_start(grid, False, False, 0)
+
+        self.reveal_label = self._label("")
+        box.pack_start(self.reveal_label, False, False, 0)
+
+        actions = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER)
+        self.replay_button = Gtk.Button(label=_("Replay snippet"))
+        self.replay_button.connect("clicked", lambda b: self._seek_to_start())
+        self.next_button = Gtk.Button(label=_("Next"))
+        self.next_button.get_style_context().add_class("suggested-action")
+        self.next_button.connect("clicked", lambda b: self.next_round())
+        actions.pack_start(self.replay_button, False, False, 0)
+        actions.pack_start(self.next_button, False, False, 0)
+        box.pack_end(actions, False, False, 0)
+        return box
+
+    def _build_results(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14,
+                      valign=Gtk.Align.CENTER)
+        box.pack_start(self._label(_("Final score"), "ntt-dim"), False, False, 0)
+        self.final_score = self._label("", "ntt-big")
+        box.pack_start(self.final_score, False, False, 0)
+        self.final_detail = self._label("")
+        box.pack_start(self.final_detail, False, False, 0)
+        self.final_list = self._label("", "ntt-dim", xalign=0, halign=Gtk.Align.CENTER)
+        self.final_list.set_justify(Gtk.Justification.LEFT)
+        box.pack_start(self.final_list, False, False, 0)
+
+        row = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER)
+        again = Gtk.Button(label=_("Play again"))
+        again.get_style_context().add_class("suggested-action")
+        again.connect("clicked", lambda b: self.start_game())
+        close = Gtk.Button(label=_("Close"))
+        close.connect("clicked", lambda b: self.destroy())
+        row.pack_start(again, False, False, 0)
+        row.pack_start(close, False, False, 0)
+        box.pack_start(row, False, False, 0)
+        return box
+
+    # -- game flow ---------------------------------------------------------
+
+    def _library_tracks(self):
+        model = self.shell.props.library_source.props.base_query_model
+        tracks = []
+        for row in model:
+            entry = row[0]
+            tracks.append(Track(
+                entry.get_string(RB.RhythmDBPropType.TITLE),
+                entry.get_string(RB.RhythmDBPropType.ARTIST),
+                entry.get_string(RB.RhythmDBPropType.ALBUM),
+                entry.get_ulong(RB.RhythmDBPropType.DURATION),
+                entry))
+        return tracks
+
+    def start_game(self):
+        try:
+            self.game = Game(self._library_tracks(),
+                             rounds=int(self.rounds_spin.get_value()),
+                             unknown=_("Unknown"))
+        except ValueError as e:
+            self.start_error.set_text(str(e))
+            self.stack.set_visible_child_name("start")
+            return
+        self.start_error.set_text("")
+        self._hide_spoilers()
+        self.next_round()
+
+    def next_round(self):
+        self._stop_timer()
+        q = self.game.next_question()
+        if q is None:
+            self._show_results()
+            return
+
+        self.round_label.set_text(_("Round %d of %d") % (self.game.round, self.game.rounds))
+        self._update_score()
+        self.prompt_label.set_text(
+            _("Who's the artist?") if q.kind == "artist" else _("What's this song called?"))
+        for button, choice in zip(self.choice_buttons, q.choices):
+            button.get_child().set_text(choice)
+            button.set_sensitive(True)
+            ctx = button.get_style_context()
+            ctx.remove_class("ntt-correct")
+            ctx.remove_class("ntt-wrong")
+        self.art.set_from_icon_name("dialog-question", Gtk.IconSize.DIALOG)
+        self.art.set_pixel_size(128)
+        self.reveal_label.set_text("")
+        self.next_button.set_visible(False)
+        self.replay_button.set_visible(True)
+        self.progress.set_fraction(1.0)
+        self.stack.set_visible_child_name("question")
+
+        self.started_at = None
+        source = self.shell.props.library_source
+        self.player.play_entry(q.track.ref, source)
+        self._seek_to_start()
+
+    def _seek_to_start(self):
+        """Seek once the new song has actually started, then start the clock."""
+        if self.seek_id:
+            GLib.source_remove(self.seek_id)
+        q = self.game.question
+        if q is None:
+            return
+        tries = [0]
+
+        def attempt():
+            tries[0] += 1
+            playing = self.player.get_playing_entry()
+            if entry_location(playing) == entry_location(q.track.ref):
+                try:
+                    self.player.set_playing_time(q.start)
+                    ok, pos = self.player.get_playing_time()
+                except GLib.Error:
+                    ok, pos = False, 0
+                if ok and abs(pos - q.start) <= 2:
+                    try:
+                        self.player.play()
+                    except GLib.Error:
+                        pass
+                    if self.started_at is None:
+                        self.started_at = time.monotonic()
+                        self.timer_id = GLib.timeout_add(TICK_MS, self._tick)
+                    self.seek_id = 0
+                    return False
+            if tries[0] > 40:
+                # Couldn't seek (e.g. a stream); just play from wherever it is.
+                if self.started_at is None:
+                    self.started_at = time.monotonic()
+                    self.timer_id = GLib.timeout_add(TICK_MS, self._tick)
+                self.seek_id = 0
+                return False
+            return True
+
+        self.seek_id = GLib.timeout_add(150, attempt)
+
+    def _elapsed(self):
+        return 0 if self.started_at is None else time.monotonic() - self.started_at
+
+    def _tick(self):
+        elapsed = self._elapsed()
+        self.progress.set_fraction(max(0.0, 1 - elapsed / SNIPPET_SECONDS))
+        if elapsed >= SNIPPET_SECONDS:
+            self.timer_id = 0
+            self._pause()
+            self._finish_round(None)
+            return False
+        return True
+
+    def _on_choice(self, button):
+        self._finish_round(button.get_child().get_text())
+
+    def _finish_round(self, choice):
+        if self.game is None or self.game.question is None:
+            return
+        self._stop_timer()
+        q = self.game.question
+        correct, points = self.game.answer(choice, self._elapsed())
+
+        for button in self.choice_buttons:
+            text = button.get_child().get_text()
+            button.set_sensitive(False)
+            if text == q.answer:
+                button.get_style_context().add_class("ntt-correct")
+            elif text == choice:
+                button.get_style_context().add_class("ntt-wrong")
+
+        if choice is None:
+            verdict = _("Time's up!")
+        elif correct:
+            verdict = _("Correct! +%d") % points
+            if self.game.streak > 1:
+                verdict += "  " + _("🔥 %d in a row") % self.game.streak
+        else:
+            verdict = _("Not quite.")
+        t = q.track
+        self.reveal_label.set_markup("<b>%s</b>\n%s — %s\n<small>%s</small>" % tuple(
+            GLib.markup_escape_text(s) for s in (verdict, t.title, t.artist, t.album)))
+        self._update_score()
+        self._load_art(t.ref)
+
+        self.replay_button.set_visible(False)
+        self.next_button.set_label(
+            _("See results") if self.game.round >= self.game.rounds else _("Next"))
+        self.next_button.set_visible(True)
+        self.next_button.grab_focus()
+
+    def _show_results(self):
+        self._pause()
+        g = self.game
+        self.final_score.set_text("%d" % g.score)
+        self.final_detail.set_text(
+            _("%d of %d correct · best streak %d") % (g.correct, g.rounds, g.best_streak))
+        lines = []
+        for q, choice, correct, points in g.history:
+            mark = "✓" if correct else "✗"
+            lines.append("%s  %s — %s" % (mark, q.track.title, q.track.artist))
+        self.final_list.set_text("\n".join(lines))
+        self.stack.set_visible_child_name("results")
+        self._restore_player()
+
+    def _update_score(self):
+        self.score_label.set_markup(_("Score <b>%d</b>") % self.game.score)
+
+    def _load_art(self, entry):
+        key = entry.create_ext_db_key(RB.RhythmDBPropType.ALBUM)
+        expected = self.game.history[-1][0] if self.game.history else None
+
+        def done(key, store_key, filename, data):
+            # Ignore late results from an earlier round.
+            if not self.game or not self.game.history or self.game.history[-1][0] is not expected:
+                return
+            if data is not None and hasattr(data, "scale_simple"):
+                self.art.set_from_pixbuf(data.scale_simple(160, 160, GdkPixbuf.InterpType.BILINEAR))
+            else:
+                self.art.set_from_icon_name("audio-x-generic", Gtk.IconSize.DIALOG)
+                self.art.set_pixel_size(128)
+
+        self.art_store.request(key, done)
+
+    # -- player helpers ----------------------------------------------------
+
+    def _pause(self):
+        try:
+            self.player.pause()
+        except GLib.Error:
+            pass
+
+    def _stop_timer(self):
+        for attr in ("timer_id", "seek_id"):
+            source_id = getattr(self, attr)
+            if source_id:
+                GLib.source_remove(source_id)
+                setattr(self, attr, 0)
+
+    def _hide_spoilers(self):
+        """Save what was playing, hide the main window and mute song popups."""
+        if self.saved is None:
+            entry = self.player.get_playing_entry()
+            try:
+                ok, pos = self.player.get_playing_time()
+                ok2, playing = self.player.get_playing()
+            except GLib.Error:
+                pos, playing = 0, False
+            self.saved = (entry, self.player.get_playing_source(), pos, playing)
+
+        self.shell.props.window.iconify()
+
+        engine = Peas.Engine.get_default()
+        for name in SPOILER_PLUGINS:
+            info = engine.get_plugin_info(name)
+            if info is not None and info.is_loaded():
+                engine.unload_plugin(info)
+                self.unloaded_plugins.append(info)
+
+    def _restore_player(self):
+        engine = Peas.Engine.get_default()
+        for info in self.unloaded_plugins:
+            engine.load_plugin(info)
+        self.unloaded_plugins = []
+
+        if self.saved is None:
+            return
+        entry, source, pos, playing = self.saved
+        self.saved = None
+        if entry is None:
+            self._pause()
+            return
+        self.player.play_entry(entry, source or self.shell.props.library_source)
+        tries = [0]
+
+        def resume():
+            tries[0] += 1
+            if entry_location(self.player.get_playing_entry()) == entry_location(entry):
+                try:
+                    self.player.set_playing_time(pos)
+                except GLib.Error:
+                    pass
+                if not playing:
+                    self._pause()
+                return False
+            return tries[0] < 40
+
+        GLib.timeout_add(150, resume)
+
+    def _on_destroy(self, window):
+        self._stop_timer()
+        if self.saved is not None:
+            self._pause()
+            self._restore_player()
+        self.shell.props.window.present()
+
+
+class NameThatTunePlugin(GObject.Object, Peas.Activatable):
+    __gtype_name__ = "NameThatTunePlugin"
+    object = GObject.Property(type=GObject.Object)
+
+    def __init__(self):
+        GObject.Object.__init__(self)
+        self.window = None
+
+    def do_activate(self):
+        shell = self.object
+        self.action = Gio.SimpleAction.new(ACTION, None)
+        self.action.connect("activate", self.open_quiz)
+        shell.props.window.add_action(self.action)
+
+        item = Gio.MenuItem.new(label=_("Name That Tune…"), detailed_action="win." + ACTION)
+        shell.props.application.add_plugin_menu_item("tools", ACTION, item)
+
+    def do_deactivate(self):
+        shell = self.object
+        shell.props.application.remove_plugin_menu_item("tools", ACTION)
+        shell.props.window.remove_action(ACTION)
+        self.action = None
+        if self.window is not None:
+            self.window.destroy()
+            self.window = None
+
+    def open_quiz(self, action, parameter):
+        if self.window is not None:
+            self.window.present()
+            return
+        self.window = QuizWindow(self.object)
+        self.window.connect("destroy", self._window_closed)
+
+    def _window_closed(self, window):
+        self.window = None

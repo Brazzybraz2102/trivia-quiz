@@ -1,0 +1,9 @@
+[Plugin]
+Loader=python3
+Module=namethattune
+IAge=2
+Name=Name That Tune
+Description=A music quiz built from your library: hear a snippet, guess the title or artist
+Authors=Mike Braswell
+Copyright=Copyright © 2026 Mike Braswell
+Website=https://github.com/brazzybraz2102/trivia-quiz
