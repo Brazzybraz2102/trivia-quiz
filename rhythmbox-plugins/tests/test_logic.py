@@ -87,6 +87,30 @@ class GameTests(unittest.TestCase):
         game.next_question()
         self.assertEqual(game.answer(None, 15), (False, 0))
 
+    def test_low_rated_songs_are_skipped(self):
+        tracks = [t._replace(rating=r) for t, r in zip(library(), [0, 1, 2, 3, 4, 5] * 2)]
+        kept = {t.ref for t in ntt_game.usable_tracks(tracks)}
+        self.assertEqual(kept, {t.ref for t in tracks if t.rating in (0, 3, 4, 5)})
+        # 0 turns skipping off; a higher threshold skips more.
+        self.assertEqual(len(ntt_game.usable_tracks(tracks, skip_rating=0)), 12)
+        self.assertEqual(len(ntt_game.usable_tracks(tracks, skip_rating=3)), 6)
+
+    def test_skipped_songs_never_asked(self):
+        tracks = [t._replace(rating=1 if t.ref < 4 else 0) for t in library()]
+        game = Game(tracks, rounds=8, rng=random.Random(5))
+        self.assertEqual(game.skipped, 4)
+        asked = set()
+        while game.next_question():
+            asked.add(game.question.track.ref)
+            self.assertNotIn(game.question.answer, {"Song 0", "Song 1", "Song 2", "Song 3"} if game.question.kind == "title" else set())
+            game.answer(None, 15)
+        self.assertEqual(asked, set(range(4, 12)))
+
+    def test_error_mentions_skipped_songs(self):
+        tracks = [t._replace(rating=1) for t in library()]
+        with self.assertRaisesRegex(ValueError, "12 low-rated"):
+            Game(tracks)
+
     def test_rounds_capped_by_library_size(self):
         self.assertEqual(Game(library(6), rounds=10).rounds, 6)
 

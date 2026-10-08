@@ -12,6 +12,13 @@ from four choices.
 - Faster answers score more (1000 down to 100 points), and a streak adds a bonus.
 - **Replay snippet** rewinds the clip, but the clock keeps running.
 - After you answer, it shows the song, album and cover art.
+- **Rate songs so bad ones stop coming up.** After each round, give the song
+  1–5 stars or press **👎 Never again** (which sets 1 star). The start screen
+  has a **Skip songs rated…** setting, which defaults to skipping songs with
+  2 stars or less. Unrated songs are always included.
+- Ratings are saved as normal Rhythmbox star ratings, so they also show in
+  the library's Rating column. Rhythmbox's own **Random by rating** play order
+  uses them too, so low-rated songs come up less in everyday listening.
 - To keep the answer hidden, it minimizes the main Rhythmbox window and pauses
   the Notification plugin's song popups during the game.
 - When the game ends, whatever you were listening to resumes where it left off.

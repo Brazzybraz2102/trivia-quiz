@@ -5,6 +5,8 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import json
+import os
 import time
 
 import gi
@@ -22,12 +24,20 @@ ACTION = "name-that-tune"
 # Plugins that would announce the song and spoil the answer.
 SPOILER_PLUGINS = ("notification",)
 TICK_MS = 100
+SKIP_OPTIONS = (
+    (0, "Don't skip any songs"),
+    (1, "Skip songs rated ★"),
+    (2, "Skip songs rated ★★ or less"),
+    (3, "Skip songs rated ★★★ or less"),
+)
 
 CSS = b"""
 .ntt-title { font-size: 22px; font-weight: bold; }
 .ntt-big { font-size: 36px; font-weight: bold; }
 .ntt-dim { opacity: 0.7; }
 .ntt-choice { padding: 14px 10px; font-size: 15px; }
+.ntt-star { font-size: 22px; padding: 0 2px; min-width: 0; color: #f5a623; }
+.ntt-note { font-size: 12px; opacity: 0.7; }
 .ntt-correct, .ntt-correct:disabled {
     background-image: none; background-color: #2e7d32; color: #ffffff;
 }
@@ -35,6 +45,32 @@ CSS = b"""
     background-image: none; background-color: #c62828; color: #ffffff;
 }
 """
+
+
+def stars(rating):
+    rating = int(round(rating or 0))
+    return "★" * rating + "☆" * (5 - rating) if rating else _("not rated")
+
+
+def settings_path():
+    return os.path.join(RB.user_data_dir(), "name-that-tune.json")
+
+
+def load_settings():
+    try:
+        with open(settings_path(), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(settings):
+    try:
+        os.makedirs(os.path.dirname(settings_path()), exist_ok=True)
+        with open(settings_path(), "w", encoding="utf-8") as f:
+            json.dump(settings, f)
+    except OSError:
+        pass
 
 
 def entry_location(entry):
@@ -46,6 +82,9 @@ class QuizWindow(Gtk.Window):
         Gtk.Window.__init__(self, title=_("Name That Tune"))
         self.shell = shell
         self.player = shell.props.shell_player
+        self.db = shell.props.db
+        self.settings = load_settings()
+        self.rated_entry = None
         self.game = None
         self.timer_id = 0
         self.seek_id = 0
@@ -54,7 +93,7 @@ class QuizWindow(Gtk.Window):
         self.unloaded_plugins = []
         self.art_store = RB.ExtDB(name="album-art")
 
-        self.set_default_size(480, 560)
+        self.set_default_size(480, 660)
         self.set_border_width(18)
         self.set_transient_for(shell.props.window)
 
@@ -103,6 +142,18 @@ class QuizWindow(Gtk.Window):
         row.pack_start(self.rounds_spin, False, False, 0)
         box.pack_start(row, False, False, 0)
 
+        self.skip_combo = Gtk.ComboBoxText(halign=Gtk.Align.CENTER)
+        for value, label in SKIP_OPTIONS:
+            self.skip_combo.append(str(value), _(label))
+        self.skip_combo.set_active_id(str(self.settings.get("skip_rating", ntt_game.SKIP_RATING)))
+        if self.skip_combo.get_active_id() is None:
+            self.skip_combo.set_active_id(str(ntt_game.SKIP_RATING))
+        self.skip_combo.connect("changed", self._on_skip_changed)
+        box.pack_start(self.skip_combo, False, False, 0)
+        box.pack_start(self._label(
+            _("Rate songs after each round to keep the ones you don't like out of future games."),
+            "ntt-note"), False, False, 0)
+
         self.start_error = self._label("", "ntt-dim")
         box.pack_start(self.start_error, False, False, 0)
 
@@ -150,6 +201,23 @@ class QuizWindow(Gtk.Window):
         self.reveal_label = self._label("")
         box.pack_start(self.reveal_label, False, False, 0)
 
+        self.rating_box = Gtk.Box(spacing=0, halign=Gtk.Align.CENTER)
+        self.star_buttons = []
+        for n in range(1, 6):
+            button = Gtk.Button(label="☆", relief=Gtk.ReliefStyle.NONE)
+            button.get_style_context().add_class("ntt-star")
+            button.set_tooltip_text(gettext.ngettext("%d star", "%d stars", n) % n)
+            button.connect("clicked", lambda b, n=n: self._set_rating(n))
+            self.rating_box.pack_start(button, False, False, 0)
+            self.star_buttons.append(button)
+        never = Gtk.Button(label=_("👎 Never again"))
+        never.set_tooltip_text(_("Rate 1 star so it's left out of future games"))
+        never.connect("clicked", lambda b: self._set_rating(1))
+        self.rating_box.pack_start(never, False, False, 12)
+        box.pack_start(self.rating_box, False, False, 0)
+        self.rating_note = self._label("", "ntt-note")
+        box.pack_start(self.rating_note, False, False, 0)
+
         actions = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER)
         self.replay_button = Gtk.Button(label=_("Replay snippet"))
         self.replay_button.connect("clicked", lambda b: self._seek_to_start())
@@ -196,14 +264,16 @@ class QuizWindow(Gtk.Window):
                 entry.get_string(RB.RhythmDBPropType.ARTIST),
                 entry.get_string(RB.RhythmDBPropType.ALBUM),
                 entry.get_ulong(RB.RhythmDBPropType.DURATION),
-                entry))
+                entry,
+                entry.get_double(RB.RhythmDBPropType.RATING)))
         return tracks
 
     def start_game(self):
         try:
             self.game = Game(self._library_tracks(),
                              rounds=int(self.rounds_spin.get_value()),
-                             unknown=_("Unknown"))
+                             unknown=_("Unknown"),
+                             skip_rating=self._skip_rating())
         except ValueError as e:
             self.start_error.set_text(str(e))
             self.stack.set_visible_child_name("start")
@@ -232,6 +302,9 @@ class QuizWindow(Gtk.Window):
         self.art.set_from_icon_name("dialog-question", Gtk.IconSize.DIALOG)
         self.art.set_pixel_size(128)
         self.reveal_label.set_text("")
+        self.rating_box.set_visible(False)
+        self.rating_note.set_text("")
+        self.rated_entry = None
         self.next_button.set_visible(False)
         self.replay_button.set_visible(True)
         self.progress.set_fraction(1.0)
@@ -325,6 +398,9 @@ class QuizWindow(Gtk.Window):
             GLib.markup_escape_text(s) for s in (verdict, t.title, t.artist, t.album)))
         self._update_score()
         self._load_art(t.ref)
+        self.rated_entry = t.ref
+        self._show_rating()
+        self.rating_box.set_visible(True)
 
         self.replay_button.set_visible(False)
         self.next_button.set_label(
@@ -341,10 +417,38 @@ class QuizWindow(Gtk.Window):
         lines = []
         for q, choice, correct, points in g.history:
             mark = "✓" if correct else "✗"
-            lines.append("%s  %s — %s" % (mark, q.track.title, q.track.artist))
+            rating = q.track.ref.get_double(RB.RhythmDBPropType.RATING)
+            lines.append("%s  %s — %s   %s" % (mark, q.track.title, q.track.artist, stars(rating)))
         self.final_list.set_text("\n".join(lines))
         self.stack.set_visible_child_name("results")
         self._restore_player()
+
+    def _skip_rating(self):
+        return int(self.skip_combo.get_active_id() or 0)
+
+    def _on_skip_changed(self, combo):
+        self.settings["skip_rating"] = self._skip_rating()
+        save_settings(self.settings)
+
+    def _set_rating(self, rating):
+        """Save a star rating to the Rhythmbox library."""
+        entry = self.rated_entry
+        if entry is None:
+            return
+        self.db.entry_set(entry, RB.RhythmDBPropType.RATING, float(rating))
+        self.db.commit()
+        self._show_rating()
+
+    def _show_rating(self):
+        rating = int(round(self.rated_entry.get_double(RB.RhythmDBPropType.RATING)))
+        for n, button in enumerate(self.star_buttons, 1):
+            button.set_label("★" if n <= rating else "☆")
+        if ntt_game.is_skipped(rating, self._skip_rating()):
+            self.rating_note.set_text(_("Got it. This song won't come up in future games."))
+        elif rating:
+            self.rating_note.set_text(_("Saved to your Rhythmbox library."))
+        else:
+            self.rating_note.set_text(_("Rate this song?"))
 
     def _update_score(self):
         self.score_label.set_markup(_("Score <b>%d</b>") % self.game.score)

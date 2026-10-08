@@ -13,9 +13,12 @@ MAX_POINTS = 1000
 MIN_POINTS = 100
 CHOICES = 4
 MIN_TRACK_SECONDS = 30
+# Songs rated this many stars or fewer are left out (0 = unrated, never skipped).
+SKIP_RATING = 2
 
 # ref is whatever the caller needs to play the track (a RhythmDBEntry).
-Track = namedtuple("Track", "title artist album duration ref")
+# rating is Rhythmbox's 0-5 stars, where 0 means not rated yet.
+Track = namedtuple("Track", "title artist album duration ref rating", defaults=(0,))
 Question = namedtuple("Question", "track kind choices answer start")
 
 KINDS = ("title", "artist")
@@ -25,13 +28,19 @@ def _norm(text):
     return " ".join(text.casefold().split())
 
 
-def usable_tracks(tracks, unknown="Unknown"):
-    """Drop tracks that are too short or are missing a title or artist."""
+def is_skipped(rating, skip_rating=SKIP_RATING):
+    """True for songs you've rated low. Unrated songs are never skipped."""
+    return 0 < round(rating or 0) <= skip_rating
+
+
+def usable_tracks(tracks, unknown="Unknown", skip_rating=SKIP_RATING):
+    """Drop tracks that are too short, rated low, or missing a title or artist."""
     bad = {"", _norm(unknown)}
     return [t for t in tracks
             if _norm(t.title or "") not in bad
             and _norm(t.artist or "") not in bad
-            and (t.duration or 0) >= MIN_TRACK_SECONDS]
+            and (t.duration or 0) >= MIN_TRACK_SECONDS
+            and not is_skipped(t.rating, skip_rating)]
 
 
 def distinct_values(tracks, kind):
@@ -78,14 +87,20 @@ def build_question(tracks, track, kind, rng=random):
 
 
 class Game:
-    def __init__(self, tracks, rounds=ROUNDS, unknown="Unknown", rng=None):
+    def __init__(self, tracks, rounds=ROUNDS, unknown="Unknown", rng=None,
+                 skip_rating=SKIP_RATING):
         self.rng = rng or random.Random()
-        self.tracks = usable_tracks(tracks, unknown)
+        self.skip_rating = skip_rating
+        self.tracks = usable_tracks(tracks, unknown, skip_rating)
+        self.skipped = sum(1 for t in tracks if is_skipped(t.rating, skip_rating))
         self.kinds = playable_kinds(self.tracks)
         if not self.kinds:
-            raise ValueError(
-                "Your library needs at least %d songs with different titles "
-                "or artists to play." % CHOICES)
+            message = ("Your library needs at least %d songs with different "
+                       "titles or artists to play." % CHOICES)
+            if self.skipped:
+                message += (" %d low-rated songs are being skipped; try "
+                            "skipping fewer." % self.skipped)
+            raise ValueError(message)
         self.rounds = min(rounds, len(self.tracks))
         self.round = 0
         self.score = 0
