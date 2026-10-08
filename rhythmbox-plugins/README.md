@@ -12,6 +12,7 @@ from four choices.
 - Faster answers score more (1000 down to 100 points), and a streak adds a bonus.
 - **Replay snippet** rewinds the clip, but the clock keeps running.
 - After you answer, it shows the song, album and cover art.
+- Songs with "Intro" anywhere in the title (any capitalization) are left out.
 - **Rate songs so bad ones stop coming up.** After each round, give the song
   1–5 stars or press **👎 Never again** (which sets 1 star). The start screen
   has a **Skip songs rated…** setting, which defaults to skipping songs with

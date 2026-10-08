@@ -15,6 +15,8 @@ CHOICES = 4
 MIN_TRACK_SECONDS = 30
 # Songs rated this many stars or fewer are left out (0 = unrated, never skipped).
 SKIP_RATING = 2
+# Songs whose title contains any of these (any capitalisation) are left out.
+EXCLUDE_TITLE_WORDS = ("intro",)
 
 # ref is whatever the caller needs to play the track (a RhythmDBEntry).
 # rating is Rhythmbox's 0-5 stars, where 0 means not rated yet.
@@ -33,11 +35,17 @@ def is_skipped(rating, skip_rating=SKIP_RATING):
     return 0 < round(rating or 0) <= skip_rating
 
 
+def has_excluded_title(title):
+    title = _norm(title or "")
+    return any(word in title for word in EXCLUDE_TITLE_WORDS)
+
+
 def usable_tracks(tracks, unknown="Unknown", skip_rating=SKIP_RATING):
-    """Drop tracks that are too short, rated low, or missing a title or artist."""
+    """Drop tracks that are too short, rated low, intros, or missing a title or artist."""
     bad = {"", _norm(unknown)}
     return [t for t in tracks
             if _norm(t.title or "") not in bad
+            and not has_excluded_title(t.title)
             and _norm(t.artist or "") not in bad
             and (t.duration or 0) >= MIN_TRACK_SECONDS
             and not is_skipped(t.rating, skip_rating)]

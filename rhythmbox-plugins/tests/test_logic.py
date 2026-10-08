@@ -29,6 +29,11 @@ class GameTests(unittest.TestCase):
                   Track("C", "X", "", 10, 4)]
         self.assertEqual([t.ref for t in ntt_game.usable_tracks(tracks)], [1])
 
+    def test_intros_are_excluded(self):
+        titles = ["Intro", "Intro (Live)", "The Intro", "INTRODUCTION", "Album intro", "Outro", "Hello"]
+        tracks = [Track(t, "X", "", 200, t) for t in titles]
+        self.assertEqual([t.ref for t in ntt_game.usable_tracks(tracks)], ["Outro", "Hello"])
+
     def test_question_has_four_distinct_choices_including_answer(self):
         rng = random.Random(1)
         tracks = library()
