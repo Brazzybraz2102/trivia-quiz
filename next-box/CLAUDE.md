@@ -2,14 +2,15 @@
 
 Read SPEC.md first. Its §1 rules override everything:
 
-- Each person's own to-do app is the only source of truth. Never copy tasks into the database (`nextbox/db.py`,
-  SPEC §16); it holds accounts, tickets, scans, printers, feedback and events only.
+- Each task lives in one list: the built-in list (`tasks` table, `nextbox/mylist.py`, SPEC §17) or a linked app.
+  Never copy, cache or sync a linked app's tasks into the database.
   New apps go in `nextbox/providers/` behind `TaskProvider`. Never let one person reach another's tasks or tickets.
 - Never send a real print unless Mike says "print it". Use `nextbox --dry-run ...` or `NEXTBOX_DRY_RUN=1`.
 - Never add an automatic print, cron or retry. The only automatic print is HA's `source="auto"`, guarded by `Store.claim_auto`.
 - Deleting a task always needs the person's explicit confirmation.
 - Never print, echo or log `.env` values. `Settings.redacted()` is the only thing that's safe to show.
 - LAN only. People sign in with local accounts (`nextbox/auth.py`). Don't add web sign-up or a cloud login.
+- Thermal printers print black: a tag's color picks the roll (printer) and its print pattern (`render.PATTERNS`).
 - Roles are enforced server-side in `server.py` (`require`, `can_manage`). Don't add "log in as user".
   Never put hashes, tokens or `.env` values in events, diagnostics or debug bundles. Log admin actions with `audit()`.
 - Everyone accepted the data notice (server.py `DATA_NOTICE`): the superadmin may see their tickets, scans,

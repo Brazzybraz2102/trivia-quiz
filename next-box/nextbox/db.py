@@ -139,6 +139,35 @@ feedback_identities = Table(
     Column("debug", JSON, nullable=True),
 )
 
+# The built-in to-do list ("My list"). A linked app (Todoist, CalDAV) keeps its own tasks; they are
+# never copied in here.
+tasks = Table(
+    "tasks", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("owner", String(32), nullable=False),
+    Column("household_id", String(32), nullable=False),
+    Column("content", String(500), nullable=False),
+    Column("description", Text, nullable=False, default=""),
+    Column("priority", Integer, nullable=False, default=1),         # 1..4, 4 = most urgent (Todoist's scale)
+    Column("due_date", String(10), nullable=True),                   # YYYY-MM-DD
+    Column("due_time", String(5), nullable=True),                    # HH:MM
+    Column("repeat", String(16), nullable=True),                     # daily | weekdays | weekly | monthly
+    Column("tags", JSON, nullable=False, default=list),              # tag names
+    Column("steps", JSON, nullable=False, default=list),             # [{"text": str, "done": bool}]
+    Column("minutes", Integer, nullable=True),                       # how long it'll take (a guess)
+    Column("created", BigInteger, nullable=False),
+    Column("done_at", BigInteger, nullable=True),
+    Index("ix_tasks_owner_open", "owner", "done_at"),
+)
+
+tags = Table(
+    "tags", metadata,
+    Column("owner", String(32), primary_key=True),
+    Column("name", String(24), primary_key=True),
+    Column("color", String(12), nullable=False),                     # a label stock color (printer.COLORS)
+    Column("position", Integer, nullable=False, default=0),
+)
+
 _engines: dict[str, Engine] = {}
 _lock = threading.Lock()
 

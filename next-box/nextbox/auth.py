@@ -31,7 +31,12 @@ _SCRYPT = {"n": 2**14, "r": 8, "p": 1, "dklen": 32}
 # Per-user preferences: name -> (default, validator). Unknown keys are rejected.
 PREFS = {
     "always_dry_run": (False, lambda v: isinstance(v, bool)),
-    "max_rows": (10, lambda v: isinstance(v, int) and 3 <= v <= 20),
+    "max_rows": (5, lambda v: isinstance(v, int) and 1 <= v <= 20),   # a short list gets started
+    "gentle_words": (True, lambda v: isinstance(v, bool)),   # "waiting 3d", not "overdue 3d"
+    "show_wins": (True, lambda v: isinstance(v, bool)),      # "Yesterday: 4 done" on the daily ticket
+    "show_next_step": (True, lambda v: isinstance(v, bool)), # a task's first unticked tiny step under it
+    "new_tasks_to": ("nextbox", lambda v: v in ("nextbox", "linked")),  # where new tasks go
+    "sticker_size": ("normal", lambda v: v in ("normal", "big")),
     "show_waiting": (True, lambda v: isinstance(v, bool)),
     "time_24h": (False, lambda v: isinstance(v, bool)),
     "default_filter": ("", lambda v: isinstance(v, str) and len(v) <= 200),

@@ -33,8 +33,11 @@ class ReadBack(BaseModel):
 # (image bytes, media type, manifest) -> ReadBack. Swapped for a fake in tests.
 VisionFn = Callable[[bytes, str, list[dict]], ReadBack]
 
-PROMPT = """This is a photo of a printed to-do label. Each task row has a checkbox on the right.
-Number the task rows 1, 2, 3... from top to bottom (skip anything in the "Also waiting" footer).
+PROMPT = """This is a photo of a printed to-do label: a daily list, tear-off strips, a "just one thing"
+card, or one or more single-task stickers. Each task has a checkbox. When a small row number is
+printed next to or under a checkbox, use that number. Otherwise number the task rows 1, 2, 3...
+from top to bottom (skip anything in the "Also waiting" or "Not today" footer, and the small
+"tiny steps" boxes on a "just one thing" card).
 The person marked rows by hand:
 - a check mark (✓) in or near the box means "done"
 - an arrow (→) means "move to tomorrow"

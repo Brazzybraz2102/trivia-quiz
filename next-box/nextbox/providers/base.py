@@ -5,9 +5,11 @@ don't care which app a person uses:
 
     {"id": str, "content": str, "description": str,
      "priority": 1..4 (4 = most urgent),
-     "due": {"date": "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM:SS" (local time), "is_recurring": bool} | None}
+     "due": {"date": "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM:SS" (local time), "is_recurring": bool} | None,
+     "labels": [tag names]}   # optional; Todoist labels, CalDAV categories, My list tags
 
-The person's to-do app is the only source of truth: providers never cache tasks.
+Built-in list tasks also carry "steps" and "minutes". Each list is the source of truth for its own
+tasks: providers never cache or copy tasks between lists.
 """
 from __future__ import annotations
 

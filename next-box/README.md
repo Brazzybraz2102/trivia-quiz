@@ -42,10 +42,12 @@ cd next-box
 ### 2. Install and fill in secrets
 ```bash
 sudo apt install -y python3-venv wl-clipboard libnotify-bin   # Fedora: sudo dnf install python3 wl-clipboard libnotify
-scripts/install.sh          # first run: builds the venv, runs the tests, creates .env, then stops
-python3 -c "import secrets; print(secrets.token_urlsafe(24))"   # copy this: it's your NEXTBOX_KEY
-nano .env                   # paste PRINTER_IP, NEXTBOX_KEY, ANTHROPIC_API_KEY
+scripts/install.sh          # builds everything, makes your NEXTBOX_KEY, starts the service
+.venv/bin/nextbox doctor    # checks it all and says what to fix
 ```
+Later, when you have them, put `PRINTER_IP` (and `ANTHROPIC_API_KEY` for photo read-back) in
+`.env` with `nano .env`, delete the `NEXTBOX_DRY_RUN=1` line, and run
+`systemctl --user restart nextbox`. Until then Next Box makes previews instead of printing.
 
 ### 3. Create your account and connect your to-do app
 ```bash
@@ -162,6 +164,40 @@ Everyone sees a notice on their first sign-in, and their "I understand" is recor
 The small mark at the bottom of every page shows the version and build. Change its wording with
 `NEXTBOX_CREDIT` in `.env`.
 
+## My list, stickers and ADHD helpers
+Next Box has its own to-do list, so it works without Todoist. Open the web app on your phone:
+**My list** is the first screen.
+
+- **Just one thing** at the top: the one task to do now, with its next tiny step. Tap **Done ✓**,
+  **Print it big**, or **Not now** to see the next one.
+- **Brain dump**: type everything on your mind, one per line. Shortcuts are optional:
+  `#errand` tag, `!` urgent, `tomorrow` / `fri`, `3pm`, `~15m` how long, `every day`.
+- **Edit** a task to add tiny steps (the first one should take two minutes), a time, a repeat or tags.
+- **Stickers**: one small label per task, to stick on the bill, the door, the car keys.
+  **Tear-off strips**: one label you cut into strips. Pick tasks with the boxes on the left, or
+  pick nothing to print today's.
+- **Tags & colors** (Settings): each tag has a color. Stickers go to the printer loaded with that
+  color of labels. On plain white labels each color prints as its own pattern (red is solid black,
+  yellow is dots, blue is stripes...), so you can still tell them apart at a glance.
+- The **daily ticket** shows 5 tasks at most, the next tiny step under each, gentle wording and
+  yesterday's wins. Change any of it under Settings → Focus & ADHD helpers.
+
+Linking Todoist or a CalDAV app (Settings) is optional: its tasks show up next to yours and stay
+in that app.
+
+Colored labels for the QL-1110NWB: it prints black only, so color comes from the roll. Brother
+makes 62 mm yellow film tape (DK-22606). Other colors come from third-party 62 mm DK-compatible
+rolls; check the listing says it fits the QL-1100/1110. Add each loaded roll as a printer (Admin → Printers) with its label color.
+
+From the command line:
+```bash
+.venv/bin/nextbox add "Pay water bill #urgent today ~15m" "Call dentist fri 10am"
+.venv/bin/nextbox --dry-run stickers          # today's tasks, one sticker each
+.venv/bin/nextbox --dry-run strips '#errand'  # tear-off strips for a tag
+.venv/bin/nextbox --dry-run focus             # Just one thing
+.venv/bin/nextbox doctor                      # checks the setup and says what to fix
+```
+
 ## Everyday use
 | Want | Do |
 |---|---|
@@ -191,6 +227,7 @@ in each person's to-do app.
 are read-only, and password hashes and to-do app secrets are always hidden.
 
 ## Troubleshooting
+- **Start here:** `.venv/bin/nextbox doctor` checks the key, accounts, service, web page, firewall and printers, and says what to fix.
 - `printer_reachable: false`: check that the printer is on the same Wi-Fi and give it a DHCP reservation so its IP stays fixed.
 - Service logs: `journalctl --user -u nextbox -f`
 - Service won't start, with status 218 or "namespace" errors: your system doesn't allow the

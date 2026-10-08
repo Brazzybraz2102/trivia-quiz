@@ -3,14 +3,17 @@
 Each person's to-do app ↔ Brother QL-1110NWB label printer, running on Mike's desktop and reachable only on the home LAN.
 
 ## 1. Rules (these override everything else)
-1. **Each person's own to-do app is the only source of truth.** Tasks are never copied into the
-   database. The database (§16) only keeps accounts, print history, ticket manifests (row → task
-   ID), scan results, the auto-print guard, printers, feedback and the activity log.
+1. **Each task lives in exactly one list, and that list is its source of truth.** Everyone has a
+   built-in list ("My list", the `tasks` table, §17). A linked app (Todoist, CalDAV) is optional;
+   its tasks are shown and printed next to the built-in ones but never copied, cached or synced
+   into the database. The database (§16) also keeps accounts, print history, ticket manifests
+   (row → task ID), scan results, the auto-print guard, printers, tags, feedback and the activity log.
 2. **Nothing prints unless Mike asks.** The one exception is the once-a-day `source="auto"` print
    of today's list when Home Assistant sees him enter the office. The server guards it
    (`Store.claim_auto`), so a second auto call that day returns `skipped`. There are no
    crons, no retries that reprint, and no other automatic prints.
-3. **Deleting a task always needs explicit confirmation**, including when read-back finds one.
+3. **Deleting a task always needs explicit confirmation**, including when read-back finds one and
+   on the built-in list (`DELETE /list/{id}` refuses without `confirm=true`).
 4. **Dry-run for development**: `--dry-run`, `NEXTBOX_DRY_RUN=1`, or `dry_run: true` in the API.
 5. **Server secrets live only in `.env`** (chmod 600). Each person's to-do app token or password is
    encrypted with `secret.key` (data dir, 600) in `users.connection`. Neither is ever shown, logged
@@ -322,3 +325,39 @@ events, server_settings, printers, feedback, feedback_identities. `nextbox db di
 - `nextbox db sql "..."` is read-only on the real database. Writes need `--practice --write`.
 - Output always hides password hashes, salts, session hashes and to-do app secrets.
 - `nextbox db backup` makes an online copy in `<data dir>/backups/` (600).
+
+## 17. My list, tags and ADHD support
+**My list** (`nextbox/mylist.py`): every person's built-in to-do list. Built-in task ids look like
+`nb:12`; linked apps' ids are used as they are. `Merged` sends each action (done, move, delete) to
+the list the task came from. New tasks go to My list unless the `new_tasks_to` pref says `linked`.
+Repeating tasks (daily, weekdays, weekly, monthly) jump to the next date after today when done, so
+they never pile up as overdue.
+
+**Brain dump**: one task per line. Understands `#tag`, `!` / `!1` `!2` `!3`, `today` `tomorrow`
+`fri` `2026-10-09`, `3pm` `15:30`, `~15m` `~1h`, `every day|weekday|week|month`.
+
+**Tags** have a color (red, orange, yellow, green, blue, pink, purple, white). Todoist labels and
+CalDAV categories with the same name get the same color. A new person starts with urgent (red),
+errand (yellow), call (blue), home (green) and work (purple).
+
+**Color on thermal labels**: thermal printers print black, so a tag's color does two things:
+- **Routing**: stickers go to the printer whose loaded roll matches their tag color (one job per
+  color), else the person's usual printer.
+- **Pattern**: on any roll the tag prints as a patterned block with its name: red solid (white
+  letters), orange diagonal, yellow dots, green horizontal stripes, blue vertical stripes, pink
+  checker, purple crosshatch, white outline. Patterns stay readable on plain white labels.
+Only the Brother QL-800/810W/820NWB print red ink; `printers.validate` refuses black+red for
+other models (the QL-1110NWB prints black only).
+
+**Print types** (all manual, all through `jobs._finish`):
+- **Stickers**: one task per small label, cut apart, to stick where the task happens. Each shows
+  its tag band, the task big, when, how long, the next tiny step, a numbered box and the code.
+- **Tear-off strips**: one label, one strip per task with dashed cut lines.
+- **Just one thing**: one task, huge, with its tiny steps and "start by" time (due time minus the
+  estimate). Picks the first task today's ticket would list unless one is chosen.
+Read-back works on all of them: each box has its printed row number.
+
+**Daily ticket for ADHD** (all prefs, all on by default): at most 5 tasks (`max_rows`, the rest
+listed small under "Not today"), gentle words ("waiting 3d" not "overdue 3d"), the next tiny step
+under each task, a tag swatch by each box, and "Yesterday you finished N. ✓".
+

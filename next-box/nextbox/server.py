@@ -17,7 +17,7 @@ import shutil
 import sys
 import time
 import traceback
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -34,6 +34,7 @@ from .connections import Builder, Connections, NotConnected
 from .events import Events, ServerSettings
 from .feedback import Feedback, FeedbackError
 from .jobs import Context, print_text
+from .mylist import TAG_COLORS, LocalTasks, Tags, is_local, parse_dump
 from .printer import COLORS, DRIVERS
 from .printers import REASONS, PrinterError, Printers
 from .providers import PROVIDERS, ProviderError
@@ -107,6 +108,37 @@ class NewUserBody(BaseModel):
     beta: bool = False
 
 
+class TaskIn(BaseModel):
+    content: str | None = None
+    description: str | None = None
+    priority: int | None = None
+    due_date: str | None = None
+    due_time: str | None = None
+    repeat: str | None = None
+    tags: list[str] | None = None
+    steps: list | None = None
+    minutes: int | None = None
+
+
+class DumpBody(BaseModel):
+    text: str
+
+
+class TagBody(BaseModel):
+    color: str
+
+
+class PickBody(BaseModel):
+    task_ids: list[str] | None = None
+    query: str | None = None
+    dry_run: bool | None = None
+
+
+class FocusBody(BaseModel):
+    task_id: str | None = None
+    dry_run: bool | None = None
+
+
 class ConnectBody(BaseModel):
     provider: str
     fields: dict[str, str]
@@ -128,10 +160,11 @@ class PrinterBody(BaseModel):
 
 
 # Shown to everyone once; their "I understand" is recorded. Bump the version if it changes.
-DATA_NOTICE_VERSION = 1
+DATA_NOTICE_VERSION = 2
 DATA_NOTICE = ("The admin can see how you use Next Box: your printed tickets (including the tasks on "
-               "them), photo read-backs, settings and activity. Your to-do app password or token is "
-               "never visible to anyone, and feedback stays anonymous.")
+               "them), photo read-backs, settings and activity. Tasks on your built-in list are kept "
+               "on this Next Box computer. Your to-do app password or token is never visible to "
+               "anyone, and feedback stays anonymous.")
 
 
 class UserPatch(BaseModel):
@@ -264,7 +297,26 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return dataclasses.replace(ctx, user=name, household=household_of(caller), prefs=prefs, printers=ctx.printers,
                                    printing_paused=s["printing_paused"],
                                    auto_print_enabled=s["auto_print_enabled"],
-                                   tasks_factory=factory, _tasks=None)
+                                   tasks_factory=factory, _tasks=None,
+                                   tag_colors=Tags(accounts.db, name).colors(),
+                                   wins=lambda: wins_yesterday(name))
+
+    def wins_yesterday(name: str) -> int:
+        """Tasks finished yesterday: ticked on My list, or marked done on a photo read-back."""
+        today = ctx.today()
+        start = time.mktime((today - timedelta(days=1)).timetuple())
+        end = time.mktime(today.timetuple())
+        done = sum(1 for e in events.query(user=name, since=start, limit=1000)
+                   if e["action"] == "task_done" and e["ts"] < end)
+        y = (today - timedelta(days=1)).isoformat()
+        for rec in ctx.store.list_scans(200, by=name, since=y):
+            if rec.get("created_at", "")[:10] == y:
+                done += sum(1 for a in rec.get("applied", [])
+                            if a.get("mark") == "done" and not is_local(str(a.get("task_id", ""))))
+        return done
+
+    def my_list(caller: Caller) -> LocalTasks:
+        return LocalTasks(accounts.db, caller.name, caller.household, today=ctx.today)
 
     def run(caller: Caller, action: str, fn, *args, **kwargs):
         start = time.time()
@@ -276,6 +328,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(409, str(exc)) from exc
         except scan.PhotoError as exc:
             raise HTTPException(415, str(exc)) from exc
+        except ValueError as exc:  # something the person can fix: an empty list, a bad date
+            raise HTTPException(400, str(exc)) from exc
         except Exception as exc:
             events.log(caller.name, action, ok=False, kind="error", error=str(exc),
                        trace=traceback.format_exc(), detail={"args": _safe_args(args, kwargs)})
@@ -491,6 +545,134 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return run(caller, "print_text", jobs.print_text, rctx(caller), body.text, body.title,
                    dry_run=body.dry_run)
 
+    # ----------------------------------------------------------- My list
+    @app.get("/list")
+    def get_list(include_done: bool = False, caller: Caller = Depends(person)):
+        """The built-in list, plus today's tasks from a linked app (they stay in that app)."""
+        mine = my_list(caller)
+        tasks = mine.all_open()
+        if include_done:
+            from sqlalchemy import select as _select
+            from . import db as _db
+            with accounts.db.connect() as conn:
+                rows = conn.execute(_select(_db.tasks).where(_db.tasks.c.owner == caller.name,
+                                                             _db.tasks.c.done_at.is_not(None))
+                                    .order_by(_db.tasks.c.done_at.desc()).limit(50)).mappings().all()
+            tasks += [mine._task(r) for r in rows]
+        status = connections.status(caller.name)
+        linked, linked_error = [], ""
+        if status.get("connected"):
+            try:
+                linked = rctx(caller).tasks.linked.today()
+                linked = [{**t, "source": status["provider"], "labels": list(t.get("labels") or [])} for t in linked]
+            except Exception as exc:  # the list still works when the linked app is down
+                linked_error = f"{status.get('name', 'Your app')} didn't answer: {exc}"[:300]
+        return {"tasks": tasks, "linked": linked, "linked_name": status.get("name") if status.get("connected") else None,
+                "linked_error": linked_error, "tags": Tags(accounts.db, caller.name).all(),
+                "one_thing": _one_thing(caller)}
+
+    def _one_thing(caller: Caller):
+        c = rctx(caller)
+        try:
+            return jobs.one_thing(c)
+        except Exception:  # a linked app that's down shouldn't hide what's on your own list
+            return jobs.one_thing(dataclasses.replace(c, tasks_factory=lambda: my_list(caller), _tasks=None))
+
+    @app.post("/list")
+    def add_list_task(body: TaskIn, caller: Caller = Depends(person)):
+        fields = body.model_dump(exclude_none=True)
+        for name in fields.get("tags", []):
+            _ensure_tag(caller, name)
+        task = run(caller, "list_add", my_list(caller).create, fields)
+        return task
+
+    def _ensure_tag(caller: Caller, name: str) -> None:
+        tags = Tags(accounts.db, caller.name)
+        try:
+            known = {t["name"] for t in tags.all()}
+            from .mylist import tag_name
+            if tag_name(name) not in known:
+                tags.set(name, "white")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/list/dump")
+    def brain_dump(body: DumpBody, caller: Caller = Depends(person)):
+        """Type or paste everything on your mind, one per line. #tag !urgent tomorrow 3pm ~15m."""
+        items = parse_dump(body.text, ctx.today())
+        if not items:
+            raise HTTPException(400, "Nothing to add. Put one task on each line.")
+        mine = my_list(caller)
+        for item in items:
+            for name in item.get("tags", []):
+                _ensure_tag(caller, name)
+        added = run(caller, "brain_dump", lambda: [mine.create(i) for i in items])
+        return {"added": added}
+
+    def _local_id(task_id: str) -> str:
+        if not is_local(task_id):
+            raise HTTPException(400, "That task lives in your linked app; change it there.")
+        return task_id
+
+    @app.patch("/list/{task_id}")
+    def edit_list_task(task_id: str, body: TaskIn, caller: Caller = Depends(person)):
+        fields = body.model_dump(exclude_unset=True)
+        for name in fields.get("tags") or []:
+            _ensure_tag(caller, name)
+        return run(caller, "list_edit", my_list(caller).update, _local_id(task_id), fields)
+
+    @app.post("/list/{task_id}/done")
+    def done_list_task(task_id: str, caller: Caller = Depends(person)):
+        c = rctx(caller)
+        run(caller, "list_done", c.tasks.close_task, task_id)
+        if not is_local(task_id):
+            events.log(caller.name, "task_done", detail={"source": "linked"}, household=caller.household)
+        return {"ok": True}
+
+    @app.post("/list/{task_id}/reopen")
+    def reopen_list_task(task_id: str, caller: Caller = Depends(person)):
+        return run(caller, "list_reopen", my_list(caller).reopen, _local_id(task_id))
+
+    @app.delete("/list/{task_id}")
+    def delete_list_task(task_id: str, confirm: bool = False, caller: Caller = Depends(person)):
+        if not confirm:  # deleting a task always needs the person's explicit yes
+            raise HTTPException(400, "Deleting needs confirm=true.")
+        run(caller, "list_delete", rctx(caller).tasks.delete_task, task_id)
+        return {"ok": True}
+
+    @app.get("/tags")
+    def get_tags(caller: Caller = Depends(person)):
+        return {"tags": Tags(accounts.db, caller.name).all(), "colors": list(TAG_COLORS)}
+
+    @app.put("/tags/{name}")
+    def put_tag(name: str, body: TagBody, caller: Caller = Depends(person)):
+        try:
+            return Tags(accounts.db, caller.name).set(name, body.color)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.delete("/tags/{name}")
+    def delete_tag(name: str, caller: Caller = Depends(person)):
+        try:
+            Tags(accounts.db, caller.name).remove(name)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"ok": True}
+
+    @app.post("/print/stickers")
+    def p_stickers(body: PickBody, caller: Caller = Depends(auth)):
+        return run(caller, "print_stickers", jobs.print_stickers, rctx(caller), body.task_ids, body.query,
+                   dry_run=body.dry_run)
+
+    @app.post("/print/strips")
+    def p_strips(body: PickBody, caller: Caller = Depends(auth)):
+        return run(caller, "print_strips", jobs.print_strips, rctx(caller), body.task_ids, body.query,
+                   dry_run=body.dry_run)
+
+    @app.post("/print/focus")
+    def p_focus(body: FocusBody, caller: Caller = Depends(auth)):
+        return run(caller, "print_focus", jobs.print_focus, rctx(caller), body.task_id, dry_run=body.dry_run)
+
     @app.get("/printed")
     def printed(limit: int = 50, caller: Caller = Depends(auth)):
         return ctx.store.list_printed(limit, by=acting_as(caller))
@@ -520,6 +702,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             data, media_type = scan.prepare_photo(data)  # upright, resized JPEG
         except scan.PhotoError as exc:
             raise HTTPException(415, str(exc)) from exc
+        except ValueError as exc:  # something the person can fix: an empty list, a bad date
+            raise HTTPException(400, str(exc)) from exc
         fn = vision or scan.claude_vision(ctx.settings)
         return run(caller, "scan", scan.scan_photo, rctx(caller), fn, data, media_type, label_id or None)
 
@@ -702,6 +886,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         except AuthError as exc:
             raise HTTPException(400, str(exc))
         feedback_store.forget_user(target["username"])  # their posts stay, unlinked
+        LocalTasks(accounts.db, target["username"]).delete_for_user()
+        Tags(accounts.db, target["username"]).delete_for_user()
         audit(caller, "delete_user", target=target["username"])
         return {"ok": True}
 

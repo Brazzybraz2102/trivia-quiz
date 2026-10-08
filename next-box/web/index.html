@@ -85,6 +85,27 @@
   .center { max-width:400px; margin:12vh auto 0; padding:0 16px; }
   .center label { display:block; margin-top:10px; font-size:14px; }
   .center input { margin-top:4px; }
+  /* My list */
+  .tc-red{--t:#d93025} .tc-orange{--t:#ef7d1a} .tc-yellow{--t:#e8b500} .tc-green{--t:#2e9d4f}
+  .tc-blue{--t:#2a6ff0} .tc-pink{--t:#e0509b} .tc-purple{--t:#8a4fd8} .tc-white{--t:#9a9a92}
+  .tag { display:inline-block; font-size:12px; font-weight:600; padding:1px 8px; border-radius:99px; border:2px solid var(--t); color:var(--fg); margin-right:4px; }
+  .tag.solid { background:var(--t); color:#fff; }
+  .now { border:2px solid var(--accent); }
+  .now .big { font-size:26px; font-weight:700; line-height:1.2; margin:6px 0; overflow-wrap:anywhere; }
+  .now .step { font-size:16px; margin:4px 0 10px; }
+  .task { display:flex; gap:10px; align-items:flex-start; padding:10px 0; border-top:1px solid var(--line); }
+  .task:first-child { border-top:0; }
+  .task .pick { width:22px; height:22px; flex:none; margin-top:2px; }
+  .task .body { flex:1; min-width:0; }
+  .task .text { font-size:17px; overflow-wrap:anywhere; }
+  .task .text.urgent { font-weight:700; }
+  .task .meta { font-size:13px; color:var(--muted); margin-top:2px; }
+  .task .acts { display:flex; gap:4px; flex:none; }
+  .task button.done { border:2px solid var(--ok); color:var(--ok); background:none; border-radius:50%; width:36px; height:36px; font-size:18px; cursor:pointer; }
+  .group { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:14px 0 2px; }
+  .printbar { position:sticky; bottom:0; background:var(--bg); border-top:1px solid var(--line); padding:10px 0; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .hint code { background:var(--bg); padding:1px 5px; border-radius:4px; border:1px solid var(--line); font-size:13px; }
+  .tagrow { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
   @media (max-width:520px) { .setting { flex-wrap:wrap; } }
 </style>
 </head>
@@ -116,7 +137,8 @@
 <div class="banner" id="announce" hidden></div>
 <div class="banner" id="paused" hidden>Printing is paused by an admin. Everything renders as a preview until it's turned back on.</div>
 <nav>
-  <button data-tab="print" class="on">Print</button>
+  <button data-tab="mylist" class="on">My list</button>
+  <button data-tab="print">Print</button>
   <button data-tab="scan">Read back</button>
   <button data-tab="printed">Printed</button>
   <button data-tab="board">Feedback</button>
@@ -126,11 +148,39 @@
   <button data-tab="debug" data-min="superadmin" hidden>Debug</button>
 </nav>
 <main>
-  <section id="print" class="on">
-    <div class="card warnbox" id="notConnected" hidden><b>Connect your to-do app first.</b>
-      <span class="muted">Next Box prints your own lists from Todoist or any CalDAV task app.</span>
-      <div class="row"><button class="go" id="goConnect">Connect it in Settings</button></div></div>
-    <label class="dry"><input type="checkbox" id="dry" checked> Dry run (render only, don't print)</label>
+  <label class="dry"><input type="checkbox" id="dry" checked> Preview only (don't send to the printer)</label>
+  <section id="mylist" class="on">
+    <div class="card now" id="nowCard">
+      <div class="muted">Just one thing</div>
+      <div class="big" id="nowText">…</div>
+      <div class="step muted" id="nowStep"></div>
+      <div class="row">
+        <button class="go" id="nowDone">Done ✓</button>
+        <button class="plain" id="nowPrint">Print it big</button>
+        <button class="plain" id="nowSkip">Not now</button>
+      </div>
+    </div>
+
+    <div class="card"><h2>Brain dump</h2>
+      <textarea id="dumpText" placeholder="Everything on your mind, one per line. Don't sort it, just get it out."></textarea>
+      <p class="muted hint">Optional: <code>#errand</code> tag · <code>!</code> urgent · <code>tomorrow</code> <code>fri</code> · <code>3pm</code> · <code>~15m</code> how long · <code>every day</code></p>
+      <div class="row"><button class="go" id="dumpGo">Add to my list</button><span id="dumpMsg" class="muted"></span></div>
+    </div>
+
+    <div class="card"><h2>My list</h2>
+      <p class="err" id="linkedErr" hidden></p>
+      <div id="listBody" class="muted">…</div>
+      <div class="printbar">
+        <span class="muted" id="pickCount">Nothing picked: prints today's tasks</span>
+        <button class="go" id="printStickers">Stickers</button>
+        <button class="plain" id="printStrips">Tear-off strips</button>
+        <button class="plain" id="showDone">Show done</button>
+      </div>
+    </div>
+    <div class="card result" id="listResult" hidden></div>
+  </section>
+
+  <section id="print">
     <div class="card"><h2>Today</h2>
       <p class="muted">Today + overdue from <span class="appName">your to-do app</span>.</p>
       <button class="go" data-act="today">Print today</button></div>
@@ -172,7 +222,22 @@
   </section>
 
   <section id="settings">
-    <div class="card" id="appCard"><h2>Your to-do app</h2>
+    <div class="card"><h2>Tags &amp; colors</h2>
+      <p class="muted">Each tag has a color. Stickers print on the roll loaded with that color, or with the tag's pattern on plain white labels.</p>
+      <div id="tagList">…</div>
+      <div class="row"><input type="text" id="newTag" placeholder="New tag, e.g. errand" style="max-width:200px">
+        <select id="newTagColor" aria-label="Color"></select><button class="go" id="addTag">Add tag</button></div>
+    </div>
+
+    <div class="card"><h2>Focus &amp; ADHD helpers</h2>
+      <label class="setting"><div class="label"><b>Tasks on the daily ticket</b><span>A short list is one you start. The rest are listed small at the bottom. 1–20.</span></div><input type="number" min="1" max="20" data-pref="max_rows"></label>
+      <label class="setting"><div class="label"><b>Gentle words</b><span>"waiting 3d" instead of "overdue 3d", and "Not today" for the rest.</span></div><input type="checkbox" data-pref="gentle_words"></label>
+      <label class="setting"><div class="label"><b>Show yesterday's wins</b><span>"Yesterday you finished 4. ✓" on the daily ticket.</span></div><input type="checkbox" data-pref="show_wins"></label>
+      <label class="setting"><div class="label"><b>Print the next tiny step</b><span>Under each task that has steps.</span></div><input type="checkbox" data-pref="show_next_step"></label>
+    </div>
+
+    <div class="card" id="appCard"><h2>Linked to-do app (optional)</h2>
+      <p class="muted">Your list works on its own. Link Todoist or a CalDAV app to see its tasks here too; they stay in that app.</p>
       <div id="appStatus" class="muted">…</div>
       <div id="appConnect" hidden>
         <div class="row"><select id="provSel" aria-label="To-do app"></select></div>
@@ -209,7 +274,6 @@
 
     <div class="card"><h2>Printing</h2>
       <label class="setting"><div class="label"><b>Always preview only</b><span>Never send to the printer from my account. Good for testing.</span></div><input type="checkbox" data-pref="always_dry_run"></label>
-      <label class="setting"><div class="label"><b>Rows per ticket</b><span>Extra tasks go under "Also waiting". 3–20.</span></div><input type="number" min="3" max="20" data-pref="max_rows"></label>
       <label class="setting"><div class="label"><b>Show "Also waiting"</b><span>List the tasks that didn't fit at the bottom.</span></div><input type="checkbox" data-pref="show_waiting"></label>
       <label class="setting"><div class="label"><b>24-hour times</b><span>19:00 instead of 7:00p.</span></div><input type="checkbox" data-pref="time_24h"></label>
       <label class="setting"><div class="label"><b>Default list filter</b><span>Pre-fills "List from a filter".</span></div><input type="text" style="max-width:220px" data-pref="default_filter" placeholder="#Groceries"></label>
@@ -327,6 +391,30 @@
     <p class="err" id="fbErr"></p>
     <div id="fbDone" hidden></div>
     <div class="row"><button class="go" type="button" id="fbSend">Post anonymously</button><button class="plain" type="button" id="fbClose">Close</button></div>
+  </form>
+</dialog>
+<dialog id="taskDialog">
+  <form method="dialog" id="taskForm">
+    <h2 id="tdTitle">Task</h2>
+    <div class="field"><label for="tdContent">What</label><input type="text" id="tdContent" maxlength="500" required></div>
+    <div class="row">
+      <div class="field"><label for="tdDate">Day</label><input type="date" id="tdDate"></div>
+      <div class="field"><label for="tdTime">Time</label><input type="time" id="tdTime"></div>
+      <div class="field"><label for="tdMinutes">Minutes</label><input type="number" id="tdMinutes" min="1" max="1440"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label for="tdRepeat">Repeats</label><select id="tdRepeat"><option value="">No</option><option value="daily">Every day</option><option value="weekdays">Weekdays</option><option value="weekly">Every week</option><option value="monthly">Every month</option></select></div>
+      <div class="field"><label for="tdPriority">Urgent?</label><select id="tdPriority"><option value="1">No</option><option value="3">Yes</option><option value="4">Very</option></select></div>
+    </div>
+    <div class="field"><label>Tags</label><div class="chips" id="tdTags"></div></div>
+    <div class="field"><label for="tdSteps">Tiny steps</label><span class="muted">One per line. The first one should take two minutes.</span>
+      <textarea id="tdSteps" placeholder="Find the bill&#10;Open the website&#10;Pay"></textarea></div>
+    <div class="row">
+      <button class="go" id="tdSave" value="save">Save</button>
+      <button class="plain" id="tdFocus" value="focus" type="button">Print as one thing</button>
+      <button class="plain" id="tdCancel" value="cancel" formnovalidate>Cancel</button>
+      <button class="go warn" id="tdDelete" type="button" style="margin-left:auto">Delete</button>
+    </div>
   </form>
 </dialog>
 <footer id="revmark" aria-label="Version"></footer>

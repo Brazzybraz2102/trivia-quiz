@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 from . import jobs, printer, scan
@@ -15,6 +16,7 @@ from .auth import Accounts, AuthError, default_prefs
 from .config import load_settings
 from .connections import Connections
 from .jobs import Context
+from .mylist import LocalTasks, Tags, parse_dump
 from .printers import Printers
 from .providers import READY
 from .store import Store
@@ -178,6 +180,15 @@ def main(argv: list[str] | None = None) -> int:
     cf = sub.add_parser("confirm", help="review a scan's pending items one by one")
     cf.add_argument("scan_id")
     sub.add_parser("serve", help="run the HTTP server")
+    sub.add_parser("doctor", help="check the setup step by step and say what to fix")
+    ad = sub.add_parser("add", help="add tasks to your list (one per line; #tag ! tomorrow 3pm ~15m)")
+    ad.add_argument("text", nargs="+")
+    for name, helptext in (("stickers", "one sticker per task (today's, or a filter like #errand)"),
+                           ("strips", "one label of tear-off strips (today's, or a filter)")):
+        x = sub.add_parser(name, help=helptext)
+        x.add_argument("query", nargs="?", default=None)
+    fo = sub.add_parser("focus", help="print Just one thing: the next task, big, with its tiny steps")
+    fo.add_argument("task_id", nargs="?", default=None)
     cn = sub.add_parser("connect", help="connect someone's to-do app (prompts for the token/password)")
     cn.add_argument("username")
     cn.add_argument("provider", choices=sorted(READY))
@@ -216,11 +227,24 @@ def main(argv: list[str] | None = None) -> int:
     ctx = Context(settings=settings, store=Store(settings.data_dir), user=who,
                   printers=Printers(settings.data_dir, settings),
                   tasks_factory=lambda: conns.provider_for(who),
-                  prefs=(accounts.get(who) or {}).get("prefs") or default_prefs())
+                  prefs=(accounts.get(who) or {}).get("prefs") or default_prefs(),
+                  tag_colors=Tags(accounts.db, who).colors() if accounts.get(who) else {})
     dry = args.dry_run or None
 
     if args.cmd == "db":
         return _db(settings.data_dir, args)
+    if args.cmd == "doctor":
+        from .doctor import run_doctor
+        return run_doctor(settings, accounts)
+    if args.cmd == "add":
+        if not accounts.get(who):
+            print("Create your account first: nextbox user add <name>")
+            return 1
+        items = parse_dump("\n".join(args.text), date.today())
+        mine = LocalTasks(accounts.db, who, accounts.household_of(who) or "home")
+        for item in items:
+            print(f"added {mine.create(item)['id']}: {item['content']}")
+        return 0
     if args.cmd == "connect":
         return _connect(conns, args.username.lower(), args.provider)
     if args.cmd == "disconnect":
@@ -287,6 +311,12 @@ def main(argv: list[str] | None = None) -> int:
             text = " ".join(args.text)
             result = (jobs.add_and_print(ctx, text, dry_run=dry) if args.todo
                       else jobs.print_text(ctx, text, args.title, dry_run=dry))
+        elif args.cmd == "stickers":
+            result = jobs.print_stickers(ctx, query=args.query, dry_run=dry)
+        elif args.cmd == "strips":
+            result = jobs.print_strips(ctx, query=args.query, dry_run=dry)
+        elif args.cmd == "focus":
+            result = jobs.print_focus(ctx, args.task_id, dry_run=dry)
         elif args.cmd == "clip":
             text = jobs.read_clipboard().strip()
             if not text:

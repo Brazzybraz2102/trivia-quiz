@@ -4,9 +4,9 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass, field
-from datetime import date, datetime
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 
 from PIL import Image
 
@@ -14,13 +14,15 @@ from . import printer
 from .auth import default_prefs
 from .config import Settings
 from .printer import PrinterConfig, legacy_config
-from .printers import Printers, choose
-from .render import DayRow, finalize, render_day, render_label
+from .printers import Printers, choose, choose_color
+from .render import (DayRow, Sticker, finalize, render_day, render_focus, render_label, render_sticker,
+                     render_strips, stack_with_cuts)
 from .store import Store
 from .providers import TaskProvider
 
 TODAY_QUERY = "today | overdue"
-MAX_ROWS = 10  # the rest are listed under "Also waiting" (not markable)
+MAX_ROWS = 5  # the rest are listed at the bottom (not markable): a short list is one you start
+MAX_STICKERS = 30
 
 
 @dataclass
@@ -35,6 +37,8 @@ class Context:
     printing_paused: bool = False     # server-wide kill switch: everything becomes a dry run
     auto_print_enabled: bool = True
     printers: Printers | None = None  # None: the single .env printer (older setups, tests)
+    tag_colors: dict = field(default_factory=dict)  # this person's tags: name -> label color
+    wins: Callable[[], int] | None = None  # how many tasks they finished yesterday
     _tasks: TaskProvider | None = field(default=None, repr=False)
 
     @property
@@ -69,13 +73,13 @@ def _time(task: dict, h24: bool = False) -> str:
     return f"{hour % 12 or 12}:{minute}{'a' if hour < 12 else 'p'}"
 
 
-def _tag(task: dict, today: date) -> str:
+def _tag(task: dict, today: date, gentle: bool = False) -> str:
     due = task.get("due") or {}
     bits = []
     if due.get("date"):
         late = (today - date.fromisoformat(due["date"][:10])).days
         if late > 0:
-            bits.append(f"overdue {late}d")
+            bits.append(f"{'waiting' if gentle else 'overdue'} {late}d")
     if due.get("is_recurring"):
         bits.append("↻")
     return " ".join(bits)
@@ -113,14 +117,26 @@ def _target(ctx: Context, reason: str) -> tuple[PrinterConfig, str]:
     return (cfg or legacy_config(ctx.settings)), note
 
 
-def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[[bool], Image.Image],
-            label_id: str, manifest: list[dict], source: str, dry_run: bool | None, text: str = "") -> dict:
+def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[[bool], Image.Image | list],
+            label_id: str, manifest: list[dict], source: str, dry_run: bool | None, text: str = "",
+            color: str | None = None) -> dict:
+    """Fit, print and record a ticket. `draw` may return several images (stickers): each is
+    printed and cut on its own, and the record keeps one preview of them all."""
     dry = ctx.is_dry(dry_run)
-    cfg, note = _target(ctx, reason)
+    if color is None:
+        cfg, note = _target(ctx, reason)
+    else:
+        available = ctx.printers.all(ctx.household) if ctx.printers is not None else [legacy_config(ctx.settings)]
+        found, note = choose_color(available, ctx.prefs, color)
+        cfg = found or legacy_config(ctx.settings)
     red = cfg.ink == "black_red"
-    img = finalize(draw(red), cfg.width_px, red=red)
+    drawn = draw(red)
+    parts = [finalize(i, cfg.width_px, red=red) for i in (drawn if isinstance(drawn, list) else [drawn])]
     png = ctx.store.png_path(label_id)
-    sent = printer.print_image(img, ctx.settings, dry_run=dry, cfg=cfg)
+    sent = False
+    for part in parts:
+        sent = printer.print_image(part, ctx.settings, dry_run=dry, cfg=cfg)
+    img = parts[0] if len(parts) == 1 else stack_with_cuts([p.convert("RGB") for p in parts])
     record = {
         "id": label_id,
         "kind": kind,
@@ -135,6 +151,8 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
         "png": str(png),
         "manifest": manifest,
     }
+    if color is not None:
+        record["color"] = color
     if note:
         record["note"] = note
     if text:
@@ -150,12 +168,15 @@ def _task_label(ctx: Context, *, kind: str, title: str, subtitle: str, tasks: li
     max_rows = int(ctx.prefs.get("max_rows", MAX_ROWS))
     shown, waiting = tasks[:max_rows], tasks[max_rows:]
     h24 = bool(ctx.prefs.get("time_24h"))
+    gentle = bool(ctx.prefs.get("gentle_words", True))
     label_id = ctx.store.new_id(today)
     rows, manifest = [], []
     for n, task in enumerate(shown, start=1):
         due = task.get("due") or {}
+        tag, color = _first_tag(ctx, task)
         rows.append(DayRow(_clean(task["content"]), _time(task, h24), int(task.get("priority", 1)) >= 3,
-                           _tag(task, today), late=_is_late(task, today)))
+                           _tag(task, today, gentle), late=_is_late(task, today), color=color if tag else "",
+                           note=_next_step(task) if ctx.prefs.get("show_next_step", True) else ""))
         manifest.append({
             "row": n,
             "task_id": str(task["id"]),
@@ -168,11 +189,149 @@ def _task_label(ctx: Context, *, kind: str, title: str, subtitle: str, tasks: li
     footer = f"{kind}  {today.isoformat()}  made {made}"
     show_waiting = ctx.prefs.get("show_waiting", True)
     waiting_names = [_clean(t["content"]) for t in waiting] if show_waiting else None
+    footer_win = ""
+    if kind == "today" and ctx.prefs.get("show_wins", True) and ctx.wins is not None:
+        done = ctx.wins()
+        footer_win = f"Yesterday you finished {done}. ✓" if done else ""
 
     def draw(accent: bool) -> Image.Image:
         return render_day(title, subtitle, rows, code=label_id, footer=footer, waiting=waiting_names,
-                          accent=accent)
+                          accent=accent, waiting_head="Not today" if gentle else "Also waiting",
+                          win=footer_win)
     return _finish(ctx, reason=reason, kind=kind, title=title, draw=draw, label_id=label_id,
+                   manifest=manifest, source=source, dry_run=dry_run)
+
+
+def _first_tag(ctx: Context, task: dict) -> tuple[str, str]:
+    """The task's first tag that has a color; else, for a late task, the overdue color rule."""
+    for name in task.get("labels") or []:
+        color = ctx.tag_colors.get(str(name).lower())
+        if color:
+            return str(name).lower(), color
+    if _is_late(task, ctx.today()):
+        rules = ctx.prefs.get("color_rules") or {}
+        word = "waiting" if ctx.prefs.get("gentle_words", True) else "overdue"
+        return word, rules.get("overdue", "red") if rules.get("overdue", "red") != "any" else "red"
+    if task.get("labels"):
+        return str(task["labels"][0]).lower(), "white"
+    return "", "white"
+
+
+def _next_step(task: dict) -> str:
+    return next((s["text"] for s in task.get("steps") or [] if not s.get("done")), "")
+
+
+def _when(task: dict, today: date, h24: bool, gentle: bool) -> str:
+    due = task.get("due") or {}
+    if not due.get("date"):
+        return ""
+    day = date.fromisoformat(due["date"][:10])
+    late = (today - day).days
+    if late > 0:
+        return f"{'waiting' if gentle else 'overdue'} {late}d"
+    words = "today" if late == 0 else "tomorrow" if late == -1 else day.strftime("%a %b %-d")
+    t = _time(task, h24)
+    return f"{words} {t}".strip()
+
+
+def _sticker_rows(ctx: Context, tasks: list[dict]) -> tuple[list[Sticker], list[dict]]:
+    today = ctx.today()
+    h24, gentle = bool(ctx.prefs.get("time_24h")), bool(ctx.prefs.get("gentle_words", True))
+    stickers, manifest = [], []
+    for n, task in enumerate(tasks, start=1):
+        tag, color = _first_tag(ctx, task)
+        due = task.get("due") or {}
+        stickers.append(Sticker(n, _clean(task["content"]), tag, color, _when(task, today, h24, gentle),
+                                task.get("minutes"), _next_step(task), int(task.get("priority", 1)) >= 3))
+        manifest.append({"row": n, "task_id": str(task["id"]), "content": task["content"],
+                         "due_date": (due.get("date") or "")[:10] or None,
+                         "is_recurring": bool(due.get("is_recurring"))})
+    return stickers, manifest
+
+
+def _pick(ctx: Context, task_ids: list[str] | None, query: str | None) -> list[dict]:
+    if task_ids:
+        if len(task_ids) > MAX_STICKERS:
+            raise ValueError(f"{MAX_STICKERS} at a time, so the printer isn't tied up")
+        return [ctx.tasks.get_task(str(t)) for t in dict.fromkeys(task_ids)]
+    today = ctx.today()
+    tasks = ctx.tasks.filter_tasks(query) if query else ctx.tasks.today()
+    return sorted(tasks, key=lambda t: _sort_key(t, today))[:MAX_STICKERS]
+
+
+def print_stickers(ctx: Context, task_ids: list[str] | None = None, query: str | None = None,
+                   dry_run: bool | None = None, source: str = "manual") -> dict:
+    """One sticker per task, cut apart. Stickers go to the printer loaded with their tag's color
+    (one ticket per color); on plain labels the tag's pattern shows the color."""
+    tasks = _pick(ctx, task_ids, query)
+    if not tasks:
+        raise ValueError("No tasks to print. Pick some on My list, or add a few first.")
+    stickers, manifest = _sticker_rows(ctx, tasks)
+    groups: dict[str, list[int]] = {}
+    available = ctx.printers.all(ctx.household) if ctx.printers is not None else [legacy_config(ctx.settings)]
+    for i, s in enumerate(stickers):
+        cfg, _ = choose_color(available, ctx.prefs, s.color)
+        groups.setdefault(cfg.id if cfg else "", []).append(i)
+    results = []
+    for idx in groups.values():
+        label_id = ctx.store.new_id(ctx.today())
+        part = [Sticker(**{**stickers[i].__dict__, "number": n}) for n, i in enumerate(idx, start=1)]
+        rows = [{**manifest[i], "row": n} for n, i in enumerate(idx, start=1)]
+        color = part[0].color if len({s.color for s in part}) == 1 else "white"
+
+        def draw(accent: bool, part=part, label_id=label_id) -> list[Image.Image]:
+            return [render_sticker(s, label_id) for s in part]
+        title = f"{len(part)} sticker{'s' * (len(part) != 1)}"
+        results.append(_finish(ctx, reason="task", kind="stickers", title=title, draw=draw, label_id=label_id,
+                               manifest=rows, source=source, dry_run=dry_run, color=color))
+    return {**results[0], "also": results[1:]} if len(results) > 1 else results[0]
+
+
+def print_strips(ctx: Context, task_ids: list[str] | None = None, query: str | None = None,
+                 dry_run: bool | None = None, source: str = "manual") -> dict:
+    """One label of tear-off strips: tear along the dashes and stick each task where it happens."""
+    tasks = _pick(ctx, task_ids, query)
+    stickers, manifest = _sticker_rows(ctx, tasks)
+    today = ctx.today()
+    label_id = ctx.store.new_id(today)
+
+    def draw(accent: bool) -> Image.Image:
+        return render_strips("Tear-off", today.strftime("%a %b %-d"), stickers, label_id)
+    return _finish(ctx, reason="strips", kind="strips", title="Tear-off strips", draw=draw, label_id=label_id,
+                   manifest=manifest, source=source, dry_run=dry_run)
+
+
+def one_thing(ctx: Context) -> dict | None:
+    """What to do now: the first task today's ticket would list."""
+    today = ctx.today()
+    tasks = sorted(ctx.tasks.today(), key=lambda t: _sort_key(t, today))
+    return tasks[0] if tasks else None
+
+
+def print_focus(ctx: Context, task_id: str | None = None, dry_run: bool | None = None,
+                source: str = "manual") -> dict:
+    """Just one thing: one task, big, with its tiny steps."""
+    task = ctx.tasks.get_task(task_id) if task_id else one_thing(ctx)
+    if task is None:
+        raise ValueError("Nothing due today. Pick a task on My list to focus on.")
+    today = ctx.today()
+    h24, gentle = bool(ctx.prefs.get("time_24h")), bool(ctx.prefs.get("gentle_words", True))
+    tag, color = _first_tag(ctx, task)
+    steps = [s["text"] for s in task.get("steps") or [] if not s.get("done")]
+    minutes = task.get("minutes")
+    start_by = ""
+    if minutes and len(((task.get("due") or {}).get("date") or "")) >= 16:
+        due = datetime.fromisoformat(task["due"]["date"][:19]) - timedelta(minutes=int(minutes))
+        start_by = f"{due:%H:%M}" if h24 else f"{due.hour % 12 or 12}:{due:%M}{'a' if due.hour < 12 else 'p'}"
+    label_id = ctx.store.new_id(today)
+    due = task.get("due") or {}
+    manifest = [{"row": 1, "task_id": str(task["id"]), "content": task["content"],
+                 "due_date": (due.get("date") or "")[:10] or None, "is_recurring": bool(due.get("is_recurring"))}]
+
+    def draw(accent: bool) -> Image.Image:
+        return render_focus(_clean(task["content"]), steps, label_id, tag, color,
+                            _when(task, today, h24, gentle), minutes, start_by)
+    return _finish(ctx, reason="focus", kind="focus", title=task["content"], draw=draw, label_id=label_id,
                    manifest=manifest, source=source, dry_run=dry_run)
 
 

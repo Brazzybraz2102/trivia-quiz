@@ -58,12 +58,14 @@ def world(ctx):
     return ctx, a, apps, app, login
 
 
-def test_not_connected_is_a_clear_409(world):
+def test_everyone_has_their_own_list_without_linking_an_app(world):
     ctx, a, apps, app, login = world
     sam = login("sam", "sam password")
-    r = sam.post("/print/today", json={})
-    assert r.status_code == 409 and "Connect your to-do app" in r.json()["detail"]
     assert sam.get("/connection").json() == {"connected": False}
+    r = sam.post("/print/today", json={})
+    assert r.status_code == 200 and r.json()["manifest"] == []
+    sam.post("/list", json={"content": "Water plants", "due_date": ctx.today().isoformat()})
+    assert [m["content"] for m in sam.post("/print/today", json={}).json()["manifest"]] == ["Water plants"]
 
 
 def test_connect_checks_first_and_never_stores_the_token_in_clear(world):
@@ -122,7 +124,8 @@ def test_home_assistant_and_legacy_token_act_as_the_owner(world):
     r = client.post("/print/today", json={}, headers=H).json()
     assert r["by"] == "mike" and r["manifest"][0]["content"].startswith("legacy-env")
     # ...but the .env token never serves anyone else.
-    assert login("sam", "sam password").post("/print/today", json={}).status_code == 409
+    other = login("sam", "sam password").post("/print/today", json={}).json()
+    assert not any("legacy-env" in m["content"] for m in other["manifest"])
     assert login("mike", "mike password").get("/connection").json()["legacy"] is True
 
 

@@ -43,8 +43,8 @@ def test_first_account_is_superadmin(ctx):
 def test_settings_roundtrip_and_validation(ctx):
     setup(ctx)
     c = login(ctx, "tester", "tester pass")
-    assert c.get("/settings").json()["max_rows"] == 10
-    assert c.patch("/settings", json={"max_rows": 5, "time_24h": True}).json()["max_rows"] == 5
+    assert c.get("/settings").json()["max_rows"] == 5
+    assert c.patch("/settings", json={"max_rows": 7, "time_24h": True}).json()["max_rows"] == 7
     assert c.patch("/settings", json={"max_rows": 99}).status_code == 400
     assert c.patch("/settings", json={"evil": 1}).status_code == 400
     assert c.patch("/settings", json={"confidence": 0.2}).status_code == 400

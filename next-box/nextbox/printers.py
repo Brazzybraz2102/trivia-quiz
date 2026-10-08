@@ -25,6 +25,8 @@ REASONS = {
     "task": "Single task",
     "note": "Notes",
     "new_task": "New task from the hotkey or web",
+    "focus": "Just one thing",
+    "strips": "Tear-off strips",
 }
 DEFAULT_RULES = {"overdue": "red"}
 
@@ -63,6 +65,10 @@ def validate(data: dict) -> PrinterConfig:
     ink = data.get("ink", "black")
     if ink not in ("black", "black_red") or (ink == "black_red" and driver != "brother_ql"):
         raise PrinterError("black+red ink is only for Brother QL printers with a black+red roll")
+    if ink == "black_red" and not str(data.get("model") or "QL-1110NWB").upper().startswith("QL-8"):
+        # Only the QL-800 series has the second (red) print head; a QL-1100/1110 prints black only.
+        raise PrinterError("only the Brother QL-800, QL-810W and QL-820NWB print red. "
+                           "Other Brother models print black only; use colored label rolls instead")
     try:
         width = int(data.get("width_px") or DRIVERS[driver]["width"])
         dpi = int(data.get("dpi") or DRIVERS[driver]["dpi"])
@@ -143,14 +149,20 @@ class Printers:
 
 def choose(printers: list[PrinterConfig], prefs: dict, reason: str) -> tuple[PrinterConfig | None, str]:
     """Pick the printer for this ticket. Returns (printer, note for the person or "")."""
+    rules = {**DEFAULT_RULES, **(prefs.get("color_rules") or {})}
+    return choose_color(printers, prefs, rules.get(reason, "any"))
+
+
+def choose_color(printers: list[PrinterConfig], prefs: dict, want: str | None) -> tuple[PrinterConfig | None, str]:
+    """The printer loaded with `want` labels, else the person's default printer (with a note)."""
     if not printers:
         return None, ""
-    rules = {**DEFAULT_RULES, **(prefs.get("color_rules") or {})}
-    want = rules.get(reason, "any")
     default = next((p for p in printers if p.id == prefs.get("default_printer")), printers[0])
     if want in ("any", "", None):
         return default, ""
     matches = [p for p in printers if p.stock_color == want]
     if matches:
         return (default if default in matches else matches[0]), ""
+    if want == "white":
+        return default, ""  # plain labels: the pattern shows the tag
     return default, f"No printer has {want} labels loaded, so this went to {default.name}."

@@ -135,7 +135,7 @@ def test_first_run_turns_env_printer_into_the_list(tmp_path, ctx):
 @pytest.fixture
 def two_printers(ctx, tmp_path):
     reg = Printers(tmp_path / "p", ctx.settings)
-    office = reg.add({"name": "Office QL", "driver": "brother_ql", "address": "192.168.1.50", "ink": "black_red"})
+    office = reg.add({"name": "Office QL", "driver": "brother_ql", "address": "192.168.1.50", "ink": "black_red", "model": "QL-820NWB"})
     red = reg.add({"name": "Red roll", "driver": "escpos", "address": "192.168.1.60", "stock_color": "red"})
     return dataclasses.replace(ctx, printers=reg), office, red
 

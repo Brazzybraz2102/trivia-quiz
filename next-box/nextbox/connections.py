@@ -1,4 +1,4 @@
-"""Each person's to-do app connection: connect, check, disconnect, and build their provider."""
+"""Each person's tasks: their built-in list, plus an optional linked app (connect, check, disconnect)."""
 from __future__ import annotations
 
 import time
@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from .auth import Accounts
 from .config import Settings
+from .mylist import LocalTasks, Merged
 from .providers import READY, ProviderError, TaskProvider, build_provider, secret_fields
 from .vault import Vault
 
@@ -27,6 +28,16 @@ class Connections:
         self.builder = builder
 
     def provider_for(self, username: str) -> TaskProvider:
+        """Everyone has the built-in list; a linked app adds its tasks next to it."""
+        local = LocalTasks(self.accounts.db, username, self.accounts.household_of(username) or "home")
+        try:
+            linked = self.linked_for(username)
+        except NotConnected:
+            linked = None
+        prefs = (self.accounts.get(username) or {}).get("prefs") or {}
+        return Merged(local, linked, new_tasks_to=prefs.get("new_tasks_to", "nextbox"))
+
+    def linked_for(self, username: str) -> TaskProvider:
         conn = self.accounts.connection(username)
         if conn:
             secrets = self.vault.open(conn["secret"]) if conn.get("secret") else {}

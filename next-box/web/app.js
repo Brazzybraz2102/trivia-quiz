@@ -63,6 +63,7 @@ async function boot() {
   refreshStatus();
   loadConnection();
   loadLabels();
+  loadList();
   $("#noticeText").textContent = me.data_notice;
   $("#noticeWhen").textContent = me.consented ? `You accepted this on ${when(me.consented_at)}.` : "";
   if (!me.consented) { $("#noticeBody").textContent = me.data_notice; $("#noticeDialog").showModal(); }
@@ -206,8 +207,7 @@ async function loadConnection() {
   } catch (e) { $("#appStatus").textContent = e.message; return; }
   const ready = providers.filter((p) => p.status === "ready");
   const spec = providers.find((p) => p.key === conn.provider);
-  $("#notConnected").hidden = !!conn.connected;
-  $$(".appName").forEach((el) => el.textContent = conn.connected ? conn.name : "your to-do app");
+  $$(".appName").forEach((el) => el.textContent = conn.connected ? conn.name : "my list");
   $("#filterHelp").textContent = spec?.filter_help || "";
   if (conn.connected) {
     $("#appStatus").innerHTML = `Connected to <b>${esc(conn.name)}</b>${conn.account ? ` as ${esc(conn.account)}` : ""}.
@@ -254,7 +254,6 @@ $("#provGo").onclick = async () => {
   } catch (e) { $("#provMsg").textContent = e.message; }
   finally { $("#provGo").disabled = false; }
 };
-$("#goConnect").onclick = () => { $("nav button[data-tab=settings]").click(); $("#appCard").scrollIntoView({ behavior: "smooth" }); };
 
 $("#loginForm").onsubmit = async (e) => {
   e.preventDefault();
@@ -276,7 +275,7 @@ $("#mustForm").onsubmit = async (e) => {
 $("#logout").onclick = async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); showLogin("Signed out."); };
 
 // ---------------------------------------------------------------- tabs
-const loaders = { printed: loadHistory, settings: () => { loadSessions(); loadLabels(); }, admin: () => { loadAdmin(); loadPrinters(); },
+const loaders = { mylist: () => loadList(), printed: loadHistory, settings: () => { loadSessions(); loadLabels(); loadTags(); }, admin: () => { loadAdmin(); loadPrinters(); },
                   debug: loadDebug, board: () => loadBoard(), usage: () => loadUsage() };
 $$("nav button").forEach((b) => b.onclick = () => {
   $$("nav button").forEach((x) => x.classList.toggle("on", x === b));
@@ -317,7 +316,6 @@ $$("[data-act]").forEach((b) => b.onclick = async () => {
   try { showPrint(await api(routes[act][0], { method: "POST", json: routes[act][1] })); }
   catch (e) {
     $("#printResult").hidden = false; $("#printResult").innerHTML = `<span class="err">${esc(e.message)}</span>`;
-    if (e.message.startsWith("Connect your to-do app")) loadConnection();
   }
   finally { b.disabled = false; }
 });
@@ -677,3 +675,216 @@ async function loadEvents() {
 $("#evGo").onclick = loadEvents;
 
 boot();
+
+
+// ---------------------------------------------------------------- My list
+let listData = { tasks: [], linked: [], tags: [] };
+let picked = new Set();
+let showingDone = false;
+let skipped = new Set();  // "Not now" on this device, until the page reloads
+const tagColor = (name) => (listData.tags.find((t) => t.name === name) || {}).color || "white";
+const tagChip = (name) => { const c = tagColor(name); return `<span class="tag tc-${esc(c)}${c === "red" ? " solid" : ""}">${esc(name)}</span>`; };
+const today = () => new Date().toLocaleDateString("en-CA");  // YYYY-MM-DD, local
+
+function whenText(t) {
+  if (!t.due) return "";
+  const d = t.due.date.slice(0, 10), now = today();
+  const time = t.due.date.length > 10 ? " " + t.due.date.slice(11, 16) : "";
+  if (d < now) {
+    const days = Math.round((new Date(now) - new Date(d)) / 86400000);
+    return `${me?.prefs?.gentle_words === false ? "overdue" : "waiting"} ${days}d`;
+  }
+  if (d === now) return "today" + time;
+  return new Date(d + "T12:00").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + time;
+}
+
+function taskRow(t) {
+  const steps = t.steps || [];
+  const doneSteps = steps.filter((s) => s.done).length;
+  const meta = [whenText(t), t.repeat ? "↻ " + t.repeat : "", t.minutes ? `~${t.minutes}m` : "",
+                steps.length ? `steps ${doneSteps}/${steps.length}` : "", t.source && t.source !== "nextbox" ? "in " + (listData.linked_name || t.source) : ""]
+    .filter(Boolean).map(esc).join(" · ");
+  const local = String(t.id).startsWith("nb:");
+  return `<div class="task" data-id="${esc(t.id)}">
+    ${t.done ? "" : `<input type="checkbox" class="pick" aria-label="Pick for printing" ${picked.has(t.id) ? "checked" : ""}>`}
+    <div class="body">
+      <div class="text${t.priority >= 3 ? " urgent" : ""}">${(t.labels || []).map(tagChip).join("")}${t.priority >= 3 ? "! " : ""}${esc(t.content)}</div>
+      ${meta ? `<div class="meta">${meta}</div>` : ""}
+    </div>
+    <div class="acts">
+      ${t.done ? (local ? `<button class="plain small" data-reopen>Undo</button>` : "") :
+        `${local ? `<button class="plain small" data-edit aria-label="Edit">Edit</button>` : ""}<button class="done" data-done aria-label="Done">✓</button>`}
+    </div></div>`;
+}
+
+function renderList() {
+  const now = today();
+  const open = listData.tasks.filter((t) => !t.done);
+  const groups = [
+    ["Today", open.filter((t) => t.due && t.due.date.slice(0, 10) <= now)],
+    ["Coming up", open.filter((t) => t.due && t.due.date.slice(0, 10) > now)],
+    ["Someday", open.filter((t) => !t.due)],
+    [`From ${listData.linked_name || "linked app"} (today)`, listData.linked || []],
+    ["Done", showingDone ? listData.tasks.filter((t) => t.done) : []],
+  ];
+  const html = groups.filter(([, ts]) => ts.length)
+    .map(([name, ts]) => `<div class="group">${esc(name)} (${ts.length})</div>${ts.map(taskRow).join("")}`).join("");
+  $("#listBody").innerHTML = html || `<p class="muted">Your list is empty. Use the brain dump above to get things out of your head.</p>`;
+  $("#listBody").classList.toggle("muted", !html);
+  $("#pickCount").textContent = picked.size ? `${picked.size} picked` : "Nothing picked: prints today's tasks";
+  renderNow();
+}
+
+function renderNow() {
+  const open = [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])];
+  let t = listData.one_thing && !skipped.has(listData.one_thing.id) ? listData.one_thing : null;
+  if (!t) t = open.find((x) => x.due && x.due.date.slice(0, 10) <= today() && !skipped.has(x.id)) || null;
+  $("#nowCard").dataset.id = t ? t.id : "";
+  $("#nowText").textContent = t ? t.content : (open.length ? "Nothing else is due today. Pick anything, or rest." : "Nothing due. Nice.");
+  const step = t && (t.steps || []).find((s) => !s.done);
+  $("#nowStep").textContent = step ? "Next tiny step: " + step.text : (t ? [whenText(t), t.minutes ? `about ${t.minutes} min` : ""].filter(Boolean).join(" · ") : "");
+  for (const b of ["#nowDone", "#nowPrint", "#nowSkip"]) $(b).disabled = !t;
+}
+
+async function loadList() {
+  try { listData = await api("/list" + (showingDone ? "?include_done=true" : "")); }
+  catch (e) { $("#listBody").textContent = e.message; return; }
+  $("#linkedErr").hidden = !listData.linked_error;
+  $("#linkedErr").textContent = listData.linked_error || "";
+  const ids = new Set([...listData.tasks, ...(listData.linked || [])].map((t) => t.id));
+  picked = new Set([...picked].filter((id) => ids.has(id)));
+  renderList();
+}
+
+$("#listBody").addEventListener("change", (e) => {
+  if (!e.target.classList.contains("pick")) return;
+  const id = e.target.closest(".task").dataset.id;
+  e.target.checked ? picked.add(id) : picked.delete(id);
+  renderList();
+});
+$("#listBody").addEventListener("click", async (e) => {
+  const row = e.target.closest(".task");
+  if (!row) return;
+  const id = row.dataset.id;
+  if (e.target.matches("[data-done]")) { await markDone(id); }
+  else if (e.target.matches("[data-reopen]")) {
+    try { await api(`/list/${encodeURIComponent(id)}/reopen`, { method: "POST" }); loadList(); } catch (err) { toast(err.message); }
+  }
+  else if (e.target.matches("[data-edit]")) openTask(listData.tasks.find((t) => t.id === id));
+});
+
+async function markDone(id) {
+  try {
+    await api(`/list/${encodeURIComponent(id)}/done`, { method: "POST" });
+    picked.delete(id);
+    toast(["Done ✓", "Nice. ✓", "That counts. ✓", "One less thing ✓"][Math.floor(Math.random() * 4)]);
+    loadList();
+  } catch (err) { toast(err.message); }
+}
+
+$("#nowDone").onclick = () => $("#nowCard").dataset.id && markDone($("#nowCard").dataset.id);
+$("#nowSkip").onclick = () => { skipped.add($("#nowCard").dataset.id); listData.one_thing = null; renderNow(); };
+$("#nowPrint").onclick = () => printFrom("/print/focus", { task_id: $("#nowCard").dataset.id }, $("#nowPrint"));
+
+async function printFrom(path, body, button) {
+  const dry_run = $("#dry").checked;
+  if (!dry_run && !confirm("Send this to the printer?")) return;
+  button.disabled = true;
+  const box = $("#listResult");
+  try {
+    const r = await api(path, { method: "POST", json: { ...body, dry_run } });
+    box.hidden = false;
+    const one = (t) => `<p><b>${t.status === "printed" ? "Printed" : "Preview"}</b> #${esc(t.id)} · ${t.manifest.length} task${t.manifest.length === 1 ? "" : "s"}
+      ${t.printer ? ` · ${esc(t.printer.name)}` : ""}</p>${t.note ? `<p class="muted">${esc(t.note)}</p>` : ""}<img src="${png(t.id)}" alt="label preview">`;
+    box.innerHTML = [r, ...(r.also || [])].map(one).join("<hr>");
+    box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (e) { box.hidden = false; box.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  finally { button.disabled = false; }
+}
+$("#printStickers").onclick = () => printFrom("/print/stickers", picked.size ? { task_ids: [...picked] } : {}, $("#printStickers"));
+$("#printStrips").onclick = () => printFrom("/print/strips", picked.size ? { task_ids: [...picked] } : {}, $("#printStrips"));
+$("#showDone").onclick = () => { showingDone = !showingDone; $("#showDone").textContent = showingDone ? "Hide done" : "Show done"; loadList(); };
+
+$("#dumpGo").onclick = async () => {
+  const text = $("#dumpText").value;
+  if (!text.trim()) return toast("Nothing to add yet");
+  $("#dumpGo").disabled = true;
+  try {
+    const r = await api("/list/dump", { method: "POST", json: { text } });
+    $("#dumpText").value = "";
+    $("#dumpMsg").textContent = `Added ${r.added.length}. Your head has more room now.`;
+    loadList();
+  } catch (e) { $("#dumpMsg").textContent = e.message; }
+  finally { $("#dumpGo").disabled = false; }
+};
+
+// edit dialog
+let editing = null;
+function openTask(t) {
+  editing = t;
+  $("#tdTitle").textContent = "Edit task";
+  $("#tdContent").value = t.content;
+  $("#tdDate").value = t.due ? t.due.date.slice(0, 10) : "";
+  $("#tdTime").value = t.due && t.due.date.length > 10 ? t.due.date.slice(11, 16) : "";
+  $("#tdMinutes").value = t.minutes || "";
+  $("#tdRepeat").value = t.repeat || "";
+  $("#tdPriority").value = t.priority >= 4 ? "4" : t.priority >= 3 ? "3" : "1";
+  $("#tdSteps").value = (t.steps || []).map((s) => s.text).join("\n");
+  const on = new Set(t.labels || []);
+  $("#tdTags").innerHTML = listData.tags.map((g) => `<button type="button" data-tag="${esc(g.name)}" class="${on.has(g.name) ? "on" : ""}">${esc(g.name)}</button>`).join("")
+    || `<span class="muted">No tags yet. Add some in Settings.</span>`;
+  $("#taskDialog").showModal();
+}
+$("#tdTags").onclick = (e) => { const b = e.target.closest("[data-tag]"); if (b) b.classList.toggle("on"); };
+$("#tdCancel").onclick = () => { editing = null; };
+$("#taskForm").onsubmit = async (e) => {
+  if (e.submitter?.value !== "save" || !editing) return;
+  e.preventDefault();
+  const old = new Map((editing.steps || []).map((s) => [s.text, s.done]));
+  const body = {
+    content: $("#tdContent").value,
+    due_date: $("#tdDate").value || null,
+    due_time: $("#tdDate").value && $("#tdTime").value ? $("#tdTime").value : null,
+    minutes: $("#tdMinutes").value ? Number($("#tdMinutes").value) : null,
+    repeat: $("#tdDate").value ? ($("#tdRepeat").value || null) : null,
+    priority: Number($("#tdPriority").value),
+    tags: $$("#tdTags [data-tag].on").map((b) => b.dataset.tag),
+    steps: $("#tdSteps").value.split("\n").map((x) => x.trim()).filter(Boolean).map((text) => ({ text, done: !!old.get(text) })),
+  };
+  try { await api(`/list/${encodeURIComponent(editing.id)}`, { method: "PATCH", json: body }); $("#taskDialog").close(); toast("Saved"); loadList(); }
+  catch (err) { toast(err.message); }
+};
+$("#tdDelete").onclick = async () => {
+  if (!editing || !confirm(`Delete "${editing.content}"? This can't be undone.`)) return;
+  try { await api(`/list/${encodeURIComponent(editing.id)}?confirm=true`, { method: "DELETE" }); $("#taskDialog").close(); toast("Deleted"); loadList(); }
+  catch (err) { toast(err.message); }
+};
+$("#tdFocus").onclick = () => { const id = editing?.id; $("#taskDialog").close(); if (id) printFrom("/print/focus", { task_id: id }, $("#nowPrint")); };
+
+// tags (Settings)
+async function loadTags() {
+  let r;
+  try { r = await api("/tags"); } catch (e) { $("#tagList").textContent = e.message; return; }
+  listData.tags = r.tags;
+  const opts = (sel) => r.colors.map((c) => `<option value="${esc(c)}" ${c === sel ? "selected" : ""}>${esc(c)}</option>`).join("");
+  $("#newTagColor").innerHTML = opts("yellow");
+  $("#tagList").innerHTML = r.tags.map((t) => `<div class="tagrow" data-name="${esc(t.name)}">${tagChip(t.name)}
+      <select aria-label="Color for ${esc(t.name)}">${opts(t.color)}</select>
+      <button class="plain small" data-del style="margin-left:auto">Remove</button></div>`).join("") || `<p class="muted">No tags.</p>`;
+}
+$("#tagList").addEventListener("change", async (e) => {
+  const row = e.target.closest(".tagrow");
+  try { await api(`/tags/${encodeURIComponent(row.dataset.name)}`, { method: "PUT", json: { color: e.target.value } }); loadTags(); }
+  catch (err) { toast(err.message); }
+});
+$("#tagList").addEventListener("click", async (e) => {
+  if (!e.target.matches("[data-del]")) return;
+  const name = e.target.closest(".tagrow").dataset.name;
+  if (!confirm(`Remove the tag "${name}"? Tasks keep their other tags.`)) return;
+  try { await api(`/tags/${encodeURIComponent(name)}`, { method: "DELETE" }); loadTags(); } catch (err) { toast(err.message); }
+});
+$("#addTag").onclick = async () => {
+  try { await api(`/tags/${encodeURIComponent($("#newTag").value)}`, { method: "PUT", json: { color: $("#newTagColor").value } });
+        $("#newTag").value = ""; loadTags(); }
+  catch (err) { toast(err.message); }
+};

@@ -51,6 +51,18 @@ def _next_occurrence(component, due):
     return nxt.date() if is_date else nxt
 
 
+def _categories(component) -> list[str]:
+    """CATEGORIES may appear once or several times, each holding one or more names."""
+    raw = component.get("categories")
+    if raw is None:
+        return []
+    out = []
+    for item in raw if isinstance(raw, list) else [raw]:
+        cats = getattr(item, "cats", None)
+        out += [str(c) for c in cats] if cats is not None else [s.strip() for s in str(item).split(",")]
+    return [c for c in out if c]
+
+
 class CalDAVTasks(TaskProvider):
     key = "caldav"
 
@@ -110,6 +122,7 @@ class CalDAVTasks(TaskProvider):
             "description": str(c.get("description") or ""),
             "priority": _priority(c.get("priority")),
             "due": {"date": _due_string(due), "is_recurring": "rrule" in c} if due else None,
+            "labels": _categories(c),
         }
 
     def _pending(self, cals) -> list[dict]:
