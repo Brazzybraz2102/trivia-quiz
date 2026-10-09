@@ -199,6 +199,21 @@ class HouseholdBody(BaseModel):
     name: str
 
 
+class SignupBody(BaseModel):
+    username: str
+    password: str
+    invite: str
+    email: str | None = None
+
+
+class InviteBody(BaseModel):
+    days: int = 7
+    beta: bool = True
+    note: str = ""
+    own_household: bool = False
+    household_id: str | None = None
+
+
 @dataclasses.dataclass
 class Caller:
     name: str              # username, or "key" for Home Assistant/scripts
@@ -400,6 +415,30 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             return {**out, "token": token}
         _set_cookie(response, request, token)
         return out
+
+    @app.post("/auth/signup")
+    def signup(body: SignupBody, request: Request, response: Response):
+        """Join with an invite code. There's no open sign-up: every new account needs a code."""
+        client = request.client.host if request.client else "?"
+        if accounts.too_many_failures(client):
+            raise HTTPException(429, "too many attempts; wait 5 minutes")
+        if not body.invite.strip():
+            raise HTTPException(400, "you need an invite code to join")
+        try:
+            user = accounts.sign_up(body.username, body.password, email=body.email or None, invite=body.invite)
+        except AuthError as exc:
+            if "invite" in str(exc):
+                accounts.record_failure(client)  # guessing codes counts toward the lockout
+            events.log(body.username.strip().lower()[:32] or "?", "signup", ok=False, kind="auth",
+                       detail={"ip": client}, error=str(exc))
+            raise HTTPException(400, str(exc)) from exc
+        name = user["username"]
+        events.log(name, "signup", kind="auth", detail={"ip": client, "household": user["household_id"]},
+                   household=user["household_id"])
+        token = accounts.create_session(name, client, request.headers.get("user-agent", ""))
+        accounts.touch_login(name)
+        _set_cookie(response, request, token)
+        return {"username": name, "role": user["role"]}
 
     def _set_cookie(response: Response, request: Request, token: str) -> None:
         response.set_cookie(COOKIE, token, max_age=30 * 86400, httponly=True, samesite="strict",
@@ -927,6 +966,37 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             evs = [{k: v for k, v in e.items() if k != "trace"} for e in evs]
         return evs
 
+    # ------------------------------------------------------------- invites
+    @app.get("/admin/invites")
+    def list_invites(caller: Caller = Depends(admin_only)):
+        homes = {h["id"]: h["name"] for h in accounts.households()}
+        return [{**i, "household": homes.get(i["household_id"], i["household_id"])}
+                for i in accounts.invites(scope(caller))]
+
+    @app.post("/admin/invites")
+    def make_invite(body: InviteBody, caller: Caller = Depends(admin_only)):
+        home = body.household_id or caller.household
+        if caller.role != "superadmin" and (body.own_household or home != caller.household):
+            raise HTTPException(403, "household admins invite people into their own household only")
+        if not accounts.household(home):
+            raise HTTPException(400, "no such household")
+        try:
+            code = accounts.create_invite(home, caller.name, days=body.days, beta=body.beta, note=body.note,
+                                          own_household=body.own_household)
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        audit(caller, "create_invite", household_id=home, own_household=body.own_household, days=body.days)
+        return {"code": code, "link": f"/app/#join={code}"}
+
+    @app.delete("/admin/invites/{code}")
+    def revoke_invite(code: str, caller: Caller = Depends(admin_only)):
+        mine = {i["code"] for i in accounts.invites(scope(caller))}
+        if code.strip().upper() not in mine:
+            raise HTTPException(404, "no such invite")
+        accounts.revoke_invite(code)
+        audit(caller, "revoke_invite")
+        return {"ok": True}
+
     @app.get("/admin/feedback")
     def admin_feedback(caller: Caller = Depends(admin_only)):
         return feedback_store.board(caller.name, include_hidden=True)
@@ -964,6 +1034,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             live = dict(conn.execute(_select(_db.sessions.c.username, _func.count()).where(
                 _db.sessions.c.expires > int(time.time())).group_by(_db.sessions.c.username)).all())
         homes = {h["id"]: h["name"] for h in accounts.households()}
+        protected_name = accounts.protected()
         rows = []
         for u in accounts.all_users():
             conn_ = u.get("connection") or {}
@@ -977,6 +1048,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 "open_tasks": open_tasks.get(u["username"], 0), "prints_30d": prints.get(u["username"], 0),
                 "errors_7d": errors.get(u["username"], 0),
                 "consented": consent.get("version") == DATA_NOTICE_VERSION,
+                "protected": u["username"] == protected_name,
                 "active_7d": bool(u["last_login"] and u["last_login"] > week),
             })
         return rows

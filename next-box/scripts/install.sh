@@ -9,7 +9,7 @@ cd "$HERE"
 python3 -m venv .venv
 .venv/bin/pip install -q --upgrade pip setuptools
 # constraints.txt pins every package to the versions this release was tested with.
-.venv/bin/pip install -q -c constraints.txt -e '.[dev]'
+.venv/bin/pip install -q -c constraints.txt -e '.[dev,postgres]'
 .venv/bin/python -m pytest -q
 
 if [[ ! -f .env ]]; then

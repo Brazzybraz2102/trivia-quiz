@@ -140,6 +140,17 @@
     <label>Password<input type="password" id="pass" name="password" autocomplete="current-password" required></label>
     <div class="row"><button class="go" type="submit">Sign in</button></div>
   </form>
+  <p class="muted" style="text-align:center"><button class="linkish" id="showJoin">Have an invite code? Join</button></p>
+  <form class="card" id="joinForm" hidden autocomplete="on">
+    <h2>Join Next Box</h2>
+    <p class="muted">Someone gave you an invite code. It works once.</p>
+    <label>Invite code<input type="text" id="joinCode" autocapitalize="characters" placeholder="3F9A-07C2-B1E4" required></label>
+    <label>Pick a username<input type="text" id="joinUser" autocomplete="username" autocapitalize="none" placeholder="lowercase, e.g. sam" required></label>
+    <label>Email (optional, you can sign in with it too)<input type="email" id="joinEmail" autocomplete="email" autocapitalize="none"></label>
+    <label>Password (8+ characters)<input type="password" id="joinPass" autocomplete="new-password" minlength="8" required></label>
+    <p class="err" id="joinMsg"></p>
+    <div class="row"><button class="go" type="submit">Create my account</button></div>
+  </form>
   <p class="muted" style="text-align:center"><button class="linkish" data-feedback>Having trouble? Send feedback</button></p>
 </div>
 
@@ -332,10 +343,26 @@
         <div class="row"><button class="go" id="npGo">Add printer</button><span class="err" id="npMsg"></span></div>
       </details>
     </div>
-    <div class="card"><h2>People</h2>
+    <div class="card"><h2>Invite people</h2>
+      <p class="muted">Make a one-time code. They open Next Box, tap "Have an invite code?", and pick their own username and password.</p>
+      <div class="field"><label for="ivNote">Who it's for (just for you)</label><input type="text" id="ivNote" maxlength="80" placeholder="Sam from work"></div>
+      <div class="row">
+        <label class="muted"><input type="checkbox" id="ivBeta" checked> beta tester</label>
+        <label class="muted" data-min="superadmin"><input type="checkbox" id="ivOwn"> their own household (own list, own printers)</label>
+      </div>
+      <div class="row">
+        <select id="ivHome" data-min="superadmin" aria-label="Household to join"></select>
+        <select id="ivDays" aria-label="Works for"><option value="1">works 1 day</option><option value="7" selected>works 7 days</option><option value="30">works 30 days</option></select>
+        <button class="go" id="ivGo">Make invite</button>
+      </div>
+      <div id="ivOut"></div>
+      <h3>Invites</h3>
+      <div id="ivList" class="muted">…</div>
+    </div>
+    <div class="card" id="peopleCard"><h2>People</h2>
       <div id="users">…</div>
     </div>
-    <div class="card"><h2>Add someone</h2>
+    <div class="card" id="addCard"><h2>Add someone</h2>
       <div class="row"><input type="text" id="nuName" placeholder="username" autocapitalize="none" style="max-width:220px">
         <select id="nuRole"><option value="user">user</option><option value="admin" data-min="superadmin">admin</option><option value="superadmin" data-min="superadmin">superadmin</option></select>
         <label class="muted"><input type="checkbox" id="nuBeta"> beta tester</label>

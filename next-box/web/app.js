@@ -58,6 +58,8 @@ async function boot() {
   $("#announce").textContent = me.announcement || "";
   $("#paused").hidden = !me.printing_paused;
   $$("[data-min]").forEach((el) => el.hidden = RANK[me.role] < RANK[el.dataset.min]);
+  // Superadmins manage people in the Users tab; household admins keep the simple list here.
+  for (const id of ["#peopleCard", "#addCard"]) $(id).hidden = me.role === "superadmin";
   $$("#nuRole option[data-min]").forEach((o) => o.disabled = RANK[me.role] < RANK[o.dataset.min]);
   loadPrefs(me.prefs);
   refreshStatus();
@@ -275,7 +277,7 @@ $("#mustForm").onsubmit = async (e) => {
 $("#logout").onclick = async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); showLogin("Signed out."); };
 
 // ---------------------------------------------------------------- tabs
-const loaders = { mylist: () => loadList(), printed: loadHistory, settings: () => { loadSessions(); loadLabels(); loadTags(); }, admin: () => { loadAdmin(); loadPrinters(); },
+const loaders = { mylist: () => loadList(), printed: loadHistory, settings: () => { loadSessions(); loadLabels(); loadTags(); }, admin: () => { loadAdmin(); loadPrinters(); loadInvites(); },
                   debug: loadDebug, board: () => loadBoard(), usage: () => loadUsage() };
 $$("nav button").forEach((b) => b.onclick = () => {
   $$("nav button").forEach((x) => x.classList.toggle("on", x === b));
@@ -922,7 +924,8 @@ async function loadSuperList() {
     const badges = [`<span class="badge ${u.role !== "user" ? "hot" : ""}">${esc(u.role)}</span>`,
       u.disabled && `<span class="badge bad">off</span>`, u.beta && `<span class="badge">beta</span>`,
       u.debug && `<span class="badge bad">debug</span>`, u.must_change && `<span class="badge">temp password</span>`,
-      u.errors_7d && `<span class="badge bad">${u.errors_7d} errors</span>`, !u.consented && `<span class="badge">notice pending</span>`]
+      u.errors_7d && `<span class="badge bad">${u.errors_7d} errors</span>`, !u.consented && `<span class="badge">notice pending</span>`,
+      u.protected && `<span class="badge hot">protected</span>`]
       .filter(Boolean).join(" ");
     return `<div class="urow" data-u="${esc(u.username)}">
       <input type="checkbox" aria-label="Select ${esc(u.username)}" ${suPicked.has(u.username) ? "checked" : ""}>
@@ -1005,8 +1008,9 @@ async function openUser(name) {
   $("#udHome").innerHTML = suHomes.map((h) => `<option value="${esc(h.id)}">${esc(h.name)}</option>`).join("");
   $("#udHome").value = u.household_id;
   $("#udOff").checked = u.disabled; $("#udBeta").checked = u.beta; $("#udDebug").checked = u.debug; $("#udTemp").checked = u.must_change;
-  const self = u.username === me.username;
-  $("#udOff").disabled = self; $("#udRole").disabled = self;
+  const self = u.username === me.username, locked = self || u.protected;
+  $("#udOff").disabled = locked; $("#udRole").disabled = locked;
+  if (u.protected) $("#udSub").textContent += " · protected admin: always a superadmin, can't be turned off or deleted";
   $("#udMsg").textContent = ""; $("#udTempOut").innerHTML = ""; $("#udConfirm").value = ""; $("#udDelete").disabled = true;
   $("#udBundle").href = `/super/users/${encodeURIComponent(u.username)}/bundle`;
   $("#udUnlink").disabled = !u.connection.connected || !!u.connection.legacy;
@@ -1054,7 +1058,7 @@ $("#udPrefs").onclick = () => confirm(`Put all of ${suOpen.username}'s settings 
   udDo(() => api(`${udPath()}/reset-settings`, { method: "POST" }), "Settings reset");
 $("#udUnlink").onclick = () => confirm(`Unlink ${suOpen.username}'s to-do app? Their built-in list stays. They can link it again in Settings.`) &&
   udDo(() => api(`${udPath()}/unlink`, { method: "POST" }), "Unlinked");
-$("#udConfirm").oninput = () => { $("#udDelete").disabled = $("#udConfirm").value.trim().toLowerCase() !== suOpen?.username || suOpen?.username === me.username; };
+$("#udConfirm").oninput = () => { $("#udDelete").disabled = $("#udConfirm").value.trim().toLowerCase() !== suOpen?.username || suOpen?.username === me.username || !!suOpen?.protected; };
 $("#udDelete").onclick = async () => {
   try { await api(`/admin/users/${encodeURIComponent(suOpen.username)}`, { method: "DELETE" }); toast(`Deleted ${suOpen.username}`);
         $("#userDialog").close(); loadSuper(); }
@@ -1062,3 +1066,72 @@ $("#udDelete").onclick = async () => {
 };
 $("#udClose").onclick = () => $("#userDialog").close();
 loaders.superusers = loadSuper;
+
+
+// ---------------------------------------------------------------- join with an invite
+function showJoin(code = "") {
+  $("#joinForm").hidden = false;
+  $("#loginForm").hidden = true;
+  $("#showJoin").textContent = "Already have an account? Sign in";
+  if (code) $("#joinCode").value = code;
+  ($("#joinCode").value ? $("#joinUser") : $("#joinCode")).focus();
+}
+$("#showJoin").onclick = () => {
+  if ($("#joinForm").hidden) return showJoin();
+  $("#joinForm").hidden = true; $("#loginForm").hidden = false; $("#showJoin").textContent = "Have an invite code? Join";
+};
+$("#joinForm").onsubmit = async (e) => {
+  e.preventDefault();
+  $("#joinMsg").textContent = "";
+  try {
+    await api("/auth/signup", { method: "POST", json: { invite: $("#joinCode").value, username: $("#joinUser").value,
+      email: $("#joinEmail").value || null, password: $("#joinPass").value } });
+    $("#joinPass").value = "";
+    history.replaceState(null, "", location.pathname);
+    boot();
+  } catch (err) { $("#joinMsg").textContent = err.message; }
+};
+{
+  const m = location.hash.match(/join=([A-Za-z0-9-]{4,20})/);
+  if (m) setTimeout(() => { if (!me) showJoin(m[1].toUpperCase()); }, 300);
+}
+
+// ---------------------------------------------------------------- invites (Admin tab)
+async function loadInvites() {
+  let list;
+  try { list = await api("/admin/invites"); } catch (e) { $("#ivList").textContent = e.message; return; }
+  if (me.role === "superadmin") {
+    try {
+      const homes = await api("/super/households");
+      const cur = $("#ivHome").value;
+      $("#ivHome").innerHTML = homes.map((h) => `<option value="${esc(h.id)}">join ${esc(h.name)}</option>`).join("");
+      $("#ivHome").value = cur || me.household_id;
+    } catch {}
+  }
+  $("#ivList").innerHTML = list.map((i) => `<div class="mini" data-code="${esc(i.code)}"><b>${esc(i.code)}</b>
+      · ${esc(i.note || "no note")} · ${i.own_household ? "own household" : "joins " + esc(i.household)}${i.beta ? " · beta" : ""}
+      · ${i.status === "used" ? "used by " + esc(i.used_by) : i.status === "expired" ? "expired" : "open until " + when(i.expires)}
+      ${i.status === "open" ? `<button class="linkish" data-revoke>cancel</button>` : ""}</div>`).join("") || "None yet.";
+}
+$("#ivOwn").onchange = () => { $("#ivHome").disabled = $("#ivOwn").checked; };
+$("#ivGo").onclick = async () => {
+  try {
+    const r = await api("/admin/invites", { method: "POST", json: { note: $("#ivNote").value, beta: $("#ivBeta").checked,
+      own_household: $("#ivOwn").checked, days: Number($("#ivDays").value),
+      household_id: me.role === "superadmin" ? $("#ivHome").value : null } });
+    const link = location.origin + r.link;
+    $("#ivOut").innerHTML = `<p>Send them this code or link. It works once.</p><div class="secret">${esc(r.code)}</div>
+      <div class="muted" style="word-break:break-all">${esc(link)}</div>
+      ${["localhost", "127.0.0.1", "::1"].includes(location.hostname) ? `<p class="err">That link only works on this computer, because you opened Next Box as "${esc(location.hostname)}". Send the code instead, or open Next Box at the phone address that <code>nextbox doctor</code> shows and make the invite there.</p>` : ""}
+      <div class="row"><button class="plain small" id="ivCopy">Copy link</button></div>`;
+    $("#ivCopy").onclick = () => navigator.clipboard?.writeText(link).then(() => toast("Copied"));
+    $("#ivNote").value = "";
+    loadInvites();
+  } catch (e) { toast(e.message); }
+};
+$("#ivList").addEventListener("click", async (e) => {
+  if (!e.target.matches("[data-revoke]")) return;
+  const code = e.target.closest("[data-code]").dataset.code;
+  if (!confirm(`Cancel invite ${code}?`)) return;
+  try { await api(`/admin/invites/${encodeURIComponent(code)}`, { method: "DELETE" }); loadInvites(); } catch (err) { toast(err.message); }
+});

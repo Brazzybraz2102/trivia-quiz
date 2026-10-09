@@ -20,7 +20,9 @@ Each person's to-do app ↔ Brother QL-1110NWB label printer, running on Mike's 
    or put in a debug bundle. The data dir is 700.
 6. **LAN only**: no cloud relay and no remote access. The server binds to 0.0.0.0:8787.
 7. **Sign-in**: people sign in to the web app with local accounts that live only on the desktop.
-   There's no web sign-up and no cloud identity provider. Home Assistant and scripts use the
+   New accounts need a one-time invite code (`/auth/signup`); there's no open sign-up and no
+   cloud identity provider. One account can be the **protected admin** (`nextbox user protect`):
+   it always stays an active superadmin and only the computer's CLI can change that. Home Assistant and scripts use the
    shared `X-NextBox-Key` header instead, and that key never reaches admin features.
 8. **Roles**: `user` < `admin` (support) < `superadmin` (debug). See §10.
 9. **Privacy between people**: each person prints, sees and reads back only their own tickets
@@ -378,4 +380,21 @@ here, and the last superadmin can't be demoted or turned off. Every change is an
 Endpoints: `GET /super/overview`, `GET /super/users`, `GET /super/users.csv`,
 `GET|PATCH /super/users/{u}`, `POST /super/users`, `POST /super/users/{u}/reset-settings`,
 `POST /super/users/{u}/unlink`, `POST /super/users/bulk`, `GET|POST /super/households`.
+
+## 19. Accounts, invites and the database server
+- **Protected admin**: `nextbox user protect <name>` (must be an active superadmin). Nobody can
+  demote, turn off or delete it from the web app or the normal CLI commands; `nextbox user
+  unprotect` (on the computer) lifts it.
+- **Who Home Assistant prints for**: `nextbox user owner <name>` (stored as `_print_owner`).
+  Default: the oldest active superadmin. Falls back to that if the chosen person is turned off.
+- **Invites**: admins make one-time codes in Admin → Invite people, or `nextbox invite`.
+  Options: beta tester, works 1/7/30 days, and (superadmin only) join a chosen household or get
+  their own household (they become its admin). Household admins invite into their own household
+  only. Wrong codes count toward the same 5-tries-per-5-minutes lockout as sign-in.
+- **The .env printer is the Home household's.** People in other households get previews until
+  their household adds a printer, so a tester can never print on Mike's printer by accident.
+- **Database server**: `scripts/setup-postgres.sh` installs PostgreSQL, makes a `nextbox` login
+  and `nextbox` + `nextbox_practice` databases, copies the SQLite data (`nextbox db copy-to`, which
+  refuses a non-empty target and resets id counters), and sets `DATABASE_URL`. New columns in
+  later versions are added automatically (`db._add_missing_columns`, nullable columns only).
 

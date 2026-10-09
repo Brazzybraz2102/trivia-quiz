@@ -18,7 +18,7 @@ def test_practice_database_is_full_of_fake_data(practice):
     data_dir, counts = practice
     assert counts["households"] == 4 and counts["users"] == 9
     assert counts["tickets"] > 50 and counts["events"] > 50 and counts["feedback"] == 4
-    assert (dbtools.practice_dir(data_dir) / "nextbox.db").exists()
+    assert dbtools.practice_exists(data_dir)
     # Building it again starts fresh instead of piling up.
     assert dbtools.build_practice(data_dir) == counts
 

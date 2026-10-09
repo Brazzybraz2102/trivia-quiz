@@ -307,6 +307,81 @@ that runs as its own server. Next Box already supports it: set
 this guide works there too, except the JSON functions (`record->>'reason'` instead of
 `json_extract`) and the date helpers.
 
+## 13. Your own PostgreSQL server
+
+SQLite is a file. **PostgreSQL** is a database *server*: a program that runs all the time, has its
+own logins, and lets many apps connect at once. Most real products use it, and the cloud services
+you'd use later (Supabase, Neon, AWS RDS, Google Cloud SQL) all run PostgreSQL, so everything here
+carries over.
+
+**Switch Next Box to it** (one time, about 5 minutes):
+
+```bash
+cd ~/next-box
+scripts/setup-postgres.sh
+```
+
+It installs PostgreSQL, creates a login called `nextbox` and two databases (`nextbox` for real,
+`nextbox_practice` for practice), copies everything from your SQLite file, and puts
+`DATABASE_URL` in `.env`. Your SQLite file stays where it was, as a backup.
+
+**Three ways in:**
+
+| Tool | How |
+|---|---|
+| `nextbox db` | same commands as before: `nextbox db demo`, `nextbox db sql --practice "..."` |
+| `psql` | `psql -h 127.0.0.1 -U nextbox nextbox_practice` (password: the one in `DATABASE_URL` in `.env`) |
+| pgAdmin or DBeaver | free apps; connect to host `127.0.0.1`, port `5432`, user `nextbox` |
+
+**psql survival kit** (these backslash commands are psql's own, not SQL):
+
+```text
+\dt              list tables              \d users        columns and indexes of a table
+\x               tall/wide output toggle  \timing         show how long each query takes
+\l               list databases           \c nextbox      switch database
+\q               quit                     ;               every SQL statement ends with one
+```
+
+**Same ideas, different spelling.** The lessons above use SQLite. On PostgreSQL:
+
+| SQLite | PostgreSQL |
+|---|---|
+| `json_extract(record, '$.reason')` | `record->>'reason'` |
+| `json_array_length(json_extract(record, '$.manifest'))` | `json_array_length(record->'manifest')` |
+| `datetime(ts, 'unixepoch', 'localtime')` | `to_timestamp(ts)` |
+| `date('now', '-7 days')` | `(CURRENT_DATE - 7)::text` |
+| `substr(created_at, 1, 10)` | `left(created_at, 10)` (substr works too) |
+| `EXPLAIN QUERY PLAN SELECT ...` | `EXPLAIN SELECT ...` (or `EXPLAIN ANALYZE` to run it and time it) |
+| `beta = 1` | `beta = true` |
+
+For example, lesson 7's "reasons" query on PostgreSQL:
+
+```sql
+SELECT record->>'reason' AS reason, COUNT(*) AS tickets
+FROM tickets GROUP BY reason ORDER BY tickets DESC;
+```
+
+And something new, your built-in to-do lists (the `tasks` table):
+
+```sql
+SELECT owner, COUNT(*) FILTER (WHERE done_at IS NULL) AS open, COUNT(done_at) AS done
+FROM tasks GROUP BY owner ORDER BY open DESC;
+```
+
+**Things PostgreSQL does that SQLite doesn't (try them on the practice database):**
+- **Real users and permissions.** `\du` lists logins. A real product gives the app a login that
+  can only touch its own database.
+- **Strict types.** `SELECT '2026-13-45'::date;` is an error, not a strange string.
+- **Many connections at once**, with row locking: Next Box locks a read-back while it's confirmed,
+  so two taps can't both delete the same task.
+- **`pg_dump`**: `nextbox db backup` now writes a `.sql` file you can open and read. Restoring is
+  `psql -h 127.0.0.1 -U nextbox nextbox_practice < backups/nextbox-....sql` (try it on the
+  practice database, never on the real one while Next Box is running).
+
+**Going live later:** a cloud provider gives you a `postgresql://...` address. You'd run
+`nextbox db copy-to <that address>` to move your data, put the address in `DATABASE_URL`, and
+that's it: same tables, same queries.
+
 ## Cheat sheet
 
 ```text

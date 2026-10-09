@@ -61,6 +61,18 @@ def run_doctor(settings: Settings, accounts: Accounts) -> int:
         if fix:
             print(f"    → {fix}")
 
+    from . import db as _db
+    from .dbtools import describe_location, is_postgres
+    url = _db.url_for(settings.data_dir)
+    kind = "PostgreSQL" if is_postgres(url) else "SQLite"
+    try:
+        with _db.database(settings.data_dir).connect() as conn:
+            conn.exec_driver_sql("SELECT 1")
+        say(OK, f"database: {kind} at {describe_location(settings.data_dir)}")
+    except Exception as exc:
+        say(BAD, f"can't open the {kind} database: {str(getattr(exc, 'orig', exc)).splitlines()[0][:160]}",
+            "sudo systemctl start postgresql" if kind == "PostgreSQL" else "check the data folder's permissions")
+        return 1
     say(OK if settings.server_key else BAD, "NEXTBOX_KEY is set" if settings.server_key else "NEXTBOX_KEY is missing",
         "" if settings.server_key else "run scripts/install.sh again; it makes one for you")
     users = accounts.list_users() if accounts.has_users() else []

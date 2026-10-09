@@ -41,17 +41,32 @@ def _user(accounts: Accounts, action: str, username: str | None, role: str | Non
     """The desktop is the recovery path: it works even if every web admin is locked out."""
     if action == "list":
         users = accounts.all_users()
+        protected, owner = accounts.protected(), accounts.owner()
         for u in users:
             flags = " ".join(f for f, on in (("disabled", u["disabled"]), ("beta", u["beta"]),
-                                             ("debug", u["debug"])) if on)
+                                             ("debug", u["debug"]), ("protected", u["username"] == protected),
+                                             ("prints-for-home-assistant", u["username"] == owner)) if on)
             print(f"{u['username']:<20} {u['role']:<11} {flags}")
         if not users:
             print("(no accounts)")
+        return 0
+    if action == "unprotect":
+        accounts.set_protected(None)
+        print("no account is protected now")
         return 0
     if not username:
         print("username required", file=sys.stderr)
         return 2
     try:
+        if action == "protect":
+            accounts.set_protected(username)
+            print(f"{username} is the protected admin: it always stays a superadmin and can't be removed "
+                  "from the web app. Undo only here: nextbox user unprotect")
+            return 0
+        if action == "owner":
+            accounts.set_print_owner(username)
+            print(f"Home Assistant and `nextbox today` now print {username}'s tasks")
+            return 0
         if action == "remove":
             accounts.remove_user(username)
             print(f"removed {username}; their sessions are signed out")
@@ -111,12 +126,23 @@ def _db(data_dir, args) -> int:
     try:
         if args.db_cmd == "where":
             loc = dbtools.describe_location(data_dir)
+            practice_loc = dbtools.describe_location(dbtools.practice_url(data_dir))
             print(f"Real database:     {loc}")
-            print(f"Practice database: {dbtools.practice_dir(data_dir) / 'nextbox.db'}  (build it: nextbox db demo)")
+            print(f"Practice database: {practice_loc}  (build it: nextbox db demo)")
             if loc.endswith(".db"):
                 print("\nOpen it with:  sqlite3 -readonly '" + loc + "'   or the free app DB Browser for SQLite")
+            else:
+                print("\nThis is PostgreSQL. Open it with:  psql -h 127.0.0.1 -U nextbox nextbox")
+                print("  (password: the one in DATABASE_URL in .env), or the free apps pgAdmin or DBeaver.")
             return 0
-        if practice and not (dbtools.practice_dir(data_dir) / "nextbox.db").exists():
+        if args.db_cmd == "copy-to":
+            src = f"sqlite:///{Path(data_dir) / 'nextbox.db'}" if not args.source else args.source
+            target = sys.stdin.read().strip() if args.url == "-" else args.url  # "-": read it from stdin
+            counts = dbtools.copy_database(src, target)
+            print("Copied: " + ", ".join(f"{k} {v}" for k, v in counts.items() if v))
+            print("Now set DATABASE_URL in .env to the new database and restart Next Box.")
+            return 0
+        if practice and not dbtools.practice_exists(data_dir):
             print("No practice database yet. Build it with: nextbox db demo", file=sys.stderr)
             return 1
         if args.db_cmd == "tables":
@@ -133,7 +159,7 @@ def _db(data_dir, args) -> int:
             print(f"\n({note})")
         elif args.db_cmd == "demo":
             counts = dbtools.build_practice(data_dir)
-            print("Practice database ready:", dbtools.practice_dir(data_dir) / "nextbox.db")
+            print("Practice database ready:", dbtools.describe_location(dbtools.practice_url(data_dir)))
             print("  " + ", ".join(f"{k} {v}" for k, v in counts.items() if v))
             print('Try:  nextbox db sql --practice "SELECT username, role, household_id FROM users"')
         elif args.db_cmd == "backup":
@@ -210,10 +236,19 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--write", action="store_true", help="allow INSERT/UPDATE/DELETE (practice database only)")
     dbs.add_parser("demo", help="(re)build the practice database with realistic fake data")
     dbs.add_parser("backup", help="save a copy of the real database in the data folder's backups/")
+    cp = dbs.add_parser("copy-to", help="copy everything into another (empty) database, e.g. PostgreSQL")
+    cp.add_argument("url", help="postgresql://user:password@127.0.0.1/nextbox, or - to read it from stdin")
+    cp.add_argument("--source", help="copy from this URL instead of the SQLite file in the data folder")
+    iv = sub.add_parser("invite", help="make a one-time code so someone can create their own account")
+    iv.add_argument("--days", type=int, default=7, help="how long the code works (1-90 days)")
+    iv.add_argument("--own-household", action="store_true", help="they get their own household and printers")
+    iv.add_argument("--beta", action="store_true", help="mark them as a beta tester")
+    iv.add_argument("--note", default="", help="who it's for, e.g. 'Sam from work'")
     pn = sub.add_parser("prune", help="delete tickets and scans older than N days")
     pn.add_argument("--days", type=int, default=None)
     us = sub.add_parser("user", help="manage web sign-in accounts")
-    us.add_argument("action", choices=["add", "passwd", "role", "enable", "disable", "remove", "list"])
+    us.add_argument("action", choices=["add", "passwd", "role", "enable", "disable", "remove", "list",
+                                       "protect", "unprotect", "owner"])
     us.add_argument("username", nargs="?")
     us.add_argument("role", nargs="?", choices=["user", "admin", "superadmin"],
                     help="for `role` (and optionally `add`)")
@@ -233,6 +268,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "db":
         return _db(settings.data_dir, args)
+    if args.cmd == "invite":
+        admin = accounts.protected() or accounts.owner() or "cli"
+        try:
+            code = accounts.create_invite(accounts.household_of(who) or "home", admin, days=args.days,
+                                          beta=args.beta, note=args.note, own_household=args.own_household)
+        except AuthError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"Invite code: {code}  (works once, for {args.days} days)")
+        print(f"They open the web app, tap 'Have an invite code?', and enter it. Link: /app/#join={code}")
+        return 0
     if args.cmd == "doctor":
         from .doctor import run_doctor
         return run_doctor(settings, accounts)

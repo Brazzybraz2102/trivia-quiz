@@ -155,27 +155,43 @@ class Accounts:
         return names
 
     # --- invites ---------------------------------------------------------------
-    def create_invite(self, household_id: str, by: str, days: int = INVITE_DAYS) -> str:
+    def create_invite(self, household_id: str, by: str, days: int = INVITE_DAYS, beta: bool = False,
+                      note: str = "", own_household: bool = False) -> str:
+        """A one-time code. With own_household the person gets a household of their own (and
+        manages it); otherwise they join `household_id` as a user."""
+        if not 1 <= int(days) <= 90:
+            raise AuthError("an invite lasts 1 to 90 days")
         code = "-".join(secrets.token_hex(2).upper() for _ in range(3))  # e.g. 3F9A-07C2-B1E4
         now = int(time.time())
         with self.db.begin() as conn:
             conn.execute(insert(db.invites).values(code=code, household_id=household_id, created_by=by,
-                                                   created=now, expires=now + days * 86400, used_by=None))
+                                                   created=now, expires=now + int(days) * 86400, used_by=None,
+                                                   beta=bool(beta), note=(note or "").strip()[:80] or None,
+                                                   own_household=bool(own_household)))
         return code
 
-    def invites(self, household_id: str) -> list[dict]:
+    def invites(self, household_id: str | None = None) -> list[dict]:
+        q = select(db.invites).order_by(db.invites.c.created.desc())
+        if household_id is not None:
+            q = q.where(db.invites.c.household_id == household_id)
         with self.db.connect() as conn:
-            rows = conn.execute(select(db.invites).where(db.invites.c.household_id == household_id)
-                                .order_by(db.invites.c.created.desc())).mappings().all()
-        return [dict(r) for r in rows]
+            rows = conn.execute(q).mappings().all()
+        now = time.time()
+        return [{**dict(r), "beta": bool(r["beta"]), "own_household": bool(r["own_household"]),
+                 "status": "used" if r["used_by"] else "expired" if r["expires"] < now else "open"} for r in rows]
 
-    def _redeem(self, conn, code: str, username: str) -> str:
+    def revoke_invite(self, code: str) -> None:
+        with self.db.begin() as conn:
+            conn.execute(delete(db.invites).where(and_(db.invites.c.code == code.strip().upper(),
+                                                       db.invites.c.used_by.is_(None))))
+
+    def _redeem(self, conn, code: str, username: str) -> dict:
         code = code.strip().upper()
         row = conn.execute(select(db.invites).where(db.invites.c.code == code)).mappings().first()
         if not row or row["used_by"] or row["expires"] < time.time():
             raise AuthError("that invite code isn't valid any more; ask for a new one")
         conn.execute(update(db.invites).where(db.invites.c.code == code).values(used_by=username))
-        return row["household_id"]
+        return dict(row)
 
     # --- users -----------------------------------------------------------------
     def list_users(self, household_id: str | None = None) -> list[str]:
@@ -238,24 +254,65 @@ class Accounts:
         self._check_password(password)
         email = self._check_email(email)
         first = not self.has_users()
+        beta, made_household = False, False
         if invite:
             with self.db.begin() as conn:
                 if self._row(conn, username):
                     raise AuthError(f"user {username} already exists")
-                household_id = self._redeem(conn, invite, username)
-            role = "user"
+                if email and conn.execute(select(db.users.c.username).where(db.users.c.email == email)).first():
+                    raise AuthError("another account already uses that email")
+                inv = self._redeem(conn, invite, username)
+            beta = bool(inv.get("beta"))
+            if inv.get("own_household"):
+                household_id, role, made_household = self.create_household(household_name or f"{username}'s home"), "admin", True
+            else:
+                household_id, role = inv["household_id"], "user"
         else:
             household_id = self.create_household(household_name or f"{username}'s household")
-            role = "admin"
+            role, made_household = "admin", True
         if first:
             role = "superadmin"
         try:
-            self.create(username, password, role=role, household_id=household_id, email=email)
+            self.create(username, password, role=role, household_id=household_id, email=email, beta=beta)
         except AuthError:
-            if not invite:
+            if made_household:
                 self.delete_household(household_id)
             raise
         return self.get(username)
+
+    # --- the protected admin account and whose tasks Home Assistant prints -----------------
+    def _flag(self, key: str) -> str | None:
+        with self.db.connect() as conn:
+            row = conn.execute(select(db.server_settings.c.value).where(db.server_settings.c.key == key)).first()
+        return row[0] if row else None
+
+    def _set_flag(self, key: str, value: str | None) -> None:
+        with self.db.begin() as conn:
+            conn.execute(delete(db.server_settings).where(db.server_settings.c.key == key))
+            if value is not None:
+                conn.execute(insert(db.server_settings).values(key=key, value=value))
+
+    def protected(self) -> str | None:
+        """The admin account that always stays a superadmin. Only the computer's CLI changes it."""
+        return self._flag("_protected_admin")
+
+    def set_protected(self, username: str | None) -> None:
+        if username is not None:
+            username = self._check_name(username)
+            u = self.get(username)
+            if not u:
+                raise AuthError(f"no user {username}")
+            if u["role"] != "superadmin" or u["disabled"]:
+                raise AuthError(f"{username} must be an active superadmin first")
+        self._set_flag("_protected_admin", username)
+
+    def set_print_owner(self, username: str | None) -> None:
+        """Whose tasks Home Assistant and the CLI print (default: the oldest superadmin)."""
+        if username is not None:
+            username = self._check_name(username)
+            if not self.get(username):
+                raise AuthError(f"no user {username}")
+        self._set_flag("_print_owner", username)
 
     def set_password(self, username: str, password: str, create: bool = False,
                      must_change: bool = False) -> None:
@@ -297,6 +354,8 @@ class Accounts:
                     db.households.c.id == fields["household_id"])).first():
                 raise AuthError("no such household")
             demoting = fields.get("role", "superadmin") != "superadmin" or fields.get("disabled")
+            if demoting and username == self.protected():
+                raise AuthError(f"{username} is the protected admin account; it always stays a superadmin")
             if row["role"] == "superadmin" and demoting and self._active_superadmins(conn) <= 1:
                 raise AuthError("can't demote or disable the last superadmin")
             conn.execute(update(db.users).where(db.users.c.username == username).values(**fields))
@@ -332,6 +391,11 @@ class Accounts:
     def owner(self, household_id: str | None = None) -> str | None:
         """Self-hosted (no household given): the oldest active superadmin, whose to-do app Home
         Assistant and the CLI use. With a household: its oldest active manager."""
+        if not household_id:
+            chosen = self._flag("_print_owner")
+            u = self.get(chosen) if chosen else None
+            if u and not u["disabled"]:
+                return chosen
         roles = ("admin", "superadmin") if household_id else ("superadmin",)
         q = (select(db.users.c.username).where(and_(db.users.c.role.in_(roles), db.users.c.disabled.is_(False)))
              .order_by(db.users.c.created, db.users.c.username))
@@ -347,6 +411,8 @@ class Accounts:
             row = self._row(conn, username)
             if not row:
                 raise AuthError(f"no user {username}")
+            if username == self.protected():
+                raise AuthError(f"{username} is the protected admin account and can't be removed")
             if row["role"] == "superadmin" and self._active_superadmins(conn) <= 1:
                 raise AuthError("can't remove the last superadmin")
             conn.execute(delete(db.users).where(db.users.c.username == username))

@@ -8,14 +8,17 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import shutil
 import sqlite3
+import subprocess
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import inspect, text
+from sqlalchemy import func, insert, inspect, select, text
+from sqlalchemy.engine import make_url
 
 from . import db
 
@@ -33,6 +36,8 @@ TABLE_NOTES = {
     "printers": "Each household's printers and the label color loaded in each.",
     "feedback": "The public feedback board: anonymous, dated by day only.",
     "feedback_identities": "Who sent each piece of feedback. The only place that link exists.",
+    "tasks": "Everyone's built-in to-do list (My list). Linked apps' tasks are never stored here.",
+    "tags": "Each person's tags and the label color for each.",
 }
 MASKED_COLUMNS = {"hash", "salt", "token_hash"}
 
@@ -43,6 +48,8 @@ DIAGRAM = """
               │          └─< events
               ├─< printers
               └─< invites
+  users ─┬─< tasks (owner)
+         └─< tags  (owner)
 
   feedback ── feedback_identities    (one to one, kept apart on purpose: the board is anonymous)
   auto_guard, server_settings        (stand-alone settings tables)
@@ -56,8 +63,32 @@ def practice_dir(data_dir: Path) -> Path:
     return Path(data_dir) / "practice"
 
 
+def is_postgres(url: str) -> bool:
+    return url.startswith(("postgres://", "postgresql://", "postgresql+"))
+
+
 def practice_url(data_dir: Path) -> str:
+    """The practice database sits next to the real one: a SQLite file, or a second PostgreSQL
+    database with "_practice" on the end of its name (NEXTBOX_PRACTICE_URL overrides)."""
+    if os.environ.get("NEXTBOX_PRACTICE_URL"):
+        return os.environ["NEXTBOX_PRACTICE_URL"]
+    real = db.url_for(data_dir)
+    if is_postgres(real):
+        base, _, name = real.rpartition("/")
+        name, q, query = name.partition("?")
+        return f"{base}/{name}_practice{q}{query}"
     return f"sqlite:///{practice_dir(data_dir) / 'nextbox.db'}"
+
+
+def practice_exists(data_dir: Path) -> bool:
+    url = practice_url(data_dir)
+    if not is_postgres(url):
+        return Path(url.removeprefix("sqlite:///")).exists()
+    try:
+        with db.database(url).connect() as conn:
+            return bool(conn.execute(text("SELECT COUNT(*) FROM users")).scalar())
+    except Exception:
+        return False
 
 
 def describe_location(data_dir: Path) -> str:
@@ -158,13 +189,27 @@ def schema(data_dir: Path, table: str, practice: bool = False) -> str:
 
 
 def backup(data_dir: Path) -> Path:
-    """Copy the SQLite database safely, even while the server is running."""
+    """Copy the database safely, even while the server is running: SQLite's online backup, or
+    pg_dump (a plain .sql file you can read and restore with psql) for PostgreSQL."""
     url = db.url_for(data_dir)
-    if not url.startswith("sqlite:///"):
-        raise RuntimeError("For PostgreSQL use: pg_dump \"$DATABASE_URL\" > nextbox-backup.sql")
-    src = Path(url.removeprefix("sqlite:///"))
     dest_dir = Path(data_dir) / "backups"
     dest_dir.mkdir(exist_ok=True)
+    if is_postgres(url):
+        if not shutil.which("pg_dump"):
+            raise RuntimeError("pg_dump isn't installed (sudo apt install postgresql-client)")
+        u = make_url(url)
+        dest = dest_dir / f"nextbox-{datetime.now():%Y%m%d-%H%M%S}.sql"
+        env = {**os.environ, "PGPASSWORD": u.password or ""}  # never on the command line
+        with open(dest, "w") as fh:
+            r = subprocess.run(["pg_dump", "--no-owner", "-h", u.host or "127.0.0.1", "-p", str(u.port or 5432),
+                                "-U", u.username or "", u.database or ""], stdout=fh, stderr=subprocess.PIPE,
+                               text=True, env=env, timeout=600)
+        if r.returncode != 0:
+            dest.unlink(missing_ok=True)
+            raise RuntimeError(f"pg_dump failed: {r.stderr.strip()[:300]}")
+        dest.chmod(0o600)
+        return dest
+    src = Path(url.removeprefix("sqlite:///"))
     dest = dest_dir / f"nextbox-{datetime.now():%Y%m%d-%H%M%S}.db"
     with sqlite3.connect(src) as s, sqlite3.connect(dest) as d:
         s.backup(d)  # SQLite's online backup: a consistent copy without stopping anything
@@ -190,10 +235,12 @@ def build_practice(data_dir: Path, seed: int = 7) -> dict:
 
     rnd = random.Random(seed)
     pdir = practice_dir(data_dir)
+    url = practice_url(data_dir)
     if pdir.exists():
         shutil.rmtree(pdir)
     pdir.mkdir(parents=True)
-    url = practice_url(data_dir)
+    if is_postgres(url):  # start clean: drop every table in the practice database, then rebuild
+        db.metadata.drop_all(db.database(url))
     db.reset_engines()
     accounts, store = Accounts(url), Store(pdir, url=url)
     printers, feedback = Printers(url, Settings(data_dir=pdir)), Feedback(url)
@@ -252,6 +299,18 @@ def build_practice(data_dir: Path, seed: int = 7) -> dict:
                     ts=ts, user=name, household_id=hid, kind="auth" if action == "login" else ("activity" if ok else "error"),
                     action=action, ok=ok, detail={"ms": rnd.randint(40, 900)},
                     error=None if ok else "Todoist didn't answer"))
+    from .mylist import LocalTasks, Tags
+    for name, hid in people:  # everyone's built-in list, with tags
+        Tags(url, name).all()
+        mine = LocalTasks(url, name, hid)
+        for task in rnd.sample(TASKS, rnd.randint(3, 8)):
+            due = (datetime.now() + timedelta(days=rnd.randint(-4, 6))).date().isoformat() if rnd.random() < 0.75 else None
+            t = mine.create({"content": task, "due_date": due, "priority": rnd.choice([1, 1, 1, 3, 4]),
+                             "tags": rnd.sample(["urgent", "errand", "call", "home", "work"], rnd.randint(0, 2)),
+                             "minutes": rnd.choice([None, 5, 15, 30, 60]),
+                             "steps": ["Get started", "Finish it"] if rnd.random() < 0.3 else []})
+            if rnd.random() < 0.25:
+                mine.close_task(t["id"])
     for msg in ["Love the red labels for overdue stuff!", "Scanning missed a checkmark on row 3",
                 "Can it print my grocery list sorted by aisle?", "The setup screen was confusing"]:
         feedback.submit(mode="open", kind="other", page="print", rating=rnd.randint(2, 5), fields={},
@@ -259,4 +318,36 @@ def build_practice(data_dir: Path, seed: int = 7) -> dict:
                         names=[], enforce_limit=False)
     counts = {name: count for name, count, _ in tables(data_dir, practice=True)}
     db.reset_engines()
+    return counts
+
+
+# --- moving to another database ----------------------------------------------------------------
+def copy_database(source_url: str, target_url: str, batch: int = 500) -> dict:
+    """Copy every row from one database to another (e.g. the SQLite file into a new, empty
+    PostgreSQL database). The target must be empty, so nothing is ever overwritten."""
+    src, dst = db.database(source_url), db.database(target_url)
+    with dst.connect() as conn:
+        busy = [t.name for t in db.metadata.sorted_tables
+                if conn.execute(select(func.count()).select_from(t)).scalar()]
+    if busy:
+        raise RuntimeError(f"the target database isn't empty (it has {', '.join(busy)}); "
+                           "nothing was copied")
+    counts = {}
+    with src.connect() as s_conn, dst.begin() as d_conn:  # all or nothing
+        for table in db.metadata.sorted_tables:
+            n = 0
+            result = s_conn.execute(select(table)).mappings()
+            while rows := result.fetchmany(batch):
+                d_conn.execute(insert(table), [dict(r) for r in rows])
+                n += len(rows)
+            counts[table.name] = n
+        if dst.dialect.name == "postgresql":
+            # Rows came with their ids, so move each id counter past the highest id copied.
+            for table in db.metadata.sorted_tables:
+                pk = list(table.primary_key.columns)
+                if len(pk) == 1 and isinstance(pk[0].type, db.Integer):
+                    col = pk[0].name  # setval does nothing when the column has no counter (NULL)
+                    d_conn.execute(text(
+                        f"SELECT setval(pg_get_serial_sequence('\"{table.name}\"', '{col}'), "
+                        f"COALESCE((SELECT MAX(\"{col}\") FROM \"{table.name}\"), 0) + 1, false)"))
     return counts

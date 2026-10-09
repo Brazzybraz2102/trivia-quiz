@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 
 from sqlalchemy import (JSON, BigInteger, Boolean, Column, Float, Index, Integer, LargeBinary, MetaData,
-                        String, Table, Text, create_engine, event)
+                        String, Table, Text, create_engine, event, inspect, text)
 from sqlalchemy.engine import Engine
 
 metadata = MetaData()
@@ -61,6 +61,10 @@ invites = Table(
     Column("created", BigInteger, nullable=False),
     Column("expires", BigInteger, nullable=False),
     Column("used_by", String(32), nullable=True),
+    # Added in 0.8 (filled in by _add_missing_columns on older databases):
+    Column("beta", Boolean, nullable=True),          # people who join with it are beta testers
+    Column("note", String(80), nullable=True),       # who it's for, e.g. "Sam from work"
+    Column("own_household", Boolean, nullable=True), # they get their own household instead of joining one
 )
 
 tickets = Table(
@@ -207,10 +211,25 @@ def database(root_or_url) -> Engine:
                 engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=10)
                 path = None
             metadata.create_all(engine)
+            _add_missing_columns(engine)
             if path is not None and path.exists():
                 os.chmod(path, 0o600)
             _engines[url] = engine
         return engine
+
+
+def _add_missing_columns(engine: Engine) -> None:
+    """A tiny migration step: create_all makes new tables but never changes existing ones, so
+    columns added in a newer version are added here. Only nullable columns are ever added, so old
+    rows stay valid. (Bigger changes would use a migration tool such as Alembic.)"""
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table in metadata.sorted_tables:
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name not in have and col.nullable:
+                    kind = col.type.compile(dialect=engine.dialect)
+                    conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {kind}'))
 
 
 def reset_engines() -> None:

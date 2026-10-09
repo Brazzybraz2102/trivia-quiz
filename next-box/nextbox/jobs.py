@@ -110,11 +110,26 @@ def _is_late(task: dict, today: date) -> bool:
     return bool(due) and due[:10] < today.isoformat()
 
 
-def _target(ctx: Context, reason: str) -> tuple[PrinterConfig, str]:
+NO_PRINTER = "Your household has no printer yet, so this is a preview. An admin can add one under Admin → Printers."
+
+
+def _available(ctx: Context) -> list[PrinterConfig]:
+    """This household's printers. The .env printer only ever serves the original Home household,
+    so someone in another household can never print on it by accident."""
+    if ctx.printers is None:
+        return [legacy_config(ctx.settings)]
+    return ctx.printers.all(ctx.household)
+
+
+def _fallback(ctx: Context) -> PrinterConfig | None:
+    from .auth import DEFAULT_HOUSEHOLD
+    return legacy_config(ctx.settings) if ctx.household == DEFAULT_HOUSEHOLD else None
+
+
+def _target(ctx: Context, reason: str) -> tuple[PrinterConfig | None, str]:
     """Which printer this ticket goes to, from the person's label-color rules."""
-    available = ctx.printers.all(ctx.household) if ctx.printers is not None else [legacy_config(ctx.settings)]
-    cfg, note = choose(available, ctx.prefs, reason)
-    return (cfg or legacy_config(ctx.settings)), note
+    cfg, note = choose(_available(ctx), ctx.prefs, reason)
+    return (cfg or _fallback(ctx)), note
 
 
 def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[[bool], Image.Image | list],
@@ -126,9 +141,10 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
     if color is None:
         cfg, note = _target(ctx, reason)
     else:
-        available = ctx.printers.all(ctx.household) if ctx.printers is not None else [legacy_config(ctx.settings)]
-        found, note = choose_color(available, ctx.prefs, color)
-        cfg = found or legacy_config(ctx.settings)
+        found, note = choose_color(_available(ctx), ctx.prefs, color)
+        cfg = found or _fallback(ctx)
+    if cfg is None:  # nothing this person may print on: draw it at the usual size, as a preview
+        cfg, note, dry = legacy_config(ctx.settings), NO_PRINTER, True
     red = cfg.ink == "black_red"
     drawn = draw(red)
     parts = [finalize(i, cfg.width_px, red=red) for i in (drawn if isinstance(drawn, list) else [drawn])]
@@ -268,7 +284,7 @@ def print_stickers(ctx: Context, task_ids: list[str] | None = None, query: str |
         raise ValueError("No tasks to print. Pick some on My list, or add a few first.")
     stickers, manifest = _sticker_rows(ctx, tasks)
     groups: dict[str, list[int]] = {}
-    available = ctx.printers.all(ctx.household) if ctx.printers is not None else [legacy_config(ctx.settings)]
+    available = _available(ctx)
     for i, s in enumerate(stickers):
         cfg, _ = choose_color(available, ctx.prefs, s.color)
         groups.setdefault(cfg.id if cfg else "", []).append(i)
@@ -342,7 +358,8 @@ def print_today(ctx: Context, source: str = "manual", dry_run: bool | None = Non
     dry = ctx.is_dry(dry_run)
     if source == "auto" and not ctx.auto_print_enabled:
         return {"status": "skipped", "reason": "auto print is turned off in server settings"}
-    if source == "auto" and not dry and not printer.is_reachable(_target(ctx, "today")[0]):
+    target = _target(ctx, "today")[0] if source == "auto" and not dry else None
+    if target is not None and not printer.is_reachable(target):
         # Don't use up today's print on a printer that's off; the next walk-in will print.
         return {"status": "skipped", "reason": "printer is offline; today's ticket will print next time"}
     if source == "auto" and not ctx.store.claim_auto(today.isoformat(), dry, scope=ctx.user):

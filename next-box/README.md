@@ -49,12 +49,30 @@ Later, when you have them, put `PRINTER_IP` (and `ANTHROPIC_API_KEY` for photo r
 `.env` with `nano .env`, delete the `NEXTBOX_DRY_RUN=1` line, and run
 `systemctl --user restart nextbox`. Until then Next Box makes previews instead of printing.
 
-### 3. Create your account and connect your to-do app
+### 3. Create your accounts
+Keep running Next Box separate from using it: one admin account that always stays in charge, and
+your everyday account.
 ```bash
-.venv/bin/nextbox user add mike                 # first account = superadmin (you)
-.venv/bin/nextbox connect mike todoist          # or: caldav. Prompts for the token or password
+.venv/bin/nextbox user add usersuperadmin superadmin   # the admin view
+.venv/bin/nextbox user protect usersuperadmin          # it always stays a superadmin
+.venv/bin/nextbox user add mike user                   # your everyday account
+.venv/bin/nextbox user owner mike                      # Home Assistant prints Mike's list
 ```
-You can also connect later in the web app, under **Settings → Your to-do app**.
+Linking Todoist is optional: Settings → Linked to-do app, or `nextbox connect mike todoist`.
+
+### Let other people in to test
+Sign in as `usersuperadmin` → **Admin → Invite people** → **Make invite**, and send them the
+link or code. It works once. Tick "their own household" if they should get their own list and
+printers instead of joining yours. From the computer: `.venv/bin/nextbox invite --beta --note "Sam"`.
+People in other households can't print on your printer; they see previews until their household
+adds its own.
+
+### Move to PostgreSQL (recommended for learning databases)
+```bash
+scripts/setup-postgres.sh
+```
+Installs the free PostgreSQL database server, copies everything over and switches Next Box to it.
+See `DATABASE.md` lesson 13.
 
 ### 4. Check it without printing
 ```bash
