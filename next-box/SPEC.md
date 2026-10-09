@@ -361,3 +361,21 @@ Read-back works on all of them: each box has its printed row number.
 listed small under "Not today"), gentle words ("waiting 3d" not "overdue 3d"), the next tiny step
 under each task, a tag swatch by each box, and "Yesterday you finished N. ✓".
 
+## 18. Super admin panel (Users tab)
+Superadmins only (`super_only`). Shows every person in every household:
+- Overview tiles: people, active this week, turned off, beta, debug, temp password, had errors,
+  households, prints (30 days), open tasks. Tap a tile to filter.
+- Search by name, email or household; filter by role, status and household.
+- Per person (Manage): email, role, household, turned off, beta, debug, must pick a new password
+  (signs them out); reset password (one-time password shown once), sign out all devices, reset
+  settings to defaults, unlink the to-do app (their built-in list stays), debug bundle, recent
+  activity, devices and tickets; delete after typing the username.
+- Bulk: sign out, turn off, turn on, beta on/off for everyone selected. Bulk skips the caller.
+- New household; add a person into any household; CSV export (no secrets; cells that start with
+  `= + - @` are prefixed with `'` so spreadsheets don't run them).
+Open task *counts* are shown, never task text. A superadmin can't turn off or demote themselves
+here, and the last superadmin can't be demoted or turned off. Every change is an audit event.
+Endpoints: `GET /super/overview`, `GET /super/users`, `GET /super/users.csv`,
+`GET|PATCH /super/users/{u}`, `POST /super/users`, `POST /super/users/{u}/reset-settings`,
+`POST /super/users/{u}/unlink`, `POST /super/users/bulk`, `GET|POST /super/households`.
+

@@ -97,6 +97,14 @@ If you're ever locked out of the web app, fix it from the desktop:
 | Remove someone | `nextbox user remove <name>` |
 | See accounts | `nextbox user list` |
 
+### Managing everyone (super admin)
+The **Users** tab (superadmins only) lists every person in every household. Search, filter by
+role or status, or tap a number at the top (Turned off, Beta testers, Had errors...). **Manage**
+opens one person: change their email, role or household, turn them off, reset their password,
+sign them out everywhere, reset their settings, unlink their to-do app, see their recent activity
+and devices, or delete them (type their username to confirm). Tick several people to sign out,
+turn off/on, or change beta for all of them at once. **Export CSV** downloads the list.
+
 ### Helping a beta tester
 1. Admin tab: mark them **beta**. Everyone has a **Feedback** button on every screen, guided
    or open-ended.

@@ -888,3 +888,177 @@ $("#addTag").onclick = async () => {
         $("#newTag").value = ""; loadTags(); }
   catch (err) { toast(err.message); }
 };
+
+// ---------------------------------------------------------------- super admin: users
+let suRows = [], suPicked = new Set(), suHomes = [], suOpen = null;
+const TILES = [["people", "People", ""], ["active_7d", "Active this week", "active"], ["turned_off", "Turned off", "off"],
+  ["beta", "Beta testers", "beta"], ["debug", "Debug on", "debug"], ["temp_password", "Temp password", "temp"],
+  ["with_errors", "Had errors (7d)", "errors"], ["households", "Households", null], ["prints_30d", "Prints (30d)", null],
+  ["open_tasks", "Open tasks", null]];
+
+async function loadSuper() {
+  try {
+    const [o, homes] = await Promise.all([api("/super/overview"), api("/super/households")]);
+    suHomes = homes;
+    $("#suTiles").innerHTML = TILES.map(([k, label, f]) =>
+      `<button class="tile${f !== null && $("#suStatus").value === (f || "") && f !== "" ? " on" : ""}" ${f === null ? "disabled" : `data-f="${f}"`}><b>${o[k]}</b><span>${esc(label)}</span></button>`).join("");
+    const cur = $("#suHome").value;
+    $("#suHome").innerHTML = `<option value="">All households</option>` +
+      homes.map((h) => `<option value="${esc(h.id)}">${esc(h.name)} (${h.members})</option>`).join("");
+    $("#suHome").value = cur;
+  } catch (e) { $("#suTiles").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  loadSuperList();
+}
+
+async function loadSuperList() {
+  const qs = new URLSearchParams({ q: $("#suQ").value, role: $("#suRole").value, status: $("#suStatus").value,
+                                   household: $("#suHome").value });
+  try { suRows = await api("/super/users?" + qs); }
+  catch (e) { $("#suList").innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  const shown = new Set(suRows.map((r) => r.username));
+  suPicked = new Set([...suPicked].filter((u) => shown.has(u)));
+  $("#suCount").textContent = `${suRows.length} shown`;
+  $("#suList").innerHTML = suRows.map((u) => {
+    const badges = [`<span class="badge ${u.role !== "user" ? "hot" : ""}">${esc(u.role)}</span>`,
+      u.disabled && `<span class="badge bad">off</span>`, u.beta && `<span class="badge">beta</span>`,
+      u.debug && `<span class="badge bad">debug</span>`, u.must_change && `<span class="badge">temp password</span>`,
+      u.errors_7d && `<span class="badge bad">${u.errors_7d} errors</span>`, !u.consented && `<span class="badge">notice pending</span>`]
+      .filter(Boolean).join(" ");
+    return `<div class="urow" data-u="${esc(u.username)}">
+      <input type="checkbox" aria-label="Select ${esc(u.username)}" ${suPicked.has(u.username) ? "checked" : ""}>
+      <div class="who"><div class="top"><b>${esc(u.username)}</b>${badges}</div>
+        <div class="muted">${esc(u.email || "no email")} · ${esc(u.household)}</div>
+        <div class="muted">last sign-in ${when(u.last_login)} · ${u.sessions} device(s) · ${u.open_tasks} open tasks · ${u.prints_30d} prints (30d) · ${esc(u.app || "no linked app")}</div></div>
+      <button class="plain small" data-manage>Manage</button></div>`;
+  }).join("") || `<p class="muted">Nobody matches.</p>`;
+  $("#suAll").checked = suRows.length > 0 && suPicked.size === suRows.length;
+  renderBulk();
+}
+
+function renderBulk() {
+  $("#suBulk").hidden = !suPicked.size;
+  $("#suPicked").textContent = `${suPicked.size} selected`;
+}
+
+let suTimer;
+$("#suQ").oninput = () => { clearTimeout(suTimer); suTimer = setTimeout(loadSuperList, 250); };
+for (const id of ["#suRole", "#suStatus", "#suHome"]) $(id).onchange = () => { loadSuperList(); if (id === "#suStatus") loadSuper(); };
+$("#suTiles").onclick = (e) => {
+  const t = e.target.closest("[data-f]");
+  if (!t) return;
+  $("#suStatus").value = $("#suStatus").value === t.dataset.f ? "" : t.dataset.f;
+  loadSuper();
+};
+$("#suList").addEventListener("change", (e) => {
+  if (e.target.type !== "checkbox") return;
+  const u = e.target.closest(".urow").dataset.u;
+  e.target.checked ? suPicked.add(u) : suPicked.delete(u);
+  $("#suAll").checked = suPicked.size === suRows.length;
+  renderBulk();
+});
+$("#suList").addEventListener("click", (e) => { if (e.target.matches("[data-manage]")) openUser(e.target.closest(".urow").dataset.u); });
+$("#suAll").onchange = () => { suPicked = $("#suAll").checked ? new Set(suRows.map((r) => r.username)) : new Set(); loadSuperList(); };
+$("#suClear").onclick = () => { suPicked.clear(); loadSuperList(); };
+$$("[data-bulk]").forEach((b) => b.onclick = async () => {
+  const names = [...suPicked];
+  if (!confirm(`${b.textContent} ${names.length} ${names.length === 1 ? "person" : "people"}?`)) return;
+  try {
+    const r = await api("/super/users/bulk", { method: "POST", json: { usernames: names, action: b.dataset.bulk } });
+    const odd = Object.entries(r.results).filter(([, v]) => v !== "done" && !v.startsWith("signed out"));
+    toast(odd.length ? `${odd.length} skipped: ${odd.map(([u, v]) => `${u} (${v})`).join(", ")}` : "Done");
+    suPicked.clear();
+    loadSuper();
+  } catch (err) { toast(err.message); }
+});
+
+$("#suAdd").onclick = () => {
+  $("#suNew").innerHTML = `<div class="field"><label>Username</label><input type="text" id="snName" autocapitalize="none"></div>
+    <div class="field"><label>Email (optional)</label><input type="text" id="snEmail" autocapitalize="none"></div>
+    <div class="row"><select id="snRole"><option>user</option><option>admin</option><option>superadmin</option></select>
+      <select id="snHome">${suHomes.map((h) => `<option value="${esc(h.id)}" ${h.id === me.household_id ? "selected" : ""}>${esc(h.name)}</option>`).join("")}</select>
+      <label class="muted"><input type="checkbox" id="snBeta"> beta tester</label>
+      <button class="go" id="snGo">Create</button></div><div id="snOut"></div>`;
+  $("#snGo").onclick = async () => {
+    try {
+      const r = await api("/super/users", { method: "POST", json: { username: $("#snName").value, email: $("#snEmail").value || null,
+        role: $("#snRole").value, household_id: $("#snHome").value, beta: $("#snBeta").checked } });
+      $("#snOut").innerHTML = `<p>Give <b>${esc(r.username)}</b> this one-time password. It won't be shown again.</p><div class="secret">${esc(r.temp_password)}</div>`;
+      loadSuper();
+    } catch (e) { toast(e.message); }
+  };
+};
+$("#suNewHome").onclick = async () => {
+  const name = prompt("Name for the new household (e.g. Chen family)");
+  if (!name) return;
+  try { await api("/super/households", { method: "POST", json: { name } }); toast("Household created"); loadSuper(); }
+  catch (e) { toast(e.message); }
+};
+
+async function openUser(name) {
+  let u;
+  try { u = await api(`/super/users/${encodeURIComponent(name)}`); } catch (e) { return toast(e.message); }
+  suOpen = u;
+  $("#udName").textContent = u.username;
+  $("#udSub").textContent = `joined ${when(u.created)} · last sign-in ${when(u.last_login)}${u.consented ? "" : " · hasn't accepted the data notice"}`;
+  $("#udEmail").value = u.email || "";
+  $("#udRole").value = u.role;
+  $("#udHome").innerHTML = suHomes.map((h) => `<option value="${esc(h.id)}">${esc(h.name)}</option>`).join("");
+  $("#udHome").value = u.household_id;
+  $("#udOff").checked = u.disabled; $("#udBeta").checked = u.beta; $("#udDebug").checked = u.debug; $("#udTemp").checked = u.must_change;
+  const self = u.username === me.username;
+  $("#udOff").disabled = self; $("#udRole").disabled = self;
+  $("#udMsg").textContent = ""; $("#udTempOut").innerHTML = ""; $("#udConfirm").value = ""; $("#udDelete").disabled = true;
+  $("#udBundle").href = `/super/users/${encodeURIComponent(u.username)}/bundle`;
+  $("#udUnlink").disabled = !u.connection.connected || !!u.connection.legacy;
+  $("#udInfo").innerHTML = `
+    <div class="kv"><dt>To-do app</dt><dd>${u.connection.connected ? `${esc(u.connection.name)}${u.connection.account ? " · " + esc(u.connection.account) : ""}` : "only their built-in list"}</dd>
+    <dt>Open tasks</dt><dd>${u.open_tasks}</dd><dt>Prints (30d)</dt><dd>${u.prints_30d}</dd><dt>Errors (7d)</dt><dd>${u.errors_7d}</dd>
+    <dt>Tags</dt><dd>${u.tags.map((t) => esc(t.name)).join(", ") || "none"}</dd></div>
+    <h4 style="margin:12px 0 4px">Signed-in devices (${u.devices.length})</h4>
+    ${u.devices.map((d) => `<div class="mini">${esc(d.agent || "unknown device")} · ${esc(d.ip || "")} · since ${when(d.created)}</div>`).join("") || "<div class='mini'>None</div>"}
+    <h4 style="margin:12px 0 4px">Recent activity</h4>
+    ${u.recent.map((e) => `<div class="mini ${e.ok ? "" : "err"}">${when(e.ts)} · ${esc(e.action)}${e.error ? " · " + esc(e.error) : ""}</div>`).join("") || "<div class='mini'>Nothing yet</div>"}
+    <h4 style="margin:12px 0 4px">Recent tickets</h4>
+    ${u.tickets.map((t) => `<div class="mini"><a href="${png(t.id)}" target="_blank" rel="noopener">#${esc(t.id)}</a> · ${esc(t.kind)} · ${esc((t.created_at || "").replace("T", " "))}${t.dry_run ? " · preview" : ""}</div>`).join("") || "<div class='mini'>None</div>"}`;
+  $("#userDialog").showModal();
+}
+
+async function udDo(fn, okMsg) {
+  try { const r = await fn(); if (okMsg) toast(okMsg); await openUser(suOpen.username); loadSuper(); return r; }
+  catch (e) { $("#udMsg").textContent = e.message; toast(e.message); }
+}
+const udPath = () => `/super/users/${encodeURIComponent(suOpen.username)}`;
+$("#udSave").onclick = () => {
+  const u = suOpen, body = {};
+  const email = $("#udEmail").value.trim();
+  if (email !== (u.email || "")) body.email = email;
+  if ($("#udRole").value !== u.role) body.role = $("#udRole").value;
+  if ($("#udHome").value !== u.household_id) body.household_id = $("#udHome").value;
+  for (const [id, k] of [["#udOff", "disabled"], ["#udBeta", "beta"], ["#udDebug", "debug"], ["#udTemp", "must_change"]])
+    if ($(id).checked !== u[k]) body[k] = $(id).checked;
+  if (!Object.keys(body).length) return toast("Nothing changed");
+  if (body.role && !confirm(`Make ${u.username} a ${body.role}?`)) return;
+  if (body.disabled && !confirm(`Turn off ${u.username}? They'll be signed out everywhere.`)) return;
+  udDo(() => api(udPath(), { method: "PATCH", json: body }), "Saved");
+};
+$("#udReset").onclick = async () => {
+  if (!confirm(`Reset ${suOpen.username}'s password? They'll be signed out everywhere.`)) return;
+  try {
+    const r = await api(`/admin/users/${encodeURIComponent(suOpen.username)}/reset-password`, { method: "POST" });
+    $("#udTempOut").innerHTML = `<p>One-time password for <b>${esc(r.username)}</b> (shown once):</p><div class="secret">${esc(r.temp_password)}</div>`;
+    loadSuper();
+  } catch (e) { toast(e.message); }
+};
+$("#udSignout").onclick = () => udDo(() => api(`/admin/users/${encodeURIComponent(suOpen.username)}/signout`, { method: "POST" }), "Signed out");
+$("#udPrefs").onclick = () => confirm(`Put all of ${suOpen.username}'s settings back to the defaults?`) &&
+  udDo(() => api(`${udPath()}/reset-settings`, { method: "POST" }), "Settings reset");
+$("#udUnlink").onclick = () => confirm(`Unlink ${suOpen.username}'s to-do app? Their built-in list stays. They can link it again in Settings.`) &&
+  udDo(() => api(`${udPath()}/unlink`, { method: "POST" }), "Unlinked");
+$("#udConfirm").oninput = () => { $("#udDelete").disabled = $("#udConfirm").value.trim().toLowerCase() !== suOpen?.username || suOpen?.username === me.username; };
+$("#udDelete").onclick = async () => {
+  try { await api(`/admin/users/${encodeURIComponent(suOpen.username)}`, { method: "DELETE" }); toast(`Deleted ${suOpen.username}`);
+        $("#userDialog").close(); loadSuper(); }
+  catch (e) { $("#udMsg").textContent = e.message; }
+};
+$("#udClose").onclick = () => $("#userDialog").close();
+loaders.superusers = loadSuper;

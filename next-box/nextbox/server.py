@@ -37,11 +37,12 @@ from .jobs import Context, print_text
 from .mylist import TAG_COLORS, LocalTasks, Tags, is_local, parse_dump
 from .printer import COLORS, DRIVERS
 from .printers import REASONS, PrinterError, Printers
-from .providers import PROVIDERS, ProviderError
+from .providers import PROVIDERS, READY, ProviderError
 from .store import normalize_id
 from .vault import Vault
 
 WEB_DIR = PROJECT_DIR / "web"
+READY_NAMES = {k: v["name"] for k, v in READY.items()}
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
 COOKIE = "nextbox_session"
 STARTED = time.time()
@@ -160,11 +161,12 @@ class PrinterBody(BaseModel):
 
 
 # Shown to everyone once; their "I understand" is recorded. Bump the version if it changes.
-DATA_NOTICE_VERSION = 2
+DATA_NOTICE_VERSION = 3
 DATA_NOTICE = ("The admin can see how you use Next Box: your printed tickets (including the tasks on "
-               "them), photo read-backs, settings and activity. Tasks on your built-in list are kept "
-               "on this Next Box computer. Your to-do app password or token is never visible to "
-               "anyone, and feedback stays anonymous.")
+               "them), photo read-backs, settings, activity, signed-in devices, and how many open tasks "
+               "are on your built-in list (not what they say). Tasks on your built-in list are kept on "
+               "this Next Box computer. Your password and your to-do app password or token are never "
+               "visible to anyone, and feedback stays anonymous.")
 
 
 class UserPatch(BaseModel):
@@ -172,6 +174,29 @@ class UserPatch(BaseModel):
     disabled: bool | None = None
     beta: bool | None = None
     debug: bool | None = None
+
+
+class SuperUserPatch(UserPatch):
+    email: str | None = None
+    household_id: str | None = None
+    must_change: bool | None = None
+
+
+class SuperNewUser(BaseModel):
+    username: str
+    role: str = "user"
+    beta: bool = False
+    email: str | None = None
+    household_id: str | None = None
+
+
+class BulkBody(BaseModel):
+    usernames: list[str]
+    action: str  # disable | enable | signout | beta_on | beta_off
+
+
+class HouseholdBody(BaseModel):
+    name: str
 
 
 @dataclasses.dataclass
@@ -396,6 +421,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         s = server_settings.get()
         consent = user.get("consent") or {}
         return {"username": name, "role": user["role"], "beta": user["beta"], "debug": user["debug"],
+                "household_id": user["household_id"],
                 "must_change": user["must_change"], "prefs": user["prefs"],
                 "announcement": s["announcement"], "printing_paused": s["printing_paused"],
                 "data_notice": DATA_NOTICE,
@@ -918,6 +944,199 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return item
 
     # ----------------------------------------------------------- usage (superadmin)
+    # ------------------------------------------------- super admin: every user, every household
+    def _user_rows() -> list[dict]:
+        from sqlalchemy import func as _func
+        from sqlalchemy import select as _select
+
+        from . import db as _db
+        week, month = time.time() - 7 * 86400, time.time() - 30 * 86400
+        since30 = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(month))
+        prints: dict[str, int] = {}
+        for r in ctx.store.list_printed(100_000, since=since30):
+            prints[r.get("by", "")] = prints.get(r.get("by", ""), 0) + 1
+        errors: dict[str, int] = {}
+        for e in events.query(kind="error", since=week, limit=10_000):
+            errors[e["user"]] = errors.get(e["user"], 0) + 1
+        with accounts.db.connect() as conn:
+            open_tasks = dict(conn.execute(_select(_db.tasks.c.owner, _func.count()).where(
+                _db.tasks.c.done_at.is_(None)).group_by(_db.tasks.c.owner)).all())
+            live = dict(conn.execute(_select(_db.sessions.c.username, _func.count()).where(
+                _db.sessions.c.expires > int(time.time())).group_by(_db.sessions.c.username)).all())
+        homes = {h["id"]: h["name"] for h in accounts.households()}
+        rows = []
+        for u in accounts.all_users():
+            conn_ = u.get("connection") or {}
+            consent = u.get("consent") or {}
+            rows.append({
+                "username": u["username"], "email": u.get("email"), "role": u["role"],
+                "household_id": u["household_id"], "household": homes.get(u["household_id"], u["household_id"]),
+                "disabled": u["disabled"], "beta": u["beta"], "debug": u["debug"], "must_change": u["must_change"],
+                "created": u["created"], "last_login": u["last_login"], "sessions": live.get(u["username"], 0),
+                "app": READY_NAMES.get(conn_.get("provider"), conn_.get("provider")) if conn_ else None,
+                "open_tasks": open_tasks.get(u["username"], 0), "prints_30d": prints.get(u["username"], 0),
+                "errors_7d": errors.get(u["username"], 0),
+                "consented": consent.get("version") == DATA_NOTICE_VERSION,
+                "active_7d": bool(u["last_login"] and u["last_login"] > week),
+            })
+        return rows
+
+    def _guard_self(caller: Caller, username: str, changes: dict) -> None:
+        """A superadmin can't lock themselves out from this panel."""
+        if username == caller.name and (changes.get("disabled") or changes.get("role") not in (None, "superadmin")):
+            raise HTTPException(400, "you can't turn off or demote your own account here")
+
+    @app.get("/super/overview")
+    def super_overview(caller: Caller = Depends(super_only)):
+        rows = _user_rows()
+        return {
+            "people": len(rows), "active_7d": sum(r["active_7d"] for r in rows),
+            "turned_off": sum(r["disabled"] for r in rows), "beta": sum(r["beta"] for r in rows),
+            "debug": sum(r["debug"] for r in rows), "temp_password": sum(r["must_change"] for r in rows),
+            "admins": sum(r["role"] == "admin" for r in rows), "superadmins": sum(r["role"] == "superadmin" for r in rows),
+            "with_errors": sum(r["errors_7d"] > 0 for r in rows), "households": len(accounts.households()),
+            "prints_30d": sum(r["prints_30d"] for r in rows), "open_tasks": sum(r["open_tasks"] for r in rows),
+        }
+
+    @app.get("/super/users")
+    def super_users(q: str = "", role: str = "", status: str = "", household: str = "",
+                    caller: Caller = Depends(super_only)):
+        rows = _user_rows()
+        q = q.strip().lower()
+        if q:
+            rows = [r for r in rows if q in r["username"] or q in (r["email"] or "") or q in r["household"].lower()]
+        if role:
+            rows = [r for r in rows if r["role"] == role]
+        if household:
+            rows = [r for r in rows if r["household_id"] == household]
+        checks = {"active": lambda r: r["active_7d"] and not r["disabled"], "off": lambda r: r["disabled"],
+                  "beta": lambda r: r["beta"], "debug": lambda r: r["debug"], "temp": lambda r: r["must_change"],
+                  "errors": lambda r: r["errors_7d"] > 0, "never": lambda r: not r["last_login"],
+                  "no_consent": lambda r: not r["consented"]}
+        if status:
+            if status not in checks:
+                raise HTTPException(400, f"status is one of {', '.join(checks)}")
+            rows = [r for r in rows if checks[status](r)]
+        return rows
+
+    @app.get("/super/users.csv")
+    def super_users_csv(caller: Caller = Depends(super_only)):
+        import csv
+        import io
+        cols = ["username", "email", "role", "household", "disabled", "beta", "debug", "must_change", "created",
+                "last_login", "sessions", "app", "open_tasks", "prints_30d", "errors_7d", "consented"]
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        for r in _user_rows():
+            # Spreadsheet apps run cells that start with = + - @ as formulas: neutralize them.
+            w.writerow({k: ("'" + v if isinstance(v, str) and v[:1] in "=+-@" else v) for k, v in r.items()})
+        audit(caller, "export_users")
+        return Response(buf.getvalue(), media_type="text/csv",
+                        headers={"Content-Disposition": "attachment; filename=nextbox-users.csv"})
+
+    @app.get("/super/users/{username}")
+    def super_user_detail(username: str, caller: Caller = Depends(super_only)):
+        target = _target(username)
+        name = target["username"]
+        row = next(r for r in _user_rows() if r["username"] == name)
+        return {**row, "prefs": target["prefs"], "connection": connections.status(name),
+                "devices": accounts.sessions_for(name), "tags": Tags(accounts.db, name).all(),
+                "recent": events.query(user=name, limit=15),
+                "tickets": [{k: t.get(k) for k in ("id", "kind", "title", "created_at", "dry_run")}
+                            for t in ctx.store.list_printed(8, by=name)]}
+
+    @app.post("/super/users")
+    def super_create(body: SuperNewUser, caller: Caller = Depends(super_only)):
+        if body.role not in ROLES:
+            raise HTTPException(400, "unknown role")
+        home = body.household_id or caller.household
+        if not accounts.household(home):
+            raise HTTPException(400, "no such household")
+        temp = accounts.temp_password()
+        try:
+            accounts.create(body.username, temp, role=body.role, beta=body.beta, must_change=True,
+                            household_id=home, email=body.email or None)
+        except AuthError as exc:
+            raise HTTPException(400, str(exc))
+        audit(caller, "create_user", target=body.username.lower(), role=body.role, household=home)
+        return {"username": body.username.lower(), "temp_password": temp}
+
+    @app.patch("/super/users/{username}")
+    def super_patch(username: str, body: SuperUserPatch, caller: Caller = Depends(super_only)):
+        target = _target(username)
+        changes = body.model_dump(exclude_unset=True)
+        if "email" in changes and changes["email"] == "":
+            changes["email"] = None
+        changes = {k: v for k, v in changes.items() if v is not None or k == "email"}
+        if not changes:
+            raise HTTPException(400, "nothing to change")
+        _guard_self(caller, target["username"], changes)
+        try:
+            updated = accounts.update(target["username"], **changes)
+        except AuthError as exc:
+            raise HTTPException(400, str(exc))
+        if changes.get("must_change"):
+            accounts.revoke_user_sessions(target["username"])
+        audit(caller, "update_user", target=target["username"], changes=changes)
+        return updated
+
+    @app.post("/super/users/{username}/reset-settings")
+    def super_reset_settings(username: str, caller: Caller = Depends(super_only)):
+        target = _target(username)
+        with accounts.db.begin() as conn:
+            from . import db as _db
+            conn.execute(_db.users.update().where(_db.users.c.username == target["username"]).values(prefs=default_prefs()))
+        audit(caller, "reset_settings", target=target["username"])
+        return {"ok": True}
+
+    @app.post("/super/users/{username}/unlink")
+    def super_unlink(username: str, caller: Caller = Depends(super_only)):
+        """Forget their linked to-do app (their built-in list stays). For a broken or stuck connection."""
+        target = _target(username)
+        connections.disconnect(target["username"])
+        audit(caller, "unlink_app", target=target["username"])
+        return {"ok": True}
+
+    @app.post("/super/users/bulk")
+    def super_bulk(body: BulkBody, caller: Caller = Depends(super_only)):
+        actions = {"disable": {"disabled": True}, "enable": {"disabled": False},
+                   "beta_on": {"beta": True}, "beta_off": {"beta": False}, "signout": None}
+        if body.action not in actions:
+            raise HTTPException(400, f"action is one of {', '.join(actions)}")
+        if not body.usernames or len(body.usernames) > 500:
+            raise HTTPException(400, "pick 1 to 500 people")
+        results = {}
+        for raw in dict.fromkeys(u.strip().lower() for u in body.usernames):
+            if raw == caller.name and body.action in ("disable", "signout"):
+                results[raw] = "skipped: that's you"
+                continue
+            if not accounts.get(raw):
+                results[raw] = "no such user"
+                continue
+            try:
+                if body.action == "signout":
+                    results[raw] = f"signed out {accounts.revoke_user_sessions(raw)} device(s)"
+                else:
+                    accounts.update(raw, **actions[body.action])
+                    results[raw] = "done"
+            except AuthError as exc:
+                results[raw] = str(exc)
+        audit(caller, "bulk_users", op=body.action, count=len(results))
+        return {"results": results}
+
+    @app.get("/super/households")
+    def super_households(caller: Caller = Depends(super_only)):
+        return accounts.households()
+
+    @app.post("/super/households")
+    def super_new_household(body: HouseholdBody, caller: Caller = Depends(super_only)):
+        if not body.name.strip():
+            raise HTTPException(400, "give the household a name")
+        hid = accounts.create_household(body.name)
+        audit(caller, "create_household", household_id=hid)
+        return accounts.household(hid)
+
     @app.get("/super/usage")
     def usage(days: int = 30, caller: Caller = Depends(super_only)):
         days = max(1, min(days, 365))

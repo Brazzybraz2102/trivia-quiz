@@ -85,6 +85,28 @@
   .center { max-width:400px; margin:12vh auto 0; padding:0 16px; }
   .center label { display:block; margin-top:10px; font-size:14px; }
   .center input { margin-top:4px; }
+  /* Super admin: users */
+  .tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(118px, 1fr)); gap:8px; }
+  .tile { background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:10px; text-align:left; font:inherit; color:var(--fg); cursor:pointer; }
+  .tile b { display:block; font-size:22px; }
+  .tile span { font-size:12px; color:var(--muted); }
+  .tile.on { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+  .filters { display:grid; grid-template-columns:1fr auto auto auto; gap:8px; margin-top:12px; }
+  @media (max-width:620px) { .filters { grid-template-columns:1fr 1fr; } .filters input { grid-column:1 / -1; } }
+  .urow { display:flex; gap:10px; align-items:flex-start; padding:10px 0; border-top:1px solid var(--line); }
+  .urow:first-child { border-top:0; }
+  .urow input[type=checkbox] { width:20px; height:20px; flex:none; margin-top:3px; }
+  .urow .who { flex:1; min-width:0; }
+  .urow .who .top { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .urow .who .muted { font-size:13px; overflow-wrap:anywhere; }
+  .bulkbar[hidden] { display:none; }
+  .filters > * { min-width:0; width:100%; }
+  .bulkbar { position:sticky; top:0; z-index:2; background:var(--note); color:var(--noteFg); border-radius:10px; padding:8px 10px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+  #userDialog { max-width:640px; }
+  #userDialog h3 { font-size:14px; margin:16px 0 6px; border-top:1px solid var(--line); padding-top:12px; }
+  .toggles label { display:flex; gap:8px; align-items:center; padding:4px 0; font-size:15px; }
+  .toggles input { width:20px; height:20px; }
+  .mini { font-size:13px; border-top:1px solid var(--line); padding:5px 0; overflow-wrap:anywhere; }
   /* My list */
   .tc-red{--t:#d93025} .tc-orange{--t:#ef7d1a} .tc-yellow{--t:#e8b500} .tc-green{--t:#2e9d4f}
   .tc-blue{--t:#2a6ff0} .tc-pink{--t:#e0509b} .tc-purple{--t:#8a4fd8} .tc-white{--t:#9a9a92}
@@ -144,6 +166,7 @@
   <button data-tab="board">Feedback</button>
   <button data-tab="settings">Settings</button>
   <button data-tab="admin" data-min="admin" hidden>Admin</button>
+  <button data-tab="superusers" data-min="superadmin" hidden>Users</button>
   <button data-tab="usage" data-min="superadmin" hidden>Usage</button>
   <button data-tab="debug" data-min="superadmin" hidden>Debug</button>
 </nav>
@@ -324,6 +347,39 @@
     <div class="card"><h2>Feedback</h2><p class="muted">Respond, set a status or hide posts on the <button class="linkish" data-goto="board">Feedback tab</button>. Names are never shown.</p></div>
   </section>
 
+  <section id="superusers">
+    <div class="card"><h2>Everyone</h2>
+      <p class="muted">Every person in every household. Tap a number to filter. Everything you change here is in the audit log.</p>
+      <div class="tiles" id="suTiles">…</div>
+      <div class="filters">
+        <input type="text" id="suQ" placeholder="Search name, email or household" autocapitalize="none" aria-label="Search">
+        <select id="suRole" aria-label="Role"><option value="">Any role</option><option value="user">user</option><option value="admin">admin</option><option value="superadmin">superadmin</option></select>
+        <select id="suStatus" aria-label="Status"><option value="">Anyone</option><option value="active">Active this week</option><option value="never">Never signed in</option><option value="off">Turned off</option><option value="beta">Beta testers</option><option value="debug">Debug on</option><option value="temp">Temp password</option><option value="errors">Had errors</option><option value="no_consent">Notice not accepted</option></select>
+        <select id="suHome" aria-label="Household"><option value="">All households</option></select>
+      </div>
+      <div class="row">
+        <button class="go" id="suAdd">Add a person</button>
+        <button class="plain" id="suNewHome">New household</button>
+        <a class="plain" id="suCsv" href="/super/users.csv" style="text-decoration:none;color:inherit;border:1px solid var(--line);border-radius:8px;padding:9px 13px">Export CSV</a>
+        <span class="muted" id="suCount"></span>
+      </div>
+      <div id="suNew"></div>
+    </div>
+    <div class="card">
+      <div class="bulkbar" id="suBulk" hidden>
+        <b id="suPicked"></b>
+        <button class="plain small" data-bulk="signout">Sign out</button>
+        <button class="plain small" data-bulk="disable">Turn off</button>
+        <button class="plain small" data-bulk="enable">Turn on</button>
+        <button class="plain small" data-bulk="beta_on">Beta on</button>
+        <button class="plain small" data-bulk="beta_off">Beta off</button>
+        <button class="linkish" id="suClear" style="margin-left:auto">Clear</button>
+      </div>
+      <label class="muted"><input type="checkbox" id="suAll"> Select everyone shown</label>
+      <div id="suList">…</div>
+    </div>
+  </section>
+
   <section id="usage">
     <div class="card"><h2>How people use Next Box</h2>
       <p class="muted">Everyone has accepted the data notice (see People). Feedback stays anonymous and isn't included here.</p>
@@ -392,6 +448,39 @@
     <div id="fbDone" hidden></div>
     <div class="row"><button class="go" type="button" id="fbSend">Post anonymously</button><button class="plain" type="button" id="fbClose">Close</button></div>
   </form>
+</dialog>
+<dialog id="userDialog">
+  <h2 id="udName">…</h2>
+  <div class="muted" id="udSub"></div>
+  <h3>Profile</h3>
+  <div class="field"><label for="udEmail">Email</label><input type="text" id="udEmail" autocapitalize="none" placeholder="optional"></div>
+  <div class="row">
+    <div class="field"><label for="udRole">Role</label><select id="udRole"><option>user</option><option>admin</option><option>superadmin</option></select></div>
+    <div class="field"><label for="udHome">Household</label><select id="udHome"></select></div>
+  </div>
+  <div class="toggles">
+    <label><input type="checkbox" id="udOff"> Turned off (can't sign in)</label>
+    <label><input type="checkbox" id="udBeta"> Beta tester</label>
+    <label><input type="checkbox" id="udDebug"> Debug mode (records details of every action)</label>
+    <label><input type="checkbox" id="udTemp"> Must pick a new password at next sign-in</label>
+  </div>
+  <div class="row"><button class="go" id="udSave">Save changes</button><span class="err" id="udMsg"></span></div>
+  <h3>Help them</h3>
+  <div class="row">
+    <button class="plain small" id="udReset">Reset password</button>
+    <button class="plain small" id="udSignout">Sign out all devices</button>
+    <button class="plain small" id="udPrefs">Reset their settings</button>
+    <button class="plain small" id="udUnlink">Unlink to-do app</button>
+    <a class="plain small" id="udBundle" style="text-decoration:none;color:inherit;border:1px solid var(--line);border-radius:8px;padding:5px 9px;font-size:13px">Debug bundle</a>
+  </div>
+  <div id="udTempOut"></div>
+  <h3>What's going on</h3>
+  <div id="udInfo" class="muted"></div>
+  <h3>Delete</h3>
+  <p class="muted">Removes the account, their built-in list and tags. Their anonymous feedback stays, unlinked. Type their username to confirm.</p>
+  <div class="row"><input type="text" id="udConfirm" autocapitalize="none" style="max-width:200px" aria-label="Type the username to confirm">
+    <button class="go warn" id="udDelete" disabled>Delete account</button></div>
+  <div class="row" style="justify-content:flex-end"><button class="plain" id="udClose">Close</button></div>
 </dialog>
 <dialog id="taskDialog">
   <form method="dialog" id="taskForm">

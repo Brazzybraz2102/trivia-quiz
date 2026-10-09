@@ -127,6 +127,13 @@ class Accounts:
     def create_household(self, name: str) -> str:
         return self.ensure_household(secrets.token_hex(6), name.strip()[:80] or "Home")
 
+    def households(self) -> list[dict]:
+        with self.db.connect() as conn:
+            rows = conn.execute(select(db.households, func.count(db.users.c.username).label("members"))
+                                .select_from(db.households.outerjoin(db.users, db.users.c.household_id == db.households.c.id))
+                                .group_by(db.households.c.id).order_by(db.households.c.name)).mappings().all()
+        return [dict(r) for r in rows]
+
     def household(self, household_id: str) -> dict | None:
         with self.db.connect() as conn:
             row = conn.execute(select(db.households).where(db.households.c.id == household_id)).mappings().first()
@@ -271,16 +278,24 @@ class Accounts:
             and_(db.users.c.role == "superadmin", db.users.c.disabled.is_(False)))).scalar()
 
     def update(self, username: str, **fields) -> dict:
-        allowed = {"role", "disabled", "beta", "debug"}
+        allowed = {"role", "disabled", "beta", "debug", "email", "household_id", "must_change"}
         if set(fields) - allowed:
             raise AuthError(f"can't change {', '.join(set(fields) - allowed)}")
         if "role" in fields and fields["role"] not in ROLES:
             raise AuthError(f"role must be one of {', '.join(ROLES)}")
+        if "email" in fields:
+            fields["email"] = self._check_email(fields["email"])
         username = username.strip().lower()
         with self.db.begin() as conn:
             row = self._row(conn, username)
             if not row:
                 raise AuthError(f"no user {username}")
+            if fields.get("email") and conn.execute(select(db.users.c.username).where(and_(
+                    db.users.c.email == fields["email"], db.users.c.username != username))).first():
+                raise AuthError("another account already uses that email")
+            if "household_id" in fields and not conn.execute(select(db.households.c.id).where(
+                    db.households.c.id == fields["household_id"])).first():
+                raise AuthError("no such household")
             demoting = fields.get("role", "superadmin") != "superadmin" or fields.get("disabled")
             if row["role"] == "superadmin" and demoting and self._active_superadmins(conn) <= 1:
                 raise AuthError("can't demote or disable the last superadmin")
