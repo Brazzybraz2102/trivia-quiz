@@ -34,6 +34,40 @@ class GameTests(unittest.TestCase):
         tracks = [Track(t, "X", "", 200, t) for t in titles]
         self.assertEqual([t.ref for t in ntt_game.usable_tracks(tracks)], ["Outro", "Hello"])
 
+    def test_dni_rules(self):
+        tracks = [Track("Song A", "Queen", "Jazz", 200, 1, 0, "Rock"),
+                  Track("Song B", "Queens of the Stone Age", "Rated R", 200, 2, 0, "Rock"),
+                  Track("Jingle Bells", "Choir", "Holiday", 200, 3, 0, "Christmas"),
+                  Track("Song C", "Adele", "21", 200, 4, 0, "Pop")]
+        keep = lambda dni: [t.ref for t in ntt_game.usable_tracks(tracks, dni=dni)]
+        # "is" matches the whole value only, ignoring case.
+        self.assertEqual(keep([{"field": "artist", "match": "is", "text": "queen"}]), [2, 3, 4])
+        self.assertEqual(keep([{"field": "artist", "match": "contains", "text": "queen"}]), [3, 4])
+        self.assertEqual(keep([{"field": "genre", "match": "is", "text": "Christmas"}]), [1, 2, 4])
+        self.assertEqual(keep([{"field": "album", "match": "contains", "text": "rated"}]), [1, 3, 4])
+        self.assertEqual(keep([{"field": "artist", "match": "is", "text": "  "}]), [1, 2, 3, 4])
+        self.assertEqual(keep([]), [1, 2, 3, 4])
+
+    def test_exclude_applies_to_rest_of_game(self):
+        game = Game(library(), rounds=10, rng=random.Random(6))
+        game.answer(game.next_question().answer, 1)
+        game.exclude_upcoming({"field": "artist", "match": "is", "text": "artist 1"})
+        artists = []
+        while game.next_question():
+            artists.append(game.question.track.artist)
+            game.answer(None, 15)
+        self.assertNotIn("Artist 1", artists)
+        # Rounds shrink if there aren't enough songs left.
+        game = Game(library(6), rounds=6, rng=random.Random(7))
+        game.next_question()
+        game.exclude_upcoming({"field": "title", "match": "contains", "text": "song"})
+        self.assertEqual(game.rounds, 1)
+
+    def test_dni_counted_in_error(self):
+        tracks = [t._replace(artist="Nobody") for t in library()]
+        with self.assertRaisesRegex(ValueError, "12 songs are on your Do Not Include list"):
+            Game(tracks, dni=[{"field": "artist", "match": "is", "text": "nobody"}])
+
     def test_question_has_four_distinct_choices_including_answer(self):
         rng = random.Random(1)
         tracks = library()

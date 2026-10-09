@@ -73,6 +73,93 @@ def save_settings(settings):
         pass
 
 
+FIELD_LABELS = {"title": "Title", "artist": "Artist", "album": "Album", "genre": "Genre"}
+MATCH_LABELS = {"is": "is", "contains": "contains"}
+
+
+def describe_rule(rule):
+    return "%s %s \u201c%s\u201d" % (_(FIELD_LABELS.get(rule["field"], rule["field"])),
+                                 _(MATCH_LABELS.get(rule["match"], rule["match"])), rule["text"])
+
+
+class DniDialog(Gtk.Dialog):
+    """Edit the Do Not Include list. Changes are saved as you make them."""
+
+    def __init__(self, parent, rules, on_change):
+        Gtk.Dialog.__init__(self, title=_("Do Not Include"), transient_for=parent, modal=True)
+        self.rules = rules
+        self.on_change = on_change
+        self.set_default_size(440, 420)
+        self.add_button(_("Done"), Gtk.ResponseType.CLOSE)
+
+        box = self.get_content_area()
+        box.set_spacing(10)
+        box.set_border_width(14)
+        intro = Gtk.Label(label=_("Songs that match any rule are left out of the game."),
+                          wrap=True, xalign=0)
+        box.pack_start(intro, False, False, 0)
+
+        scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
+        scroll.set_shadow_type(Gtk.ShadowType.IN)
+        self.listbox = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        empty = Gtk.Label(label=_("Nothing excluded yet."))
+        empty.show()
+        self.listbox.set_placeholder(empty)
+        scroll.add(self.listbox)
+        box.pack_start(scroll, True, True, 0)
+
+        add = Gtk.Box(spacing=6)
+        self.field_combo = Gtk.ComboBoxText()
+        for field in ntt_game.DNI_FIELDS:
+            self.field_combo.append(field, _(FIELD_LABELS[field]))
+        self.field_combo.set_active_id("artist")
+        self.match_combo = Gtk.ComboBoxText()
+        for match in ("is", "contains"):
+            self.match_combo.append(match, _(MATCH_LABELS[match]))
+        self.match_combo.set_active_id("is")
+        self.text_entry = Gtk.Entry(placeholder_text=_("e.g. Nickelback"), hexpand=True)
+        self.text_entry.connect("activate", lambda e: self._add())
+        add_button = Gtk.Button(label=_("Add"))
+        add_button.connect("clicked", lambda b: self._add())
+        for widget in (self.field_combo, self.match_combo, self.text_entry, add_button):
+            add.pack_start(widget, widget is self.text_entry, True, 0)
+        box.pack_start(add, False, False, 0)
+
+        self.connect("response", lambda d, r: d.destroy())
+        self._refresh()
+        self.show_all()
+
+    def _refresh(self):
+        for child in self.listbox.get_children():
+            self.listbox.remove(child)
+        for rule in self.rules:
+            row = Gtk.Box(spacing=6, border_width=6)
+            row.pack_start(Gtk.Label(label=describe_rule(rule), xalign=0), True, True, 0)
+            remove = Gtk.Button.new_from_icon_name("list-remove-symbolic", Gtk.IconSize.BUTTON)
+            remove.set_tooltip_text(_("Remove"))
+            remove.connect("clicked", lambda b, r=rule: self._remove(r))
+            row.pack_start(remove, False, False, 0)
+            self.listbox.add(row)
+        self.listbox.show_all()
+
+    def _add(self):
+        text = self.text_entry.get_text().strip()
+        if not text:
+            return
+        rule = {"field": self.field_combo.get_active_id(),
+                "match": self.match_combo.get_active_id(), "text": text}
+        if rule not in self.rules:
+            self.rules.append(rule)
+            self.on_change()
+        self.text_entry.set_text("")
+        self._refresh()
+
+    def _remove(self, rule):
+        self.rules.remove(rule)
+        self.on_change()
+        self._refresh()
+
+
 def entry_location(entry):
     return entry.get_string(RB.RhythmDBPropType.LOCATION) if entry else None
 
@@ -84,6 +171,7 @@ class QuizWindow(Gtk.Window):
         self.player = shell.props.shell_player
         self.db = shell.props.db
         self.settings = load_settings()
+        self.dni = self.settings.get("dni", [dict(r) for r in ntt_game.DEFAULT_DNI])
         self.rated_entry = None
         self.game = None
         self.timer_id = 0
@@ -93,7 +181,7 @@ class QuizWindow(Gtk.Window):
         self.unloaded_plugins = []
         self.art_store = RB.ExtDB(name="album-art")
 
-        self.set_default_size(480, 660)
+        self.set_default_size(480, 700)
         self.set_border_width(18)
         self.set_transient_for(shell.props.window)
 
@@ -153,6 +241,11 @@ class QuizWindow(Gtk.Window):
         box.pack_start(self._label(
             _("Rate songs after each round to keep the ones you don't like out of future games."),
             "ntt-note"), False, False, 0)
+
+        self.dni_button = Gtk.Button(halign=Gtk.Align.CENTER)
+        self.dni_button.connect("clicked", lambda b: DniDialog(self, self.dni, self._dni_changed))
+        box.pack_start(self.dni_button, False, False, 0)
+        self._update_dni_button()
 
         self.start_error = self._label("", "ntt-dim")
         box.pack_start(self.start_error, False, False, 0)
@@ -215,6 +308,9 @@ class QuizWindow(Gtk.Window):
         never.connect("clicked", lambda b: self._set_rating(1))
         self.rating_box.pack_start(never, False, False, 12)
         box.pack_start(self.rating_box, False, False, 0)
+        self.exclude_artist_button = Gtk.Button(halign=Gtk.Align.CENTER)
+        self.exclude_artist_button.connect("clicked", lambda b: self._exclude_current_artist())
+        box.pack_start(self.exclude_artist_button, False, False, 0)
         self.rating_note = self._label("", "ntt-note")
         box.pack_start(self.rating_note, False, False, 0)
 
@@ -265,7 +361,8 @@ class QuizWindow(Gtk.Window):
                 entry.get_string(RB.RhythmDBPropType.ALBUM),
                 entry.get_ulong(RB.RhythmDBPropType.DURATION),
                 entry,
-                entry.get_double(RB.RhythmDBPropType.RATING)))
+                entry.get_double(RB.RhythmDBPropType.RATING),
+                entry.get_string(RB.RhythmDBPropType.GENRE)))
         return tracks
 
     def start_game(self):
@@ -273,7 +370,8 @@ class QuizWindow(Gtk.Window):
             self.game = Game(self._library_tracks(),
                              rounds=int(self.rounds_spin.get_value()),
                              unknown=_("Unknown"),
-                             skip_rating=self._skip_rating())
+                             skip_rating=self._skip_rating(),
+                             dni=self.dni)
         except ValueError as e:
             self.start_error.set_text(str(e))
             self.stack.set_visible_child_name("start")
@@ -303,6 +401,7 @@ class QuizWindow(Gtk.Window):
         self.art.set_pixel_size(128)
         self.reveal_label.set_text("")
         self.rating_box.set_visible(False)
+        self.exclude_artist_button.set_visible(False)
         self.rating_note.set_text("")
         self.rated_entry = None
         self.next_button.set_visible(False)
@@ -401,6 +500,9 @@ class QuizWindow(Gtk.Window):
         self.rated_entry = t.ref
         self._show_rating()
         self.rating_box.set_visible(True)
+        self.exclude_artist_button.set_label(_("🚫 Don't include %s") % t.artist)
+        self.exclude_artist_button.set_sensitive(True)
+        self.exclude_artist_button.set_visible(True)
 
         self.replay_button.set_visible(False)
         self.next_button.set_label(
@@ -429,6 +531,29 @@ class QuizWindow(Gtk.Window):
     def _on_skip_changed(self, combo):
         self.settings["skip_rating"] = self._skip_rating()
         save_settings(self.settings)
+
+    def _dni_changed(self):
+        self.settings["dni"] = self.dni
+        save_settings(self.settings)
+        self._update_dni_button()
+
+    def _update_dni_button(self):
+        self.dni_button.set_label(_("Do Not Include list (%d)…") % len(self.dni))
+
+    def _exclude_current_artist(self):
+        if self.rated_entry is None:
+            return
+        artist = self.rated_entry.get_string(RB.RhythmDBPropType.ARTIST)
+        rule = {"field": "artist", "match": "is", "text": artist}
+        if rule not in self.dni:
+            self.dni.append(rule)
+            self._dni_changed()
+        if self.game is not None:
+            self.game.exclude_upcoming(rule)
+            self.next_button.set_label(
+                _("See results") if self.game.round >= self.game.rounds else _("Next"))
+        self.exclude_artist_button.set_label(_("%s won't come up again") % artist)
+        self.exclude_artist_button.set_sensitive(False)
 
     def _set_rating(self, rating):
         """Save a star rating to the Rhythmbox library."""

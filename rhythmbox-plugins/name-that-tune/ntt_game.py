@@ -15,12 +15,15 @@ CHOICES = 4
 MIN_TRACK_SECONDS = 30
 # Songs rated this many stars or fewer are left out (0 = unrated, never skipped).
 SKIP_RATING = 2
-# Songs whose title contains any of these (any capitalisation) are left out.
-EXCLUDE_TITLE_WORDS = ("intro",)
+# Do Not Include rules: songs matching any rule are left out of the game.
+# match is "contains" or "is"; both ignore capitalisation.
+DNI_FIELDS = ("title", "artist", "album", "genre")
+DEFAULT_DNI = [{"field": "title", "match": "contains", "text": "intro"}]
 
 # ref is whatever the caller needs to play the track (a RhythmDBEntry).
 # rating is Rhythmbox's 0-5 stars, where 0 means not rated yet.
-Track = namedtuple("Track", "title artist album duration ref rating", defaults=(0,))
+Track = namedtuple("Track", "title artist album duration ref rating genre",
+                   defaults=(0, ""))
 Question = namedtuple("Question", "track kind choices answer start")
 
 KINDS = ("title", "artist")
@@ -35,17 +38,26 @@ def is_skipped(rating, skip_rating=SKIP_RATING):
     return 0 < round(rating or 0) <= skip_rating
 
 
-def has_excluded_title(title):
-    title = _norm(title or "")
-    return any(word in title for word in EXCLUDE_TITLE_WORDS)
+def matches_rule(track, rule):
+    value = _norm(getattr(track, rule.get("field", "title"), "") or "")
+    text = _norm(rule.get("text", ""))
+    if not text:
+        return False
+    if rule.get("match") == "is":
+        return value == text
+    return text in value
 
 
-def usable_tracks(tracks, unknown="Unknown", skip_rating=SKIP_RATING):
-    """Drop tracks that are too short, rated low, intros, or missing a title or artist."""
+def is_dni(track, dni):
+    return any(matches_rule(track, r) for r in dni or ())
+
+
+def usable_tracks(tracks, unknown="Unknown", skip_rating=SKIP_RATING, dni=DEFAULT_DNI):
+    """Drop tracks that are too short, rated low, on the DNI list, or missing a title or artist."""
     bad = {"", _norm(unknown)}
     return [t for t in tracks
             if _norm(t.title or "") not in bad
-            and not has_excluded_title(t.title)
+            and not is_dni(t, dni)
             and _norm(t.artist or "") not in bad
             and (t.duration or 0) >= MIN_TRACK_SECONDS
             and not is_skipped(t.rating, skip_rating)]
@@ -96,11 +108,12 @@ def build_question(tracks, track, kind, rng=random):
 
 class Game:
     def __init__(self, tracks, rounds=ROUNDS, unknown="Unknown", rng=None,
-                 skip_rating=SKIP_RATING):
+                 skip_rating=SKIP_RATING, dni=DEFAULT_DNI):
         self.rng = rng or random.Random()
         self.skip_rating = skip_rating
-        self.tracks = usable_tracks(tracks, unknown, skip_rating)
+        self.tracks = usable_tracks(tracks, unknown, skip_rating, dni)
         self.skipped = sum(1 for t in tracks if is_skipped(t.rating, skip_rating))
+        self.excluded = sum(1 for t in tracks if is_dni(t, dni))
         self.kinds = playable_kinds(self.tracks)
         if not self.kinds:
             message = ("Your library needs at least %d songs with different "
@@ -108,6 +121,9 @@ class Game:
             if self.skipped:
                 message += (" %d low-rated songs are being skipped; try "
                             "skipping fewer." % self.skipped)
+            if self.excluded:
+                message += (" %d songs are on your Do Not Include list."
+                            % self.excluded)
             raise ValueError(message)
         self.rounds = min(rounds, len(self.tracks))
         self.round = 0
@@ -133,6 +149,11 @@ class Game:
         kind = self.rng.choice(self.kinds)
         self.question = build_question(self.tracks, track, kind, self.rng)
         return self.question
+
+    def exclude_upcoming(self, rule):
+        """Apply a new Do Not Include rule to the rest of this game."""
+        self._unused = [t for t in self._unused if not matches_rule(t, rule)]
+        self.rounds = min(self.rounds, self.round + len(self._unused))
 
     def answer(self, choice, elapsed):
         """Score a choice (None means time ran out). Returns points earned."""

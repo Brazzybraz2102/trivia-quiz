@@ -12,7 +12,14 @@ from four choices.
 - Faster answers score more (1000 down to 100 points), and a streak adds a bonus.
 - **Replay snippet** rewinds the clip, but the clock keeps running.
 - After you answer, it shows the song, album and cover art.
-- Songs with "Intro" anywhere in the title (any capitalization) are left out.
+- **Do Not Include list.** Click **Do Not Include list…** on the start screen
+  to add rules like *Artist is Nickelback*, *Genre is Christmas* or *Title
+  contains live*. Rules work on title, artist, album or genre, and ignore
+  capitalization. "is" matches the whole name, so *Artist is Queen* won't
+  catch Queens of the Stone Age, while "contains" matches any part. It starts
+  with *Title contains intro*, which you can remove.
+- After each round, **🚫 Don't include <artist>** adds that artist to the list
+  in one click. It also takes effect for the rest of the current game.
 - **Rate songs so bad ones stop coming up.** After each round, give the song
   1–5 stars or press **👎 Never again** (which sets 1 star). The start screen
   has a **Skip songs rated…** setting, which defaults to skipping songs with
@@ -28,6 +35,9 @@ Open it from **Tools → Name That Tune…** (in the ☰ menu). You need at leas
 songs with different titles or artists.
 
 ![Quiz](screenshots/quiz-reveal.png)
+
+[Watch a 50-second demo game](screenshots/name-that-tune-demo.mp4), recorded
+in Rhythmbox with generated test songs, so the audio is just test tones.
 
 ## Now Playing Display
 
