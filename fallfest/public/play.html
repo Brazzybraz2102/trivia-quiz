@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1b0f26">
+<title>Fall Fest Party Pack</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bowlby+One&family=Fredoka:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+.app { max-width: 520px; margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; gap: 18px;
+  padding-block: calc(14px + env(safe-area-inset-top, 0px)) calc(24px + env(safe-area-inset-bottom, 0px)); }
+.bar { display: flex; align-items: center; gap: 10px; }
+.bar .nm { font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar .score { font-family: var(--f-display); color: var(--mustard); font-variant-numeric: tabular-nums; }
+.bar .clock { font-size: 18px; }
+.screen { flex: 1; display: flex; flex-direction: column; gap: 16px; }
+.screen.fresh { animation: rise .3s ease-out; }
+@keyframes rise { from { transform: translateY(14px); opacity: 0; } }
+.title { font-family: var(--f-display); font-size: 34px; color: var(--mustard); line-height: 1.02; text-shadow: 0 4px 0 #0b0510; }
+.q { font-size: 21px; font-weight: 700; line-height: 1.3; }
+.q .blank { color: var(--mustard); }
+.muted { color: var(--muted); }
+.card { background: var(--night-2); border-radius: 18px; padding: 16px; box-shadow: var(--shadow); }
+.waitcard { text-align: center; display: flex; flex-direction: column; gap: 10px; align-items: center; padding: 28px 16px; }
+.waitcard .big { font-family: var(--f-display); font-size: 28px; line-height: 1.05; }
+.waitcard.good .big { color: var(--leaf); }
+.waitcard.bad .big { color: var(--cranberry); }
+
+.choices { display: grid; gap: 12px; }
+.choice { background: var(--c, var(--night-3)); color: var(--ink); border: 0; border-radius: 18px; padding: 16px; min-height: 68px;
+  display: flex; align-items: center; gap: 14px; text-align: left; font-size: 19px; font-weight: 700; box-shadow: 0 5px 0 #0b0510; }
+.choice:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 2px 0 #0b0510; }
+.choice .shape { width: 40px; height: 40px; display: grid; place-items: center; background: #0002; border-radius: 10px; flex: none; font-size: 22px; }
+.choice span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.choice.plain { --c: var(--cream); }
+.choice:disabled { opacity: .4; }
+.choice.own { --c: var(--night-3); color: var(--muted); }
+
+.form { display: flex; flex-direction: column; gap: 12px; }
+.err { color: var(--cranberry); font-weight: 700; min-height: 1.4em; }
+.emojis { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 8px; }
+.emojis button { background: var(--night-2); border: 3px solid transparent; border-radius: 14px; font-size: 28px; padding: 6px 0; }
+.emojis button[aria-pressed="true"] { border-color: var(--pumpkin); background: var(--night-3); }
+.joinhero { text-align: center; display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.joinhero .title { font-size: 44px; transform: rotate(-2deg); }
+.joinhero .title span { display: block; color: var(--pumpkin); }
+.me { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 20px 0; }
+.big-btn { font-size: 22px; padding: 16px; }
+.offline { background: var(--cranberry); color: var(--cream); border-radius: 12px; padding: 8px 12px; font-weight: 700; text-align: center; }
+.progress { font-size: 14px; font-weight: 700; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+<script src="/static/common.js"></script>
+<script>
+"use strict";
+const { h, connect, countdown, post, avatar, pts, num } = FF;
+const app = document.getElementById("app");
+const EMOJI = ["🎃", "🍂", "🍁", "🌽", "🦃", "🍎", "🥧", "🦉", "🍄", "🐿️", "👻", "🦇", "🕷️", "🌻", "🧣", "☕", "🍩", "🍏", "🐈‍⬛", "🌰"];
+
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+let myId = store.get("ffpp-id");
+let S = null, online = true, lastKey = null, lastPhaseKey = null, editing = false, conn = null;
+let draft = { name: store.get("ffpp-name") || "", emoji: store.get("ffpp-emoji") || EMOJI[Math.floor(Math.random() * EMOJI.length)] };
+let errMsg = "";
+
+function start() {
+  conn && conn.close();
+  conn = connect(`/events?role=player&id=${encodeURIComponent(myId || "")}`, s => { S = s; online = true; render(); }, ok => { online = ok; if (!ok) render(true); });
+}
+
+// Only rebuild when what THIS player sees changes, so typing isn't interrupted.
+function screenKey() {
+  const g = S.game ? { ...S.game } : null;
+  if (g) for (const k of ["answered", "written", "picked", "voted", "guessed", "done", "answeredCount", "earned", "now"]) delete g[k];
+  const rank = S.game && S.game.phase === "final" ? S.players.map(p => p.id + ":" + p.score).join() : "";
+  return JSON.stringify({ me: S.me, g, editing, errMsg, online, rank });
+}
+
+function render(force) {
+  if (!S && !force) return;
+  const key = S ? screenKey() : "offline";
+  if (key === lastKey) return;
+  lastKey = key;
+  const g = S && S.game;
+  const phaseKey = g ? g.step : (S && S.me ? "lobby" : "join");
+  const fresh = phaseKey !== lastPhaseKey; lastPhaseKey = phaseKey;
+
+  const screen = h("div", { class: "screen" + (fresh ? " fresh" : "") });
+  const kids = [];
+  if (!online) kids.push(h("div", { class: "offline", role: "status", text: "Reconnecting… stay on this page." }));
+  if (!S) { app.replaceChildren(...kids); return; }
+
+  if (!S.me || editing) { app.replaceChildren(...kids, joinScreen()); return; }
+
+  kids.push(h("div", { class: "bar" }, avatar(S.me, "sm"), h("span", { class: "nm", text: S.me.name }),
+    g && g.deadline ? countdown(g.deadline) : null,
+    h("span", { class: "score", text: S.me.score.toLocaleString("en-US") + " pts" })));
+
+  if (!g) lobby(screen);
+  else if (g.phase === "intro") screen.append(h("div", { class: "progress", text: "Get ready" }), h("div", { class: "title", text: g.title }), h("p", { class: "q", text: g.blurb }), lookUp("Watch the big screen"));
+  else if (g.phase === "final") finalScreen(screen, g);
+  else ({ trivia, fib, quip, guess })[g.type](screen, g);
+
+  const keep = {};
+  for (const el of app.querySelectorAll("input[id], textarea[id]")) keep[el.id] = el.value;
+  app.replaceChildren(...kids, screen);
+  for (const el of screen.querySelectorAll("input[id], textarea[id]")) if (keep[el.id]) el.value = keep[el.id];
+  const auto = screen.querySelector("[data-autofocus]");
+  if (auto && fresh) auto.focus();
+}
+
+const lookUp = (big, sub, mood) => h("div", { class: "card waitcard" + (mood ? " " + mood : "") }, h("div", { class: "big", text: big }), sub ? h("div", { class: "muted", text: sub }) : null);
+const act = async body => {
+  const r = await post("/api/act", { id: myId, ...body });
+  errMsg = r.error || ""; render();
+  return r;
+};
+const blanked = q => q.split("____").flatMap((t, i) => i ? [h("span", { class: "blank", text: "_____" }), t] : [t]);
+
+// ---------- join / lobby ----------
+function joinScreen() {
+  const nameIn = h("input", { class: "field", id: "name", maxlength: 14, autocomplete: "nickname", placeholder: "Your name", value: draft.name, "data-autofocus": "",
+    oninput: e => { draft.name = e.target.value; } });
+  const err = h("div", { class: "err", role: "alert", text: errMsg });
+  const submit = async e => {
+    e.preventDefault();
+    if (!draft.name.trim()) { err.textContent = "Type a name to join."; return; }
+    const r = await post("/api/join", { id: S && S.me ? myId : null, name: draft.name, emoji: draft.emoji });
+    if (r.error) { err.textContent = r.error; return; }
+    myId = r.id; store.set("ffpp-id", myId); store.set("ffpp-name", draft.name); store.set("ffpp-emoji", draft.emoji);
+    editing = false; errMsg = ""; lastKey = null; start();
+  };
+  const emojis = h("div", { class: "emojis", role: "group", "aria-label": "Pick your icon" }, EMOJI.map(e => h("button", { type: "button", "aria-pressed": String(draft.emoji === e), text: e,
+    onclick: ev => { draft.emoji = e; for (const b of emojis.children) b.setAttribute("aria-pressed", String(b === ev.currentTarget)); } })));
+  setTimeout(() => nameIn.focus());
+  return h("div", { class: "screen fresh" },
+    h("div", { class: "joinhero" }, h("div", { class: "title" }, "Fall Fest", h("span", { text: "Party Pack" }))),
+    h("form", { class: "form", onsubmit: submit },
+      h("label", { class: "eyebrow", for: "name", text: "Your name" }), nameIn,
+      h("div", { class: "eyebrow", text: "Pick your icon" }), emojis, err,
+      h("button", { class: "btn go big-btn", type: "submit", text: S && S.me ? "Save" : "Join the game" }),
+      S && S.me ? h("button", { class: "btn ghost", type: "button", text: "Cancel", onclick: () => { editing = false; render(); } }) : null));
+}
+
+function lobby(screen) {
+  screen.append(h("div", { class: "me" }, avatar(S.me, "lg"),
+    h("div", { class: "title", text: `You're in, ${S.me.name}!` }),
+    h("div", { class: "muted", text: "Watch the big screen. The host will start a game soon." })),
+    h("button", { class: "btn ghost", text: "Change name or icon", onclick: () => { draft = { name: S.me.name, emoji: S.me.emoji }; editing = true; render(); } }));
+}
+
+// ---------- games ----------
+function trivia(screen, g) {
+  screen.append(h("div", { class: "progress", text: `Question ${g.i + 1} of ${g.total}` }), h("div", { class: "q", text: g.q }));
+  if (g.phase === "question") {
+    if (g.mine != null) return screen.append(lookUp("Locked in!", `You picked ${"ABCD"[g.mine]}. Waiting for everyone else.`));
+    screen.append(h("div", { class: "choices" }, g.choices.map((c, k) => h("button", { class: `choice c${k}`, onclick: e => { e.currentTarget.disabled = true; act({ choice: k }); } },
+      h("span", { class: "shape", text: "ABCD"[k] }), h("span", { text: c })))));
+  } else {
+    const p = g.results[S.me.id] || 0;
+    screen.append(p ? lookUp("Correct! " + pts(p), "The faster you answer, the more you get.", "good")
+      : lookUp(g.mine == null ? "Too slow!" : "Not this time", "The answer was " + g.choices[g.correct], "bad"));
+  }
+}
+
+function fib(screen, g) {
+  screen.append(h("div", { class: "progress", text: `Question ${g.i + 1} of ${g.total}` }), h("div", { class: "q" }, blanked(g.q)));
+  if (g.phase === "write") {
+    if (g.mine) return screen.append(lookUp("Fib submitted", `“${g.mine}”. Let's see who falls for it.`));
+    const inp = h("input", { class: "field", id: "fib-" + g.step, maxlength: 40, autocomplete: "off", placeholder: "Write a believable fake answer", "data-autofocus": "" });
+    screen.append(h("form", { class: "form", onsubmit: e => { e.preventDefault(); act({ text: inp.value }); } },
+      inp, h("div", { class: "err", role: "alert", text: errMsg }), h("button", { class: "btn go big-btn", type: "submit", text: "Submit fib" })));
+  } else if (g.phase === "pick") {
+    if (g.mine != null) return screen.append(lookUp("Locked in!", `You picked “${g.options[g.mine]}”.`));
+    screen.append(h("div", { class: "muted", text: "Which one is the truth?" }),
+      h("div", { class: "choices" }, g.options.map((o, k) => h("button", { class: "choice plain" + (g.own[k] ? " own" : ""), disabled: g.own[k], onclick: e => { e.currentTarget.disabled = true; act({ choice: k }); } },
+        h("span", { text: g.own[k] ? `${o} (your fib)` : o })))));
+  } else {
+    const p = g.results[S.me.id] || 0;
+    const truth = g.options.find(o => o.truth);
+    const foundIt = truth.pickers.includes(S.me.id);
+    const fooled = g.options.filter(o => o.authors.includes(S.me.id)).flatMap(o => o.pickers.filter(x => x !== S.me.id)).length;
+    screen.append(lookUp(p ? pts(p) : "No points", [foundIt ? "You found the truth." : `The truth was “${truth.text}”.`, fooled ? ` You fooled ${fooled} ${fooled === 1 ? "person" : "people"}!` : ""].join(""), p ? "good" : "bad"));
+  }
+}
+
+function quip(screen, g) {
+  if (g.phase === "write") {
+    const todo = g.tasks.filter(t => !t.done);
+    screen.append(h("div", { class: "progress", text: `Round ${g.round + 1} of ${g.rounds}` }));
+    if (!g.tasks.length) return screen.append(lookUp("Sit tight", "You joined mid-round. You'll vote on the answers next."));
+    if (!todo.length) return screen.append(lookUp("All done!", "Waiting for everyone else to finish."));
+    const t = todo[0];
+    const inp = h("textarea", { class: "field", id: `quip-${g.step}-${t.m}`, maxlength: 60, rows: 3, placeholder: "Be funny!", "data-autofocus": "" });
+    screen.append(h("div", { class: "muted", text: `Prompt ${g.tasks.length - todo.length + 1} of ${g.tasks.length}` }), h("div", { class: "q", text: t.prompt }),
+      h("form", { class: "form", onsubmit: e => { e.preventDefault(); act({ m: t.m, text: inp.value }); } },
+        inp, h("div", { class: "err", role: "alert", text: errMsg }), h("button", { class: "btn go big-btn", type: "submit", text: "Send it" })));
+    inp.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); act({ m: t.m, text: inp.value }); } });
+  } else if (g.phase === "vote") {
+    screen.append(h("div", { class: "progress", text: `Matchup ${g.k} of ${g.of}` }), h("div", { class: "q", text: g.prompt }));
+    if (g.isAuthor) return screen.append(lookUp("Your answer is up!", "Everyone else is voting. Fingers crossed."));
+    if (g.mine) return screen.append(lookUp("Vote counted", "Watch the screen for the results."));
+    screen.append(h("div", { class: "choices" }, [["a", g.ansA, "c3"], ["b", g.ansB, "c1"]].map(([side, txt, c]) => h("button", { class: "choice " + c, onclick: e => { e.currentTarget.disabled = true; act({ side }); } },
+      h("span", { text: txt })))));
+  } else {
+    const mine = g.pts && g.pts[S.me.id];
+    screen.append(h("div", { class: "q", text: g.prompt }),
+      mine != null ? lookUp(pts(mine) || "0 points", g.sweep && ((g.sweep === "a" && g.a === S.me.id) || (g.sweep === "b" && g.b === S.me.id)) ? "Clean sweep! Everybody voted for you." : "Nice work.", mine ? "good" : "bad")
+        : lookUp("Results are up", "Look at the big screen."));
+  }
+}
+
+function guess(screen, g) {
+  screen.append(h("div", { class: "progress", text: `Question ${g.i + 1} of ${g.total}` }), h("div", { class: "q", text: g.q }));
+  if (g.phase === "guess") {
+    if (g.mine != null) return screen.append(lookUp("Guess locked in", `${num(g.mine, g.unit)} ${g.unit}`.trim()));
+    const inp = h("input", { class: "field", id: "guess-" + g.step, inputmode: "decimal", autocomplete: "off", placeholder: g.unit ? `Number of ${g.unit}` : "Your guess", "data-autofocus": "" });
+    screen.append(h("form", { class: "form", onsubmit: e => { e.preventDefault(); act({ value: inp.value }); } },
+      inp, h("div", { class: "err", role: "alert", text: errMsg }), h("button", { class: "btn go big-btn", type: "submit", text: "Lock in guess" })));
+  } else {
+    const r = g.ranked.find(x => x.id === S.me.id);
+    screen.append(lookUp(r && r.pts ? pts(r.pts) : "No points", `The answer was ${num(g.answer, g.unit)} ${g.unit}`.trim() + (r ? (r.diff ? `. You were off by ${num(+r.diff.toFixed(2), g.unit)}.` : ". Exact!") : "."), r && r.pts ? "good" : "bad"));
+  }
+}
+
+function finalScreen(screen, g) {
+  const ranked = [...S.players].sort((a, b) => b.score - a.score);
+  const place = ranked.findIndex(p => p.id === S.me.id) + 1;
+  const earned = g.earned[S.me.id] || 0;
+  const suffix = n => (n % 10 === 1 && n % 100 !== 11) ? "st" : (n % 10 === 2 && n % 100 !== 12) ? "nd" : (n % 10 === 3 && n % 100 !== 13) ? "rd" : "th";
+  screen.append(h("div", { class: "progress", text: g.title + " is over" }),
+    h("div", { class: "me" }, avatar(S.me, "lg"), h("div", { class: "title", text: `${place}${suffix(place)} place` }),
+      h("div", { class: "muted", text: `${pts(earned)} this game · ${S.me.score.toLocaleString("en-US")} total` })),
+    lookUp("Look at the leaderboard!", "Stay on this page for the next game."));
+}
+
+start();
+</script>
+</body>
+</html>

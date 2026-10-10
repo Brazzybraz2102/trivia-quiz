@@ -1,0 +1,74 @@
+{
+  "trivia": [
+    { "q": "Halloween grew out of Samhain, a festival from which country?", "a": "Ireland", "wrong": ["Mexico", "Germany", "Spain"] },
+    { "q": "What is a group of crows called?", "a": "A murder", "wrong": ["A flock of doom", "A parliament", "A gaggle"] },
+    { "q": "Who wrote \"The Legend of Sleepy Hollow\"?", "a": "Washington Irving", "wrong": ["Edgar Allan Poe", "Mark Twain", "Stephen King"] },
+    { "q": "In \"The Legend of Sleepy Hollow,\" what does the Headless Horseman throw at Ichabod Crane?", "a": "A pumpkin", "wrong": ["An apple", "His sword", "A lantern"] },
+    { "q": "In which U.S. state is the real village of Sleepy Hollow?", "a": "New York", "wrong": ["Massachusetts", "Pennsylvania", "Connecticut"] },
+    { "q": "In \"The Nightmare Before Christmas,\" Jack Skellington is known as the what?", "a": "Pumpkin King", "wrong": ["Skeleton Prince", "Lord of Halloween", "Ghost Mayor"] },
+    { "q": "Count Dracula's castle is in which region?", "a": "Transylvania", "wrong": ["Bavaria", "Tuscany", "Siberia"] },
+    { "q": "Día de los Muertos is a holiday mainly associated with which country?", "a": "Mexico", "wrong": ["Spain", "Brazil", "Peru"] },
+    { "q": "In which month do Canadians celebrate Thanksgiving?", "a": "October", "wrong": ["November", "September", "December"] },
+    { "q": "Which of these is NOT a type of squash?", "a": "Rutabaga", "wrong": ["Butternut", "Acorn", "Spaghetti"] },
+    { "q": "On the autumnal equinox, what is roughly true?", "a": "Day and night are about equal length", "wrong": ["It's the longest night of the year", "The moon is always full", "It's the shortest day of the year"] },
+    { "q": "How many Sanderson sisters are there in \"Hocus Pocus\"?", "a": "3", "wrong": ["2", "4", "5"] },
+    { "q": "What is the name of the famous friendly ghost?", "a": "Casper", "wrong": ["Boo", "Slimer", "Moaning Myrtle"] },
+    { "q": "Starbucks first sold the Pumpkin Spice Latte in which year?", "a": "2003", "wrong": ["1995", "2009", "2014"] },
+    { "q": "Apple cider is pressed from what?", "a": "Apples", "wrong": ["Pears", "Grapes", "Pumpkins"] },
+    { "q": "Which famous escape artist died on Halloween in 1926?", "a": "Harry Houdini", "wrong": ["P. T. Barnum", "Buffalo Bill", "Charles Dickens"] },
+    { "q": "Which candy was originally sold under the name \"Chicken Feed\"?", "a": "Candy corn", "wrong": ["Jelly beans", "Peanut M&M's", "Sugar Babies"] },
+    { "q": "Botanically speaking, a pumpkin is a what?", "a": "Fruit", "wrong": ["Vegetable", "Root", "Grain"] }
+  ],
+
+  "fib": [
+    { "q": "Before pumpkins caught on, people in Ireland carved jack-o'-lanterns out of ____.", "a": "turnips", "alts": ["turnip", "rutabagas", "rutabaga"], "decoys": ["potatoes", "beets"] },
+    { "q": "Samhainophobia is the fear of ____.", "a": "Halloween", "alts": [], "decoys": ["scarecrows", "pumpkins"] },
+    { "q": "A group of owls is called a ____.", "a": "parliament", "alts": ["parliament of owls"], "decoys": ["hoot", "council"] },
+    { "q": "A baby turkey is called a ____.", "a": "poult", "alts": ["poults"], "decoys": ["gobblet", "turklet"] },
+    { "q": "Benjamin Franklin called the bald eagle a bird of \"bad moral character\" and said the ____ was more respectable.", "a": "turkey", "alts": ["wild turkey"], "decoys": ["owl", "robin"] },
+    { "q": "Apple trees belong to the same plant family as ____.", "a": "roses", "alts": ["rose", "the rose"], "decoys": ["oak trees", "sunflowers"] },
+    { "q": "Bobby Pickett, who sang \"Monster Mash,\" went by the nickname Bobby \"____\" Pickett.", "a": "Boris", "alts": [], "decoys": ["Bones", "Frankie"] },
+    { "q": "Candy corn's makers originally sold it under the name \"____.\"", "a": "Chicken Feed", "alts": ["chickenfeed"], "decoys": ["Harvest Drops", "Sweet Kernels"] },
+    { "q": "Besides yellow-orange carotenoids, the red and purple colors in fall leaves come from pigments called ____.", "a": "anthocyanins", "alts": ["anthocyanin"], "decoys": ["chlorophyll", "autumnins"] },
+    { "q": "Harry Houdini died in 1926 on ____.", "a": "Halloween", "alts": ["october 31", "october 31st", "oct 31"], "decoys": ["Friday the 13th", "Christmas Eve"] }
+  ],
+
+  "guess": [
+    { "q": "How many pounds did the world-record pumpkin weigh in 2023?", "a": 2749, "unit": "pounds" },
+    { "q": "In what year did the Pilgrims hold the harvest feast now called the first Thanksgiving?", "a": 1621, "unit": "" },
+    { "q": "In what year did \"It's the Great Pumpkin, Charlie Brown\" first air on TV?", "a": 1966, "unit": "" },
+    { "q": "In what year did John Carpenter's \"Halloween\" come out?", "a": 1978, "unit": "" },
+    { "q": "How many bones are in the adult human skeleton?", "a": 206, "unit": "bones" },
+    { "q": "In what year did Abraham Lincoln make Thanksgiving a national holiday?", "a": 1863, "unit": "" },
+    { "q": "How tall is the Statue of Liberty from the ground to the tip of her torch?", "a": 305, "unit": "feet" },
+    { "q": "How many teeth does an adult have, counting wisdom teeth?", "a": 32, "unit": "teeth" },
+    { "q": "How many eyes do most spiders have?", "a": 8, "unit": "eyes" }
+  ],
+
+  "quip": [
+    "The worst thing to find in your Halloween candy bag",
+    "A terrible name for a pumpkin spice product",
+    "What the scarecrow is actually thinking",
+    "The real reason the Headless Horseman lost his head",
+    "A side dish that got kicked off the Thanksgiving table",
+    "The worst costume to wear into a corn maze",
+    "What squirrels are really saying to each other",
+    "A ghost's most embarrassing secret",
+    "The least scary haunted house room",
+    "A new fall festival event nobody asked for",
+    "What the turkey would say if it could talk on Thanksgiving",
+    "A bad name for a hayride",
+    "The worst thing to carve into a pumpkin",
+    "What vampires order at a coffee shop",
+    "A terrible slogan for an apple orchard",
+    "The worst thing a fortune teller could tell you",
+    "A brand new flavor of candy corn",
+    "The worst thing to bring to a potluck",
+    "What leaves think about on the way down",
+    "Something you should never yell in a corn maze",
+    "A rejected name for the Great Pumpkin",
+    "The worst prize to win at a ring toss",
+    "What a mummy says when it's running late",
+    "The secret ingredient in Grandma's pie"
+  ]
+}

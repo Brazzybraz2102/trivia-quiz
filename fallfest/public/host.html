@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fall Fest Party Pack · Big Screen</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bowlby+One&family=Fredoka:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+body { overflow-x: hidden; }
+#leaves { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+.stage { min-height: 100%; display: flex; flex-direction: column; gap: 20px; padding-block: 20px 84px; max-width: 1500px; margin: 0 auto; }
+.top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.brand { font-family: var(--f-display); color: var(--pumpkin); font-size: 22px; text-shadow: 0 3px 0 #0b0510; }
+.top .spacer { flex: 1; }
+.joinchip { font-weight: 600; color: var(--muted); }
+.joinchip b { color: var(--mustard); }
+
+/* lobby */
+.lobby { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 28px; align-items: start; }
+.hero h1 { font-size: clamp(48px, 7.5vw, 120px); color: var(--mustard); text-shadow: 0 6px 0 #0b0510; transform: rotate(-2deg); transform-origin: left; }
+.hero h1 span { display: block; color: var(--pumpkin); }
+.joincard { margin-top: 24px; display: flex; gap: 22px; align-items: center; background: var(--cream); color: var(--ink); border-radius: 22px; padding: 18px; box-shadow: var(--shadow); max-width: 640px; }
+.joincard .qr { flex: none; width: clamp(130px, 14vw, 200px); aspect-ratio: 1; background: #fff; border-radius: 10px; padding: 6px; }
+.joincard .qr svg { width: 100%; height: 100%; display: block; }
+.joincard .url { font-family: var(--f-display); font-size: clamp(22px, 2.6vw, 38px); word-break: break-all; line-height: 1.05; }
+.joincard .eyebrow { color: #6b4f7d; }
+.roster { background: var(--night-2); border-radius: 22px; padding: 18px; box-shadow: var(--shadow); min-width: 0; }
+.roster-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+.roster-head h2 { font-family: var(--f-display); font-size: 26px; }
+.plist { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.pl { display: flex; align-items: center; gap: 10px; background: var(--night); border-radius: 14px; padding: 8px 10px; min-width: 0; position: relative; }
+.pl.just, .waiting .avatar.just { animation: pop .35s cubic-bezier(.2,1.6,.4,1); }
+.pl .nm { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.pl .sc { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pl.off { opacity: .45; }
+.pl .kick { background: none; border: 0; color: var(--muted); font-size: 18px; padding: 2px 6px; border-radius: 8px; }
+.pl .kick:hover { color: var(--cranberry); background: #0004; }
+.empty { color: var(--muted); padding: 24px 8px; text-align: center; }
+@keyframes pop { from { transform: scale(.4); opacity: 0; } }
+
+.games { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.gcard { border-radius: 20px; padding: 18px; box-shadow: var(--shadow); color: var(--ink); display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.gcard:nth-child(4n+1) { background: var(--pumpkin); transform: rotate(-1deg); }
+.gcard:nth-child(4n+2) { background: var(--mustard); transform: rotate(.8deg); }
+.gcard:nth-child(4n+3) { background: var(--teal); transform: rotate(-.6deg); }
+.gcard:nth-child(4n+4) { background: #ff9fb2; transform: rotate(1deg); }
+.gcard h3 { font-family: var(--f-display); font-size: 26px; line-height: 1; }
+.gcard p { margin: 0; font-weight: 500; flex: 1; }
+.gcard .meta { font-size: 13px; font-weight: 600; opacity: .75; }
+.gcard .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.stepper { display: inline-flex; align-items: center; background: #0002; border-radius: 12px; }
+.stepper button { background: none; border: 0; width: 36px; height: 36px; font-size: 20px; font-weight: 700; color: var(--ink); }
+.stepper span { min-width: 92px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
+.gcard .btn { background: var(--ink); color: var(--cream); margin-left: auto; }
+.flash { background: var(--cranberry); color: var(--cream); border-radius: 14px; padding: 10px 16px; font-weight: 600; }
+
+/* in-game */
+.gamehead { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.gamehead .gt { font-family: var(--f-display); font-size: 22px; color: var(--mustard); }
+.gamehead .spacer { flex: 1; }
+.gamehead .clock { font-size: 34px; }
+.count { color: var(--muted); font-weight: 600; }
+.center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px; text-align: center; }
+.big-q { font-family: var(--f-display); font-size: clamp(30px, 4.4vw, 68px); line-height: 1.08; max-width: 24ch; text-shadow: 0 4px 0 #0b0510; text-wrap: balance; }
+.big-q .blank { display: inline-block; min-width: 3.5em; border-bottom: .12em solid var(--mustard); color: var(--mustard); }
+.intro h1 { font-size: clamp(56px, 9vw, 150px); color: var(--mustard); text-shadow: 0 7px 0 #0b0510; }
+.fresh .intro h1 { animation: drop .6s cubic-bezier(.2,1.4,.4,1); }
+.intro p { font-size: clamp(20px, 2.2vw, 32px); max-width: 34ch; margin: 0; }
+@keyframes drop { from { transform: translateY(-60px) rotate(-6deg); opacity: 0; } }
+
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; width: 100%; max-width: 1200px; }
+.tile { background: var(--c); color: var(--ink); border-radius: 20px; padding: 18px 22px; display: flex; align-items: center; gap: 16px; box-shadow: var(--shadow); text-align: left; min-width: 0; transition: opacity .3s, transform .3s; }
+.tile .shape { font-size: 34px; width: 52px; height: 52px; display: grid; place-items: center; background: #0002; border-radius: 12px; flex: none; }
+.tile .tx { font-size: clamp(20px, 2.3vw, 36px); font-weight: 700; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.tile .n { font-family: var(--f-display); font-size: 28px; }
+.tile.dim { opacity: .28; transform: scale(.97); }
+.tile.win { outline: 6px solid var(--cream); transform: scale(1.03); }
+
+.waiting { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; max-width: 1100px; }
+.waiting .avatar { transition: opacity .2s, transform .2s; }
+.waiting .avatar.pending { opacity: .25; transform: scale(.85); filter: grayscale(1); }
+.hint { color: var(--muted); font-size: clamp(16px, 1.6vw, 22px); font-weight: 600; }
+
+.chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.chip { display: inline-flex; align-items: center; gap: 8px; background: var(--night-2); border-radius: 999px; padding: 4px 14px 4px 4px; font-weight: 700; }
+.chip.good b { color: var(--leaf); }
+.chip b { font-variant-numeric: tabular-nums; }
+
+.fibs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; width: 100%; max-width: 1300px; }
+.fib { background: var(--night-2); border-radius: 18px; padding: 16px 18px; box-shadow: var(--shadow); text-align: left; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.fresh .fib { animation: pop .4s backwards; }
+.fib .tx { font-family: var(--f-display); font-size: clamp(20px, 2.2vw, 32px); text-transform: uppercase; overflow-wrap: anywhere; }
+.fib.truth { background: var(--leaf); color: var(--ink); transform: rotate(-1deg) scale(1.03); }
+.fib .tag { font-size: 13px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; opacity: .8; }
+.fib .who { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 15px; font-weight: 600; }
+
+.vs { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 20px; align-items: stretch; width: 100%; max-width: 1300px; }
+.vs .mid { align-self: center; font-family: var(--f-display); font-size: 48px; color: var(--pumpkin); text-shadow: 0 4px 0 #0b0510; }
+.quip { border-radius: 24px; padding: 26px; box-shadow: var(--shadow); color: var(--ink); display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.fresh .quip { animation: drop .5s cubic-bezier(.2,1.4,.4,1) backwards; }
+.quip.a { background: var(--mustard); transform: rotate(-1.5deg); }
+.quip.b { background: var(--teal); transform: rotate(1.5deg); animation-delay: .15s; }
+.quip .tx { font-family: var(--f-display); font-size: clamp(26px, 3.4vw, 54px); line-height: 1.08; overflow-wrap: anywhere; flex: 1; }
+.quip .by { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 20px; }
+.quip .votes { display: flex; flex-wrap: wrap; gap: 4px; }
+.quip .pts { font-family: var(--f-display); font-size: 34px; margin-left: auto; }
+.quip.loser { opacity: .7; }
+.sweep { font-family: var(--f-display); font-size: clamp(36px, 5vw, 72px); color: var(--pumpkin); text-shadow: 0 5px 0 #0b0510; transform: rotate(-3deg); }
+.fresh .sweep { animation: drop .5s .3s backwards; }
+
+.answer-big { font-family: var(--f-display); font-size: clamp(64px, 10vw, 160px); color: var(--leaf); text-shadow: 0 6px 0 #0b0510; line-height: 1; font-variant-numeric: tabular-nums; }
+.ranks { display: flex; flex-direction: column; gap: 8px; width: min(760px, 100%); }
+.rank { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto auto; gap: 14px; align-items: center; background: var(--night-2); border-radius: 14px; padding: 8px 16px 8px 8px; font-weight: 700; font-size: 20px; text-align: left; font-variant-numeric: tabular-nums; }
+.fresh .rank { animation: pop .4s backwards; }
+.rank .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rank .g { color: var(--muted); }
+.rank b { color: var(--leaf); min-width: 70px; text-align: right; }
+
+.board { display: flex; flex-direction: column; gap: 10px; width: min(820px, 100%); }
+.brow { display: grid; grid-template-columns: 48px 52px minmax(0, 1fr) auto auto; align-items: center; gap: 14px; background: var(--night-2); border-radius: 16px; padding: 8px 18px 8px 10px; font-size: 22px; font-weight: 700; text-align: left; }
+.fresh .brow { animation: pop .45s backwards; }
+.brow .pos { font-family: var(--f-display); color: var(--muted); text-align: center; }
+.brow .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brow .gain { color: var(--leaf); font-size: 17px; }
+.brow .tot { font-family: var(--f-display); font-variant-numeric: tabular-nums; min-width: 110px; text-align: right; }
+.brow.first { background: var(--mustard); color: var(--ink); transform: scale(1.03); }
+.brow.first .pos, .brow.first .gain { color: var(--ink); }
+
+/* control bar for the host */
+.controls {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); background: #0b0510e6; backdrop-filter: blur(6px);
+}
+.controls .btn { padding: 8px 14px; font-size: 15px; }
+.controls .spacer { flex: 1; }
+.controls .status { font-size: 14px; color: var(--muted); }
+.controls .status.bad { color: var(--cranberry); font-weight: 700; }
+.gate { max-width: 520px; margin: 12vh auto; display: flex; flex-direction: column; gap: 14px; }
+
+@media (max-width: 900px) {
+  .lobby { grid-template-columns: 1fr; }
+  .tiles { grid-template-columns: 1fr; }
+  .vs { grid-template-columns: 1fr; }
+  .vs .mid { justify-self: center; }
+  .joincard { flex-direction: column; align-items: flex-start; }
+}
+</style>
+</head>
+<body>
+<canvas id="leaves" aria-hidden="true"></canvas>
+<main class="stage" id="stage"></main>
+<div class="controls" id="controls"></div>
+
+<script src="/static/vendor/qrcode.js"></script>
+<script src="/static/common.js"></script>
+<script>
+"use strict";
+const { h, connect, countdown, post, avatar, byId, pts, num } = FF;
+const params = new URLSearchParams(location.search);
+const KEY = params.get("key") || "";
+const stage = document.getElementById("stage"), controls = document.getElementById("controls");
+
+let S = null, connected = false, flash = "", lastStep = null, soundOn = true;
+let seen = new Set(); // ids already shown as joined/answered, so only newcomers animate
+const rounds = {}; // chosen round counts per game
+
+// ---------- sound (starts after the host's first click) ----------
+let actx = null;
+document.addEventListener("pointerdown", () => { try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); actx.resume(); } catch {} }, { once: false });
+function tone(freq, dur = .15, type = "triangle", vol = .12, delay = 0) {
+  if (!soundOn || !actx) return;
+  try {
+    const t = actx.currentTime + delay, o = actx.createOscillator(), g = actx.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t); g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    o.connect(g); g.connect(actx.destination); o.start(t); o.stop(t + dur);
+  } catch {}
+}
+const jingle = notes => notes.forEach((f, i) => tone(f, .22, "triangle", .12, i * .12));
+document.addEventListener("tick", e => { if (e.detail > 0 && e.detail <= 5) tone(e.detail === 1 ? 880 : 660, .08, "square", .05); }, true);
+
+// ---------- commands ----------
+async function cmd(c, extra = {}) {
+  const r = await post("/api/host", { key: KEY, cmd: c, ...extra });
+  flash = r.error || "";
+  if (r.error) render();
+}
+
+function fullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  else document.documentElement.requestFullscreen?.().catch(() => {});
+}
+
+// ---------- render ----------
+function render() {
+  if (!S) return;
+  const g = S.game;
+  const newStep = g ? g.step : "lobby";
+  const fresh = newStep !== lastStep;
+  if (fresh) { onPhaseChange(g); seen = new Set(); }
+  lastStep = newStep;
+  stage.classList.toggle("fresh", fresh);
+  leaves.active = !g || g.phase === "intro" || g.phase === "final";
+
+  stage.replaceChildren(...[topBar(g), ...(g ? gameScreen(g) : lobby())].filter(Boolean));
+  renderControls(g);
+}
+
+function onPhaseChange(g) {
+  if (!g) return;
+  if (g.phase === "intro") jingle([392, 523, 659, 784]);
+  else if (["reveal", "result"].includes(g.phase)) jingle([523, 659, 784]);
+  else if (g.phase === "final") jingle([523, 659, 784, 1047, 784, 1047]);
+  else tone(440, .18, "sine", .1);
+}
+
+function topBar(g) {
+  const host = S.joinUrl.replace(/^https?:\/\//, "");
+  return h("div", { class: "top" },
+    h("div", { class: "brand", text: "Fall Fest Party Pack" }),
+    h("div", { class: "spacer" }),
+    g ? h("div", { class: "joinchip" }, "Join at ", h("b", { text: host })) : null);
+}
+
+function qrSVG(text) {
+  const q = qrcode(0, "M"); q.addData(text); q.make();
+  const box = h("div", { class: "qr", role: "img", "aria-label": "QR code for " + text });
+  box.innerHTML = q.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
+  return box;
+}
+
+function lobby() {
+  const ps = S.players;
+  const out = [];
+  out.push(h("section", { class: "lobby" },
+    h("div", { class: "hero" },
+      h("h1", { class: "display" }, "Fall Fest", h("span", { text: "Party Pack" })),
+      h("div", { class: "joincard" },
+        qrSVG(S.joinUrl),
+        h("div", null,
+          h("div", { class: "eyebrow", text: "Grab your phone · same Wi-Fi" }),
+          h("div", { class: "url", text: S.joinUrl.replace(/^https?:\/\//, "") }),
+          h("div", { style: { marginTop: "6px", fontWeight: 600 }, text: "Scan the code or type the address to join." })))),
+    h("div", { class: "roster" },
+      h("div", { class: "roster-head" },
+        h("h2", { text: "Players" }),
+        h("span", { class: "eyebrow", text: `${ps.filter(p => p.online).length} here` })),
+      ps.length ? h("div", { class: "plist" }, [...ps].sort((a, b) => b.score - a.score).map(p => h("div", { class: "pl" + (p.online ? "" : " off") + (isNew("p" + p.id) ? " just" : "") },
+        avatar(p),
+        h("div", { style: { minWidth: 0, flex: 1 } }, h("div", { class: "nm", text: p.name }), h("div", { class: "sc", text: `${p.score.toLocaleString()} pts${p.online ? "" : " · away"}` })),
+        h("button", { class: "kick", title: "Remove " + p.name, "aria-label": "Remove " + p.name, text: "✕", onclick: () => cmd("kick", { pid: p.id }) }))))
+        : h("div", { class: "empty", text: "Nobody yet. The first phone to join shows up here." }))));
+
+  if (flash) out.push(h("div", { class: "flash", role: "alert", text: flash }));
+
+  out.push(h("h2", { class: "display", style: { fontSize: "30px" }, text: "Pick a game" }));
+  out.push(h("section", { class: "games" }, S.catalog.map(gm => {
+    const n = Math.min(rounds[gm.key] ?? gm.rounds, gm.available || gm.rounds);
+    const set = v => { rounds[gm.key] = Math.max(1, Math.min(gm.maxRounds, gm.available || gm.maxRounds, v)); render(); };
+    return h("article", { class: "gcard" },
+      h("h3", { text: gm.title }),
+      h("p", { text: gm.blurb }),
+      h("div", { class: "meta", text: `${gm.min}+ players · ${gm.available} in the deck` }),
+      h("div", { class: "row" },
+        h("div", { class: "stepper" },
+          h("button", { "aria-label": "Fewer", text: "−", onclick: () => set(n - 1) }),
+          h("span", { text: `${n} ${n === 1 ? gm.unit.replace(/s$/, "") : gm.unit}` }),
+          h("button", { "aria-label": "More", text: "+", onclick: () => set(n + 1) })),
+        h("button", { class: "btn", text: "Play", onclick: () => cmd("start", { type: gm.key, rounds: n }) })));
+  })));
+  return out;
+}
+
+function gameScreen(g) {
+  const P = byId(S.players);
+  const online = S.players.filter(p => p.online);
+  const head = h("div", { class: "gamehead" },
+    h("div", { class: "gt", text: g.title }),
+    progress(g) ? h("div", { class: "count", text: progress(g) }) : null,
+    h("div", { class: "spacer" }),
+    countdown(g.deadline));
+  const waitRow = (doneIds, who = online) => h("div", { class: "waiting" },
+    who.map(p => { const d = doneIds.includes(p.id); const a = avatar(p, "lg"); a.classList.add(d ? "done" : "pending"); if (d && isNew("d" + p.id)) a.classList.add("just"); a.title = p.name; return a; }));
+  const blanked = q => { const parts = q.split("____"); return parts.flatMap((t, i) => i ? [h("span", { class: "blank", text: " " }), t] : [t]); };
+  const main = h("div", { class: "center" });
+
+  if (g.phase === "intro") {
+    main.classList.add("intro");
+    main.append(h("div", { class: "eyebrow", text: "Up next" }), h("h1", { class: "display", text: g.title }), h("p", { text: g.blurb }),
+      h("div", { class: "hint", text: "Get your phones ready" }));
+    return [head, main];
+  }
+  if (g.phase === "final") return [head, finalScreen(g, P)];
+
+  if (g.type === "trivia") {
+    const reveal = g.phase === "reveal";
+    main.append(h("div", { class: "big-q", text: g.q }),
+      h("div", { class: "tiles" }, g.choices.map((c, k) => h("div", { class: `tile c${k}` + (reveal ? (k === g.correct ? " win" : " dim") : "") },
+        h("span", { class: "shape", text: "ABCD"[k] }), h("span", { class: "tx", text: c }), reveal ? h("span", { class: "n", text: g.counts[k] }) : null))));
+    if (!reveal) main.append(waitRow(g.answered), h("div", { class: "hint", text: "Answer on your phone. Faster right answers earn more." }));
+    else main.append(resultChips(g.results, P));
+  }
+
+  if (g.type === "fib") {
+    main.append(h("div", { class: "big-q" }, blanked(g.q)));
+    if (g.phase === "write") main.append(h("div", { class: "hint", text: "Write a fake answer that sounds true. Fool your friends!" }), waitRow(g.written));
+    if (g.phase === "pick") main.append(
+      h("div", { class: "fibs" }, g.options.map((o, k) => h("div", { class: "fib", style: { animationDelay: k * .06 + "s" } }, h("div", { class: "tx", text: o })))),
+      h("div", { class: "hint", text: "One of these is true. Find it on your phone." }), waitRow(g.picked));
+    if (g.phase === "reveal") main.append(h("div", { class: "fibs" }, [...g.options].sort((a, b) => a.truth - b.truth).map((o, k) => h("div", { class: "fib" + (o.truth ? " truth" : ""), style: { animationDelay: k * .25 + "s" } },
+      h("div", { class: "tag", text: o.truth ? "The truth" : o.house ? "House fib" : "Fib by " + o.authors.map(a => P[a]?.name || "?").join(" & ") }),
+      h("div", { class: "tx", text: o.text }),
+      h("div", { class: "who" }, o.pickers.length ? [o.pickers.map(id => P[id] ? avatar(P[id], "sm") : null), o.truth ? " found it" : ` fell for it${o.authors.length ? "" : ""}`] : h("span", { class: "eyebrow", text: "Nobody picked this" }))))),
+      resultChips(g.results, P));
+  }
+
+  if (g.type === "quip") {
+    if (g.phase === "write") {
+      main.append(h("div", { class: "big-q", text: "Check your phone!" }),
+        h("div", { class: "hint", text: "Everyone gets two prompts. Write the funniest answer you can." }),
+        waitRow(g.done, online),
+        h("div", { class: "count", text: `${g.answeredCount} of ${g.needed} answers in` }));
+    } else {
+      const res = g.phase === "result";
+      const card = side => {
+        const ans = side === "a" ? g.ansA : g.ansB, author = res ? P[side === "a" ? g.a : g.b] : null;
+        const votes = res ? (side === "a" ? g.votesA : g.votesB) : [];
+        const p = res ? g.pts[side === "a" ? g.a : g.b] : 0;
+        const other = res ? g.pts[side === "a" ? g.b : g.a] : 0;
+        return h("div", { class: `quip ${side}` + (res && p < other ? " loser" : "") },
+          h("div", { class: "tx", text: ans ?? "(no answer)" }),
+          res ? h("div", { class: "votes" }, votes.map(id => P[id] ? avatar(P[id], "sm") : null)) : null,
+          res && author ? h("div", { class: "by" }, avatar(author), author.name, h("span", { class: "pts", text: pts(p) })) : null);
+      };
+      main.append(h("div", { class: "eyebrow", text: `Matchup ${g.k} of ${g.of}` }), h("div", { class: "big-q", text: g.prompt }),
+        h("div", { class: "vs" }, card("a"), h("div", { class: "mid", text: "VS" }), card("b")));
+      if (!res) main.append(h("div", { class: "hint", text: "Vote for your favorite on your phone" }), waitRow(g.voted, online.filter(p => true)));
+      else if (g.sweep) main.append(h("div", { class: "sweep", text: "Clean sweep! +250" }));
+      else if (g.forfeit) main.append(h("div", { class: "hint", text: "One side didn't answer, so the other wins by forfeit." }));
+    }
+  }
+
+  if (g.type === "guess") {
+    main.append(h("div", { class: "big-q", text: g.q }));
+    if (g.phase === "guess") main.append(h("div", { class: "hint", text: "Type a number on your phone. Closest wins!" }), waitRow(g.guessed));
+    else main.append(
+      h("div", null, h("div", { class: "eyebrow", text: "The answer" }), h("div", { class: "answer-big", text: num(g.answer, g.unit) }), g.unit ? h("div", { class: "hint", text: g.unit }) : null),
+      h("div", { class: "ranks" }, g.ranked.slice(0, 8).map((r, k) => P[r.id] ? h("div", { class: "rank", style: { animationDelay: k * .12 + "s" } },
+        avatar(P[r.id]), h("span", { class: "nm", text: P[r.id].name }), h("span", { class: "g", text: num(r.g, g.unit) + (r.diff ? ` (off by ${num(+r.diff.toFixed(2), g.unit)})` : " · exact!") }), h("b", { text: r.pts ? pts(r.pts) : "" })) : null)));
+  }
+  return [head, main];
+}
+
+function isNew(k) { if (seen.has(k)) return false; seen.add(k); return true; }
+
+function progress(g) {
+  if (g.phase === "intro" || g.phase === "final") return "";
+  if (g.total) return `${g.i + 1} of ${g.total}`;
+  if (g.type === "quip") return `Round ${g.round + 1} of ${g.rounds}`;
+  return "";
+}
+
+function resultChips(results, P) {
+  const rows = S.players.filter(p => results && results[p.id]).sort((a, b) => results[b.id] - results[a.id]);
+  if (!rows.length) return h("div", { class: "hint", text: "Nobody scored this time." });
+  return h("div", { class: "chips" }, rows.map(p => h("span", { class: "chip good" }, avatar(p, "sm"), p.name, h("b", { text: pts(results[p.id]) }))));
+}
+
+function finalScreen(g, P) {
+  const ranked = [...S.players].sort((a, b) => b.score - a.score);
+  const gameTop = [...S.players].sort((a, b) => (g.earned[b.id] || 0) - (g.earned[a.id] || 0))[0];
+  return h("div", { class: "center intro" },
+    gameTop && g.earned[gameTop.id] ? h("div", null, h("div", { class: "eyebrow", text: g.title + " winner" }), h("h1", { class: "display", text: gameTop.name })) : h("h1", { class: "display", text: "Game over" }),
+    h("div", { class: "eyebrow", text: "Fall Fest leaderboard" }),
+    h("div", { class: "board" }, ranked.slice(0, 10).map((p, k) => h("div", { class: "brow" + (k === 0 ? " first" : ""), style: { animationDelay: k * .1 + "s" } },
+      h("span", { class: "pos", text: k + 1 }), avatar(p), h("span", { class: "nm", text: p.name }),
+      h("span", { class: "gain", text: g.earned[p.id] ? pts(g.earned[p.id]) + " this game" : "" }),
+      h("span", { class: "tot", text: p.score.toLocaleString("en-US") })))));
+}
+
+function renderControls(g) {
+  const off = !connected;
+  controls.replaceChildren(...[
+    h("span", { class: "status" + (off ? " bad" : ""), text: off ? "Reconnecting to the game server…" : `${S ? S.players.filter(p => p.online).length : 0} players connected` }),
+    h("span", { class: "spacer" }),
+    g && g.phase !== "final" ? h("button", { class: "btn gold", text: "Skip ahead ▸", onclick: () => cmd("next") }) : null,
+    g ? h("button", { class: "btn" + (g.phase === "final" ? " go" : ""), text: g.phase === "final" ? "Back to lobby" : "End game", onclick: () => cmd("lobby") }) : null,
+    !g ? h("button", { class: "btn ghost", text: "Reset scores", onclick: e => armed(e.currentTarget, () => cmd("resetScores")) }) : null,
+    !g ? h("button", { class: "btn ghost", text: "Clear players", onclick: e => armed(e.currentTarget, () => cmd("clearPlayers")) }) : null,
+    h("button", { class: "btn ghost", text: soundOn ? "Sound on" : "Sound off", "aria-pressed": String(soundOn), onclick: () => { soundOn = !soundOn; renderControls(S.game); } }),
+    h("button", { class: "btn ghost", text: "Fullscreen", onclick: fullscreen })].filter(Boolean));
+}
+// two-tap confirm for destructive buttons
+function armed(btn, fn) {
+  if (btn.dataset.armed) { fn(); return; }
+  const label = btn.textContent; btn.dataset.armed = "1"; btn.textContent = "Tap again to confirm";
+  setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.textContent = label; } }, 3000);
+}
+
+// ---------- falling leaves ----------
+const leaves = (() => {
+  const cv = document.getElementById("leaves"), ctx = cv.getContext("2d");
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const cols = ["#ff7a1a", "#ffc93c", "#e8445a", "#c45a1a", "#a8541f"];
+  let W, H, list = [];
+  const size = () => { W = cv.width = innerWidth; H = cv.height = innerHeight; };
+  size(); addEventListener("resize", size);
+  const mk = y => ({ x: Math.random() * W, y: y ?? -20, r: 6 + Math.random() * 10, vy: .4 + Math.random() * .9, sw: Math.random() * 6.28, rot: Math.random() * 6.28, c: cols[Math.floor(Math.random() * cols.length)] });
+  for (let i = 0; i < 28; i++) list.push(mk(Math.random() * H));
+  const api = { active: true };
+  function frame() {
+    ctx.clearRect(0, 0, W, H);
+    if (api.active) for (const l of list) {
+      l.y += l.vy; l.sw += .02; l.rot += .01; l.x += Math.sin(l.sw) * .6;
+      if (l.y > H + 20) Object.assign(l, mk());
+      ctx.save(); ctx.translate(l.x, l.y); ctx.rotate(l.rot + Math.sin(l.sw)); ctx.globalAlpha = .55; ctx.fillStyle = l.c;
+      ctx.beginPath(); ctx.ellipse(0, 0, l.r, l.r * .5, 0, 0, 6.28); ctx.fill(); ctx.restore();
+    }
+    if (!reduce) requestAnimationFrame(frame);
+  }
+  frame();
+  return api;
+})();
+
+// ---------- boot ----------
+connect(`/events?role=host&key=${encodeURIComponent(KEY)}`, s => { S = s; connected = true; render(); }, ok => {
+  connected = ok;
+  if (!S && !ok) {
+    stage.replaceChildren(h("div", { class: "gate" },
+      h("h1", { class: "display", style: { color: "var(--mustard)" }, text: "Host screen locked" }),
+      h("p", { text: "Open this page on the computer running the game, or use the host link with ?key= that the game printed when it started." })));
+  }
+  if (S) renderControls(S.game);
+});
+</script>
+</body>
+</html>

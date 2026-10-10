@@ -1,0 +1,76 @@
+/* Fall Fest Party Pack: harvest night. A deep eggplant sky, pumpkin and mustard lights,
+   chunky stacked cards with hard offset shadows, like signs at a county fair. */
+:root {
+  --night: #1b0f26;
+  --night-2: #2b1839;
+  --night-3: #3b2250;
+  --pumpkin: #ff7a1a;
+  --mustard: #ffc93c;
+  --cranberry: #e8445a;
+  --teal: #2ec4b6;
+  --leaf: #7bd389;
+  --cream: #fff3df;
+  --muted: #cbb6da;
+  --ink: #1b0f26;
+  --f-display: "Bowlby One", "Arial Black", Impact, sans-serif;
+  --f-ui: "Fredoka", "Trebuchet MS", system-ui, sans-serif;
+  --shadow: 0 6px 0 #0b0510;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: radial-gradient(120% 80% at 50% 0%, var(--night-3) 0%, var(--night) 60%) fixed, var(--night);
+  color: var(--cream);
+  font: 500 17px/1.4 var(--f-ui);
+  padding-inline: 16px;
+}
+button, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 3px solid var(--mustard); outline-offset: 3px; }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+
+.display { font-family: var(--f-display); font-weight: 400; letter-spacing: .01em; line-height: 1.02; }
+.eyebrow { font-weight: 600; font-size: 13px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+
+.btn {
+  border: 0; border-radius: 14px; padding: 12px 20px; font-weight: 600;
+  background: var(--night-3); color: var(--cream); box-shadow: 0 4px 0 #0b0510;
+  transition: transform .08s, box-shadow .08s;
+}
+.btn:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 1px 0 #0b0510; }
+.btn.go { background: var(--pumpkin); color: var(--ink); }
+.btn.gold { background: var(--mustard); color: var(--ink); }
+.btn.ghost { background: transparent; box-shadow: none; border: 2px solid var(--night-3); }
+.btn:disabled { opacity: .45; cursor: default; }
+
+.field {
+  width: 100%; border: 3px solid var(--night-3); background: var(--night); border-radius: 14px;
+  padding: 12px 14px; font-size: 20px; font-weight: 600;
+}
+.field:focus { border-color: var(--pumpkin); outline: none; }
+
+.avatar {
+  display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: 50%;
+  font-size: 24px; line-height: 1; flex: none; box-shadow: inset 0 -4px 0 #0003;
+}
+.avatar.lg { width: 96px; height: 96px; font-size: 54px; }
+.avatar.sm { width: 32px; height: 32px; font-size: 17px; }
+
+.clock {
+  display: inline-grid; place-items: center; min-width: 2.4em; height: 2.4em; padding: 0 .3em; border-radius: 999px;
+  background: var(--mustard); color: var(--ink); font-family: var(--f-display); font-variant-numeric: tabular-nums;
+  box-shadow: 0 4px 0 #0b0510;
+}
+.clock.urgent { background: var(--cranberry); color: var(--cream); animation: pulse 1s infinite; }
+@keyframes pulse { 50% { transform: scale(1.08); } }
+
+/* answer colors, shared by the TV tiles and the phone buttons */
+.c0 { --c: var(--pumpkin); } .c1 { --c: var(--teal); } .c2 { --c: var(--cranberry); } .c3 { --c: var(--mustard); }
+.shape { font-family: var(--f-display); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

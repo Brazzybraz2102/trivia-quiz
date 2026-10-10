@@ -1,0 +1,9 @@
+{
+  "name": "fall-fest-party-pack",
+  "version": "1.0.0",
+  "description": "Jackbox-style party games for a big screen and phones on the same Wi-Fi.",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
+  "license": "GPL-3.0-or-later"
+}
