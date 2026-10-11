@@ -1,4 +1,6 @@
 {
+  "brand": { "ranch": "Braznarkel Ranch", "event": "Fall Fest", "year": "2026" },
+
   "trivia": [
     { "q": "Halloween grew out of Samhain, a festival from which country?", "a": "Ireland", "wrong": ["Mexico", "Germany", "Spain"] },
     { "q": "What is a group of crows called?", "a": "A murder", "wrong": ["A flock of doom", "A parliament", "A gaggle"] },

@@ -62,5 +62,35 @@ window.FF = (() => {
   // Unitless guess answers are years, which read wrong with a thousands comma.
   const num = (n, unit) => unit ? (+n).toLocaleString("en-US") : String(n);
 
-  return { h, connect, serverNow, countdown, post, avatar, byId, pts, num };
+  // The ranch badge: a brass branding-iron seal with the ranch name arched over the
+  // monogram and the event + year arched underneath.
+  let badgeN = 0;
+  function badge(brand) {
+    const b = brand || { ranch: "Braznarkel Ranch", event: "Fall Fest", year: "2026" };
+    const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+    const mono = b.ranch.split(/\s+/).map(w => w[0]).join("").slice(0, 2).toUpperCase();
+    const top = b.ranch.toUpperCase(), bot = `${b.event} · ${b.year}`.toUpperCase();
+    const k = "bg" + (++badgeN);
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `<svg class="badge" viewBox="0 0 200 200" role="img" aria-label="${esc(b.ranch)} ${esc(b.event)} ${esc(b.year)}">
+  <defs>
+    <linearGradient id="${k}b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fbe7a8"/><stop offset=".5" stop-color="#e9b648"/><stop offset="1" stop-color="#a8701f"/></linearGradient>
+    <radialGradient id="${k}l" cx=".5" cy=".35" r=".7"><stop offset="0" stop-color="#3d2a1d"/><stop offset="1" stop-color="#1c140f"/></radialGradient>
+    <path id="${k}t" d="M 31,100 A 69,69 0 0 1 169,100"/>
+    <path id="${k}u" d="M 23,100 A 77,77 0 0 0 177,100"/>
+  </defs>
+  <circle cx="100" cy="100" r="96" fill="url(#${k}l)" stroke="url(#${k}b)" stroke-width="5"/>
+  <circle cx="100" cy="100" r="89" fill="none" stroke="#e9b648" stroke-opacity=".55" stroke-width="1.6" stroke-dasharray="3 4"/>
+  <circle cx="100" cy="100" r="61" fill="#120d0a" stroke="url(#${k}b)" stroke-width="2.5"/>
+  <text class="ring-txt" fill="url(#${k}b)" font-size="${top.length > 18 ? 13 : 16}" letter-spacing="1.5"><textPath href="#${k}t" startOffset="50%" text-anchor="middle">${esc(top)}</textPath></text>
+  <text class="ring-txt" fill="url(#${k}b)" font-size="${bot.length > 18 ? 12 : 14}" letter-spacing="1.5"><textPath href="#${k}u" startOffset="50%" text-anchor="middle">${esc(bot)}</textPath></text>
+  <text x="21" y="105" fill="#e9b648" font-size="13" text-anchor="middle">★</text>
+  <text x="179" y="105" fill="#e9b648" font-size="13" text-anchor="middle">★</text>
+  <text class="mono" x="100" y="118" fill="url(#${k}b)" font-size="50" text-anchor="middle" letter-spacing="-1">${esc(mono)}</text>
+  <rect x="62" y="128" width="76" height="7" rx="2" fill="url(#${k}b)"/>
+</svg>`;
+    return wrap.firstElementChild;
+  }
+
+  return { h, connect, serverNow, countdown, post, avatar, byId, pts, num, badge };
 })();

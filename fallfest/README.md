@@ -1,6 +1,6 @@
-# Fall Fest Party Pack
+# Braznarkel Ranch · Fall Fest 2026
 
-Jackbox-style party games for a fall festival. One computer shows the game on a TV or projector. Everyone plays on their own phone by scanning a QR code. There are no apps to install, no accounts and no internet needed once the page loads, but all phones must be on the same Wi-Fi as the computer.
+Jackbox-style party games for the Braznarkel Ranch Fall Fest. One computer shows the game on a TV or projector. Everyone plays on their own phone by scanning a QR code. There are no apps to install, no accounts and no internet needed once the page loads, but all phones must be on the same Wi-Fi as the computer.
 
 ## The games
 
@@ -41,6 +41,14 @@ To run the host screen from a different device (a tablet, say), use the `/host?k
 - Sounds start after your first click on the host screen. **Sound on/off** toggles them.
 - Typed answers pass through a basic family-friendly word filter before they reach the big screen. Keep an eye out anyway.
 - Players who refresh or lock their phone rejoin automatically as the same person.
+
+## Branding
+
+The ranch name, event and year come from the `brand` block at the top of `content.json`. They drive the badge, the big-screen title, the phone screens and the leaderboard. Change them for next year and they show up the next time the host goes back to the lobby:
+
+```json
+"brand": { "ranch": "Braznarkel Ranch", "event": "Fall Fest", "year": "2026" }
+```
 
 ## Make your own questions
 

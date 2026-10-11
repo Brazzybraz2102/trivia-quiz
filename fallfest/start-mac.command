@@ -1,5 +1,5 @@
 #!/bin/bash
-# Double-click to start the Fall Fest Party Pack on a Mac.
+# Double-click to start the Braznarkel Ranch Fall Fest games on a Mac.
 cd "$(dirname "$0")"
 if ! command -v node >/dev/null 2>&1; then
   echo "Node.js isn't installed. Get the LTS version from https://nodejs.org, then double-click this file again."

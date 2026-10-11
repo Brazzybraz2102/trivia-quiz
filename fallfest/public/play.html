@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#1b0f26">
-<title>Fall Fest Party Pack</title>
+<meta name="theme-color" content="#15100d">
+<title>Braznarkel Ranch Fall Fest 2026</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bowlby+One&family=Fredoka:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rye&family=Alfa+Slab+One&family=Barlow:wght@500;600;700;800&display=swap">
 <link rel="stylesheet" href="/static/theme.css">
 <style>
 .app { max-width: 520px; margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; gap: 18px;
@@ -19,11 +19,12 @@
 .screen { flex: 1; display: flex; flex-direction: column; gap: 16px; }
 .screen.fresh { animation: rise .3s ease-out; }
 @keyframes rise { from { transform: translateY(14px); opacity: 0; } }
-.title { font-family: var(--f-display); font-size: 34px; color: var(--mustard); line-height: 1.02; text-shadow: 0 4px 0 #0b0510; }
+.title { font-family: var(--f-brand); font-size: 34px; line-height: 1.04; background: var(--brass); -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 3px 0 #070504); }
 .q { font-size: 21px; font-weight: 700; line-height: 1.3; }
 .q .blank { color: var(--mustard); }
 .muted { color: var(--muted); }
-.card { background: var(--night-2); border-radius: 18px; padding: 16px; box-shadow: var(--shadow); }
+.card { background: var(--night-2); border-radius: 18px; padding: 16px; box-shadow: var(--shadow); position: relative; }
+.card::after { content: ""; position: absolute; inset: 7px; border-radius: 12px; border: 2px dashed #c4ad8f33; pointer-events: none; }
 .waitcard { text-align: center; display: flex; flex-direction: column; gap: 10px; align-items: center; padding: 28px 16px; }
 .waitcard .big { font-family: var(--f-display); font-size: 28px; line-height: 1.05; }
 .waitcard.good .big { color: var(--leaf); }
@@ -31,8 +32,8 @@
 
 .choices { display: grid; gap: 12px; }
 .choice { background: var(--c, var(--night-3)); color: var(--ink); border: 0; border-radius: 18px; padding: 16px; min-height: 68px;
-  display: flex; align-items: center; gap: 14px; text-align: left; font-size: 19px; font-weight: 700; box-shadow: 0 5px 0 #0b0510; }
-.choice:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 2px 0 #0b0510; }
+  display: flex; align-items: center; gap: 14px; text-align: left; font-size: 19px; font-weight: 700; box-shadow: 0 5px 0 #070504; }
+.choice:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 2px 0 #070504; }
 .choice .shape { width: 40px; height: 40px; display: grid; place-items: center; background: #0002; border-radius: 10px; flex: none; font-size: 22px; }
 .choice span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .choice.plain { --c: var(--cream); }
@@ -44,9 +45,12 @@
 .emojis { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 8px; }
 .emojis button { background: var(--night-2); border: 3px solid transparent; border-radius: 14px; font-size: 28px; padding: 6px 0; }
 .emojis button[aria-pressed="true"] { border-color: var(--pumpkin); background: var(--night-3); }
-.joinhero { text-align: center; display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
-.joinhero .title { font-size: 44px; transform: rotate(-2deg); }
-.joinhero .title span { display: block; color: var(--pumpkin); }
+.joinhero { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: 4px; }
+.joinhero .seal { width: 150px; animation: stamp .7s cubic-bezier(.2,1.5,.4,1); }
+@keyframes stamp { from { transform: scale(1.6) rotate(-14deg); opacity: 0; } }
+.joinhero .title { font-size: 40px; }
+.joinhero .sub { font-family: var(--f-display); letter-spacing: .3em; color: var(--cream); background: var(--cranberry); padding: 2px 10px 2px 14px; font-size: 15px; }
+.bar .badge { width: 34px; filter: none; }
 .me { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 20px 0; }
 .big-btn { font-size: 22px; padding: 16px; }
 .offline { background: var(--cranberry); color: var(--cream); border-radius: 12px; padding: 8px 12px; font-weight: 700; text-align: center; }
@@ -58,7 +62,7 @@
 <script src="/static/common.js"></script>
 <script>
 "use strict";
-const { h, connect, countdown, post, avatar, pts, num } = FF;
+const { h, connect, countdown, post, avatar, pts, num, badge } = FF;
 const app = document.getElementById("app");
 const EMOJI = ["🎃", "🍂", "🍁", "🌽", "🦃", "🍎", "🥧", "🦉", "🍄", "🐿️", "👻", "🦇", "🕷️", "🌻", "🧣", "☕", "🍩", "🍏", "🐈‍⬛", "🌰"];
 
@@ -100,12 +104,12 @@ function render(force) {
 
   if (!S.me || editing) { app.replaceChildren(...kids, joinScreen()); return; }
 
-  kids.push(h("div", { class: "bar" }, avatar(S.me, "sm"), h("span", { class: "nm", text: S.me.name }),
+  kids.push(h("div", { class: "bar" }, badge(S.brand), avatar(S.me, "sm"), h("span", { class: "nm", text: S.me.name }),
     g && g.deadline ? countdown(g.deadline) : null,
     h("span", { class: "score", text: S.me.score.toLocaleString("en-US") + " pts" })));
 
   if (!g) lobby(screen);
-  else if (g.phase === "intro") screen.append(h("div", { class: "progress", text: "Get ready" }), h("div", { class: "title", text: g.title }), h("p", { class: "q", text: g.blurb }), lookUp("Watch the big screen"));
+  else if (g.phase === "intro") screen.append(h("div", { class: "progress", text: "Get ready" }), h("div", { class: "title", text: g.title }), h("p", { class: "q", text: g.blurb }), lookUp("Eyes on the big screen"));
   else if (g.phase === "final") finalScreen(screen, g);
   else ({ trivia, fib, quip, guess })[g.type](screen, g);
 
@@ -142,18 +146,18 @@ function joinScreen() {
     onclick: ev => { draft.emoji = e; for (const b of emojis.children) b.setAttribute("aria-pressed", String(b === ev.currentTarget)); } })));
   setTimeout(() => nameIn.focus());
   return h("div", { class: "screen fresh" },
-    h("div", { class: "joinhero" }, h("div", { class: "title" }, "Fall Fest", h("span", { text: "Party Pack" }))),
+    h("div", { class: "joinhero" }, h("div", { class: "seal" }, badge(S && S.brand)), h("div", { class: "title", text: `${(S && S.brand || {}).event || "Fall Fest"}` }), h("div", { class: "sub", text: `${(S && S.brand || {}).ranch || "Braznarkel Ranch"} · ${(S && S.brand || {}).year || "2026"}`.toUpperCase() })),
     h("form", { class: "form", onsubmit: submit },
       h("label", { class: "eyebrow", for: "name", text: "Your name" }), nameIn,
       h("div", { class: "eyebrow", text: "Pick your icon" }), emojis, err,
-      h("button", { class: "btn go big-btn", type: "submit", text: S && S.me ? "Save" : "Join the game" }),
+      h("button", { class: "btn go big-btn", type: "submit", text: S && S.me ? "Save" : "Saddle up" }),
       S && S.me ? h("button", { class: "btn ghost", type: "button", text: "Cancel", onclick: () => { editing = false; render(); } }) : null));
 }
 
 function lobby(screen) {
   screen.append(h("div", { class: "me" }, avatar(S.me, "lg"),
-    h("div", { class: "title", text: `You're in, ${S.me.name}!` }),
-    h("div", { class: "muted", text: "Watch the big screen. The host will start a game soon." })),
+    h("div", { class: "title", text: `Howdy, ${S.me.name}!` }),
+    h("div", { class: "muted", text: `Welcome to the ${S.brand.ranch} ${S.brand.event}. Keep an eye on the big screen; the games start soon.` })),
     h("button", { class: "btn ghost", text: "Change name or icon", onclick: () => { draft = { name: S.me.name, emoji: S.me.emoji }; editing = true; render(); } }));
 }
 
@@ -239,7 +243,7 @@ function finalScreen(screen, g) {
   screen.append(h("div", { class: "progress", text: g.title + " is over" }),
     h("div", { class: "me" }, avatar(S.me, "lg"), h("div", { class: "title", text: `${place}${suffix(place)} place` }),
       h("div", { class: "muted", text: `${pts(earned)} this game · ${S.me.score.toLocaleString("en-US")} total` })),
-    lookUp("Look at the leaderboard!", "Stay on this page for the next game."));
+    lookUp("Check the leaderboard!", "Stay on this page, more games are coming."));
 }
 
 start();

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fall Fest Party Pack: a Jackbox-style party game server.
+// Braznarkel Ranch Fall Fest: a Jackbox-style party game server.
 // The big screen opens /host, players open / on their phones (same Wi-Fi).
 // No dependencies: plain Node http, Server-Sent Events for live updates.
 "use strict";
@@ -35,6 +35,7 @@ function loadContent() {
   try {
     const c = JSON.parse(fs.readFileSync(path.join(ROOT, "content.json"), "utf8"));
     for (const k of ["trivia", "fib", "guess", "quip"]) if (!Array.isArray(c[k])) c[k] = [];
+    c.brand = { ranch: "Braznarkel Ranch", event: "Fall Fest", year: "2026", ...(c.brand || {}) };
     return c;
   } catch (e) {
     console.error("Couldn't read content.json:", e.message);
@@ -364,7 +365,7 @@ function gameView(viewer) {
   };
 }
 function view(c) {
-  const base = { now: Date.now(), players: publicPlayers(), game: gameView(c.role === "host" ? "host" : c.pid) };
+  const base = { now: Date.now(), brand: content.brand, players: publicPlayers(), game: gameView(c.role === "host" ? "host" : c.pid) };
   if (c.role === "host") {
     return { ...base, role: "host", joinUrl: joinUrl(),
       catalog: Object.entries(GAMES).map(([k, m]) => ({ key: k, title: m.title, blurb: m.blurb, min: m.min, rounds: m.rounds, maxRounds: m.maxRounds, unit: m.unit, available: content[m.source].length })) };
@@ -482,7 +483,7 @@ const server = http.createServer(async (req, res) => {
     switch (body.cmd) {
       case "start": error = startGame(body.type, body.rounds); break;
       case "next": advance(); break;
-      case "lobby": clearTimeout(timer); G = null; break;
+      case "lobby": clearTimeout(timer); G = null; content = loadContent(); break;
       case "kick": players.delete(body.pid); break;
       case "resetScores": for (const pl of players.values()) pl.score = 0; break;
       case "clearPlayers": if (!G) { players.clear(); colorIdx = 0; } break;
@@ -497,7 +498,8 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   const ips = lanIPs();
-  console.log("\n  🎃  Fall Fest Party Pack is running\n");
+  const b = content.brand;
+  console.log(`\n  🤠  ${b.ranch} ${b.year} ${b.event} is running\n`);
   console.log(`  Big screen (open on this computer):  http://localhost:${PORT}/host`);
   for (const ip of ips) console.log(`  Big screen from another device:      http://${ip}:${PORT}/host?key=${HOST_KEY}`);
   console.log(`\n  Players join at:                     ${joinUrl()}`);

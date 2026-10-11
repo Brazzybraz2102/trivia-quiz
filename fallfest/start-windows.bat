@@ -1,5 +1,5 @@
 @echo off
-REM Double-click to start the Fall Fest Party Pack on Windows.
+REM Double-click to start the Braznarkel Ranch Fall Fest games on Windows.
 cd /d "%~dp0"
 where node >nul 2>nul
 if errorlevel 1 (
