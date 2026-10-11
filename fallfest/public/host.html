@@ -163,8 +163,48 @@ body.playing .scene { opacity: .35; }
 .controls .status.bad { color: var(--cranberry); font-weight: 700; }
 .gate { max-width: 520px; margin: 12vh auto; display: flex; flex-direction: column; gap: 14px; }
 
+/* new games */
+.catpill { background: var(--teal); color: var(--ink); font-weight: 800; letter-spacing: .12em; text-transform: uppercase; font-size: 15px; padding: 6px 16px; border-radius: 999px; box-shadow: 0 4px 0 #070504; }
+.tfrow { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; width: min(1000px, 100%); }
+.tftile { border-radius: 22px; padding: 26px; display: flex; align-items: center; justify-content: center; gap: 16px; box-shadow: var(--shadow); transition: opacity .3s, transform .3s; }
+.tftile .lbl { font-family: var(--f-brand); font-size: clamp(40px, 6vw, 96px); line-height: 1; }
+.tftile .n { font-family: var(--f-display); font-size: 34px; background: #0003; border-radius: 999px; padding: 2px 16px; }
+.tftile.fact { background: var(--teal); color: var(--ink); }
+.tftile.fiction { background: var(--cranberry); color: var(--cream); }
+.tftile.dim { opacity: .28; transform: scale(.96); }
+.tftile.win { outline: 6px solid var(--cream); transform: scale(1.03); }
+.why { font-size: clamp(20px, 2.2vw, 30px); font-weight: 600; max-width: 40ch; color: var(--cream); }
+.lineup { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; width: min(760px, 100%); }
+.lineup li { display: flex; align-items: center; gap: 16px; background: var(--cream); color: var(--ink); border-radius: 16px; padding: 12px 18px; font-weight: 800; font-size: clamp(20px, 2.2vw, 32px); box-shadow: var(--shadow); text-align: left; }
+.fresh .lineup li { animation: pop .4s backwards; }
+.lineup .pos { font-family: var(--f-display); width: 44px; height: 44px; display: grid; place-items: center; background: var(--brass); border-radius: 50%; flex: none; }
+.emoji-big { font-size: clamp(90px, 14vw, 220px); line-height: 1.1; letter-spacing: .08em; filter: drop-shadow(0 8px 0 #070504); }
+.fresh .emoji-big { animation: drop .6s cubic-bezier(.2,1.4,.4,1); }
+.rank.crowned { background: var(--brass); color: var(--ink); }
+.rank.crowned .g, .rank.crowned b { color: var(--ink); }
+.sketch-wrap { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 28px; width: 100%; max-width: 1300px; align-items: center; }
+.frame { background: #7a4a26; padding: 14px; border-radius: 14px; box-shadow: var(--shadow), inset 0 0 0 4px #5a3418; }
+.sketch { display: block; width: 100%; height: auto; aspect-ratio: 1; max-height: 62vh; object-fit: contain; border-radius: 6px; background: #f6ead2; }
+.sketch-side { display: flex; flex-direction: column; gap: 18px; align-items: flex-start; text-align: left; min-width: 0; }
+.drawer { display: flex; align-items: center; gap: 16px; }
+.drawer .nm { font-family: var(--f-brand); font-size: 40px; color: var(--mustard); }
+.hint-word { font-family: var(--f-display); font-size: clamp(30px, 3.4vw, 54px); letter-spacing: .08em; color: var(--cream); white-space: pre-wrap; }
+.feed { display: flex; flex-direction: column; gap: 6px; width: 100%; max-height: 34vh; overflow: hidden; }
+.fd { display: flex; align-items: center; gap: 8px; background: var(--night-2); border-radius: 12px; padding: 4px 12px 4px 4px; font-size: 18px; min-width: 0; }
+.fd span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd.ok { background: var(--leaf); color: var(--ink); font-weight: 700; }
+.mixcard { display: flex; flex-wrap: wrap; align-items: center; gap: 18px 28px; background: linear-gradient(120deg, #3a2a1f, #241a14); border: 2px solid #e7b54a66; border-radius: 22px; padding: 22px 26px; box-shadow: var(--shadow); color: var(--cream); }
+.mixcard > * { position: relative; z-index: 1; }
+.mixtext { flex: 1; min-width: 260px; display: flex; flex-direction: column; gap: 4px; }
+.mixtext h2 { font-size: clamp(40px, 4.5vw, 64px); line-height: 1; }
+.mixtext p { margin: 0; max-width: 60ch; font-weight: 600; color: var(--muted); }
+.mixcard .stepper { background: #0004; color: var(--cream); }
+.btn.big { font-size: 22px; padding: 14px 26px; }
+.nextup { display: flex; flex-direction: column; align-items: center; gap: 2px; background: var(--night-2); border: 2px solid #e7b54a55; border-radius: 16px; padding: 10px 26px; }
+.nextup .western { font-size: clamp(28px, 3vw, 44px); }
 @media (max-width: 900px) {
   .lobby { grid-template-columns: 1fr; }
+  .sketch-wrap { grid-template-columns: 1fr; }
   .tiles { grid-template-columns: 1fr; }
   .vs { grid-template-columns: 1fr; }
   .vs .mid { justify-self: center; }
@@ -224,6 +264,7 @@ const stage = document.getElementById("stage"), controls = document.getElementBy
 let S = null, connected = false, flash = "", lastStep = null, soundOn = true;
 let seen = new Set(); // ids already shown as joined/answered, so only newcomers animate
 const rounds = {}; // chosen round counts per game
+let mixCount = 6;
 
 // ---------- sound (starts after the host's first click) ----------
 let actx = null;
@@ -320,7 +361,19 @@ function lobby() {
 
   if (flash) out.push(h("div", { class: "flash", role: "alert", text: flash }));
 
-  out.push(h("h2", { class: "section-title", text: "Pick a game" }));
+  out.push(h("section", { class: "mixcard stitched" },
+    h("div", { class: "mixtext" },
+      h("div", { class: "eyebrow", text: "Can't decide? Play them all" }),
+      h("h2", { class: "western brass", text: "Mix It Up" }),
+      h("p", { text: "A random run of mini-games back to back: trivia, bluffing, drawing, voting and more. Short rounds, nonstop action, one big leaderboard." })),
+    h("div", { class: "row" },
+      h("div", { class: "stepper" },
+        h("button", { "aria-label": "Fewer games", text: "−", onclick: () => { mixCount = Math.max(2, mixCount - 1); render(); } }),
+        h("span", { text: `${mixCount} games` }),
+        h("button", { "aria-label": "More games", text: "+", onclick: () => { mixCount = Math.min(12, mixCount + 1); render(); } })),
+      h("button", { class: "btn go big", text: "Mix it up!", onclick: () => cmd("mix", { count: mixCount }) }))));
+
+  out.push(h("h2", { class: "section-title", text: "Or pick a game" }));
   out.push(h("section", { class: "games" }, S.catalog.map(gm => {
     const n = Math.min(rounds[gm.key] ?? gm.rounds, gm.available || gm.rounds);
     const set = v => { rounds[gm.key] = Math.max(1, Math.min(gm.maxRounds, gm.available || gm.maxRounds, v)); render(); };
@@ -350,6 +403,8 @@ function gameScreen(g) {
     who.map(p => { const d = doneIds.includes(p.id); const a = avatar(p, "lg"); a.classList.add(d ? "done" : "pending"); if (d && isNew("d" + p.id)) a.classList.add("just"); a.title = p.name; return a; }));
   const blanked = q => { const parts = q.split("____"); return parts.flatMap((t, i) => i ? [h("span", { class: "blank", text: " " }), t] : [t]); };
   const main = h("div", { class: "center" });
+  const append = main.append.bind(main);
+  main.append = (...kids) => append(...kids.filter(k => k != null && k !== false));
 
   if (g.phase === "intro") {
     main.classList.add("intro");
@@ -361,7 +416,7 @@ function gameScreen(g) {
 
   if (g.type === "trivia") {
     const reveal = g.phase === "reveal";
-    main.append(h("div", { class: "big-q", text: g.q }),
+    main.append(g.cat ? h("div", { class: "catpill", text: g.cat }) : null, h("div", { class: "big-q", text: g.q }),
       h("div", { class: "tiles" }, g.choices.map((c, k) => h("div", { class: `tile c${k}` + (reveal ? (k === g.correct ? " win" : " dim") : "") },
         h("span", { class: "shape", text: "ABCD"[k] }), h("span", { class: "tx", text: c }), reveal ? h("span", { class: "n", text: g.counts[k] }) : null))));
     if (!reveal) main.append(waitRow(g.answered), h("div", { class: "hint", text: "Answer on your phone. Faster right answers earn more." }));
@@ -415,16 +470,105 @@ function gameScreen(g) {
       h("div", { class: "ranks" }, g.ranked.slice(0, 8).map((r, k) => P[r.id] ? h("div", { class: "rank", style: { animationDelay: k * .12 + "s" } },
         avatar(P[r.id]), h("span", { class: "nm", text: P[r.id].name }), h("span", { class: "g", text: num(r.g, g.unit) + (r.diff ? ` (off by ${num(+r.diff.toFixed(2), g.unit)})` : " · exact!") }), h("b", { text: r.pts ? pts(r.pts) : "" })) : null)));
   }
+
+  if (g.type === "tf") {
+    const reveal = g.phase === "reveal";
+    const tile = (val, label, cls) => h("div", { class: `tftile ${cls}` + (reveal ? (g.truth === val ? " win" : " dim") : "") },
+      h("span", { class: "lbl", text: label }), reveal ? h("span", { class: "n", text: g.counts[val] }) : null);
+    main.append(h("div", { class: "big-q", text: g.s }), h("div", { class: "tfrow" }, tile(true, "Fact", "fact"), tile(false, "Fiction", "fiction")));
+    if (!reveal) main.append(waitRow(g.answered), h("div", { class: "hint", text: "Fact or fiction? Answer fast. Right answers in a row build a streak bonus." }));
+    else {
+      if (g.why) main.append(h("div", { class: "why", text: g.why }));
+      const hot = S.players.filter(p => (g.streaks[p.id] || 0) >= 3);
+      main.append(resultChips(g.results, P));
+      if (hot.length) main.append(h("div", { class: "hint", text: "🔥 On a streak: " + hot.map(p => `${p.name} (${g.streaks[p.id]})`).join(", ") }));
+    }
+  }
+
+  if (g.type === "order") {
+    const reveal = g.phase === "reveal";
+    main.append(h("div", { class: "eyebrow", text: "Put these in order" }), h("div", { class: "big-q", text: g.q }));
+    if (!reveal) main.append(h("div", { class: "tiles" }, g.shown.map((c, k) => h("div", { class: `tile c${k}` }, h("span", { class: "shape", text: "ABCD"[k] }), h("span", { class: "tx", text: c })))),
+      waitRow(g.answered), h("div", { class: "hint", text: "Tap them into order on your phone. 250 for each one in the right spot, plus a bonus for a perfect line." }));
+    else main.append(h("ol", { class: "lineup" }, g.correct.map((c, k) => h("li", { style: { animationDelay: k * .2 + "s" } }, h("span", { class: "pos", text: k + 1 }), h("span", { text: c })))),
+      resultChips(g.results, P));
+  }
+
+  if (g.type === "emoji") {
+    main.append(h("div", { class: "eyebrow", text: g.cat ? `Name that ${g.cat.toLowerCase()}` : "Name it" }), h("div", { class: "emoji-big", text: g.e }));
+    if (g.phase === "question") {
+      const solvers = g.solvedIds.map(id => P[id]).filter(Boolean);
+      main.append(h("div", { class: "hint", text: "Type your answer on your phone. First to solve it scores the most." }),
+        solvers.length ? h("div", { class: "chips" }, solvers.map((p, k) => h("span", { class: "chip good" }, h("b", { text: k + 1 }), avatar(p, "sm"), p.name, " solved it"))) : null);
+    } else main.append(h("div", { class: "answer-big", style: { fontSize: "clamp(40px, 6vw, 96px)" }, text: g.answer }), resultChips(g.results, P));
+  }
+
+  if (g.type === "herd") {
+    const reveal = g.phase === "reveal";
+    const total = reveal ? g.counts.reduce((a, b) => a + b, 0) || 1 : 1;
+    main.append(h("div", { class: "eyebrow", text: "Which way is the herd running?" }), h("div", { class: "big-q", text: g.q }),
+      h("div", { class: "tiles" }, g.options.map((c, k) => h("div", { class: `tile c${k % 4}` + (reveal ? (g.herd.includes(k) ? " win" : " dim") : "") },
+        h("span", { class: "shape", text: "ABCD"[k] }), h("span", { class: "tx", text: c }),
+        reveal ? h("span", { class: "n", text: Math.round(100 * g.counts[k] / total) + "%" }) : null))));
+    if (!reveal) main.append(waitRow(g.answered), h("div", { class: "hint", text: "No right answers. Pick what you think most people will pick." }));
+    else {
+      main.append(resultChips(g.results, P));
+      const lone = (g.lone || []).map(id => P[id]).filter(Boolean);
+      if (lone.length) main.append(h("div", { class: "hint", text: "🐄 Lone steer" + (lone.length > 1 ? "s" : "") + ": " + lone.map(p => p.name).join(", ") }));
+    }
+  }
+
+  if (g.type === "likely") {
+    main.append(h("div", { class: "eyebrow", text: "Who's most likely to…" }), h("div", { class: "big-q", text: g.q.charAt(0).toUpperCase() + g.q.slice(1) + "?" }));
+    if (g.phase === "vote") main.append(h("div", { class: "hint", text: "Vote for a player on your phone. Pick who the room picks for points." }), waitRow(g.voted));
+    else {
+      const rows = Object.entries(g.tally).filter(([id]) => P[id]).sort((a, b) => b[1] - a[1]);
+      main.append(h("div", { class: "ranks" }, rows.map(([id, n], k) => h("div", { class: "rank" + (g.crowned.includes(id) ? " crowned" : ""), style: { animationDelay: k * .12 + "s" } },
+        avatar(P[id]), h("span", { class: "nm", text: (g.crowned.includes(id) ? "👑 " : "") + P[id].name }), h("span", { class: "g", text: `${n} vote${n === 1 ? "" : "s"}` }), h("b", { text: g.results[id] ? pts(g.results[id]) : "" })))),
+        h("div", { class: "hint", text: "Everyone who voted with the room gets +300." }));
+    }
+  }
+
+  if (g.type === "draw") {
+    const drawer = P[g.drawer];
+    const cv = h("canvas", { class: "sketch", width: 900, height: 900, "aria-label": "The drawing" });
+    paintStrokes(cv, g.strokes || []);
+    const side = h("div", { class: "sketch-side" },
+      drawer ? h("div", { class: "drawer" }, avatar(drawer, "lg"), h("div", null, h("div", { class: "eyebrow", text: "Drawing now" }), h("div", { class: "nm", text: drawer.name }))) : null);
+    if (g.phase === "draw") {
+      side.append(h("div", { class: "hint-word", text: g.hint.split("").join(" ") }),
+        h("div", { class: "feed" }, [...g.feed].reverse().map(f => P[f.id] ? h("div", { class: "fd" + (f.ok ? " ok" : "") }, avatar(P[f.id], "sm"), h("b", { text: P[f.id].name }), f.ok ? " got it!" : h("span", { text: f.text })) : null)),
+        h("div", { class: "hint", text: "Type your guesses on your phone" }));
+    } else side.append(h("div", { class: "eyebrow", text: "The word was" }), h("div", { class: "answer-big", style: { fontSize: "clamp(40px, 5vw, 80px)" }, text: g.word }), resultChips(g.results, P));
+    main.append(h("div", { class: "sketch-wrap" }, h("div", { class: "frame" }, cv), side));
+  }
   return [head, main];
+}
+
+function paintStrokes(cv, strokes) {
+  const ctx = cv.getContext("2d"), k = cv.width / 1000;
+  ctx.fillStyle = "#f6ead2"; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  for (const s of strokes) {
+    const p = s.p; if (!p || p.length < 2) continue;
+    ctx.strokeStyle = s.c; ctx.fillStyle = s.c; ctx.lineWidth = s.w * k;
+    if (p.length === 2) { ctx.beginPath(); ctx.arc(p[0] * k, p[1] * k, s.w * k / 2, 0, 6.28); ctx.fill(); continue; }
+    ctx.beginPath(); ctx.moveTo(p[0] * k, p[1] * k);
+    for (let i = 2; i < p.length; i += 2) ctx.lineTo(p[i] * k, p[i + 1] * k);
+    ctx.stroke();
+  }
 }
 
 function isNew(k) { if (seen.has(k)) return false; seen.add(k); return true; }
 
 function progress(g) {
-  if (g.phase === "intro" || g.phase === "final") return "";
-  if (g.total) return `${g.i + 1} of ${g.total}`;
-  if (g.type === "quip") return `Round ${g.round + 1} of ${g.rounds}`;
-  return "";
+  const mix = g.mix ? `Mix It Up · game ${g.mix.i + 1} of ${g.mix.n}` : "";
+  let part = "";
+  if (g.phase !== "intro" && g.phase !== "final") {
+    if (g.total) part = `${g.i + 1} of ${g.total}`;
+    else if (g.type === "quip") part = `Round ${g.round + 1} of ${g.rounds}`;
+  }
+  return [mix, part].filter(Boolean).join("  ·  ");
 }
 
 function resultChips(results, P) {
@@ -435,13 +579,17 @@ function resultChips(results, P) {
 
 function finalScreen(g, P) {
   const ranked = [...S.players].sort((a, b) => b.score - a.score);
-  const gameTop = [...S.players].sort((a, b) => (g.earned[b.id] || 0) - (g.earned[a.id] || 0))[0];
+  const mixDone = g.mix && g.mix.last;
+  const earned = mixDone ? g.mix.earned : g.earned;
+  const gameTop = [...S.players].sort((a, b) => (earned[b.id] || 0) - (earned[a.id] || 0))[0];
+  const label = mixDone ? "Mix It Up champion" : g.title + " champion";
   return h("div", { class: "center intro" },
-    gameTop && g.earned[gameTop.id] ? h("div", null, h("div", { class: "eyebrow", text: g.title + " champion" }), h("h1", { class: "brass", text: gameTop.name })) : h("h1", { class: "brass", text: "That's a wrap" }),
+    g.nextUp ? h("div", { class: "nextup" }, h("span", { class: "eyebrow", text: "Next up" }), h("span", { class: "western brass", text: g.nextUp })) : null,
+    gameTop && earned[gameTop.id] ? h("div", null, h("div", { class: "eyebrow", text: label }), h("h1", { class: "brass", text: gameTop.name })) : h("h1", { class: "brass", text: g.nextUp ? "Scores so far" : "That's a wrap" }),
     h("div", { class: "eyebrow", text: `${S.brand.ranch} ${S.brand.year} leaderboard` }),
     h("div", { class: "board" }, ranked.slice(0, 10).map((p, k) => h("div", { class: "brow" + (k === 0 ? " first" : ""), style: { animationDelay: k * .1 + "s" } },
       h("span", { class: "pos", text: k + 1 }), avatar(p), h("span", { class: "nm", text: p.name }),
-      h("span", { class: "gain", text: g.earned[p.id] ? pts(g.earned[p.id]) + " this game" : "" }),
+      h("span", { class: "gain", text: earned[p.id] ? pts(earned[p.id]) + (mixDone ? " this mix" : " this game") : "" }),
       h("span", { class: "tot", text: p.score.toLocaleString("en-US") })))));
 }
 
@@ -450,8 +598,8 @@ function renderControls(g) {
   controls.replaceChildren(...[
     h("span", { class: "status" + (off ? " bad" : ""), text: off ? "Reconnecting to the game server…" : `${S ? S.players.filter(p => p.online).length : 0} players connected` }),
     h("span", { class: "spacer" }),
-    g && g.phase !== "final" ? h("button", { class: "btn gold", text: "Skip ahead ▸", onclick: () => cmd("next") }) : null,
-    g ? h("button", { class: "btn" + (g.phase === "final" ? " go" : ""), text: g.phase === "final" ? "Back to lobby" : "End game", onclick: () => cmd("lobby") }) : null,
+    g && (g.phase !== "final" || g.nextUp) ? h("button", { class: "btn gold", text: g.nextUp && g.phase === "final" ? "Start next game ▸" : "Skip ahead ▸", onclick: () => cmd("next") }) : null,
+    g ? h("button", { class: "btn" + (g.phase === "final" && !g.nextUp ? " go" : ""), text: g.phase === "final" && !g.nextUp ? "Back to lobby" : g.mix ? "End mix" : "End game", onclick: () => cmd("lobby") }) : null,
     !g ? h("button", { class: "btn ghost", text: "Reset scores", onclick: e => armed(e.currentTarget, () => cmd("resetScores")) }) : null,
     !g ? h("button", { class: "btn ghost", text: "Clear players", onclick: e => armed(e.currentTarget, () => cmd("clearPlayers")) }) : null,
     h("button", { class: "btn ghost", text: soundOn ? "Sound on" : "Sound off", "aria-pressed": String(soundOn), onclick: () => { soundOn = !soundOn; renderControls(S.game); } }),

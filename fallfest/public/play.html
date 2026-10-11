@@ -54,6 +54,29 @@
 .me { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 20px 0; }
 .big-btn { font-size: 22px; padding: 16px; }
 .offline { background: var(--cranberry); color: var(--cream); border-radius: 12px; padding: 8px 12px; font-weight: 700; text-align: center; }
+.choices.two { grid-template-columns: 1fr 1fr; }
+.big-choice { min-height: 140px; justify-content: center; font-family: var(--f-brand); font-size: 30px; font-weight: 400; }
+.choice.fiction { --c: #c9483f; color: var(--cream); }
+.choice.picked { outline: 4px solid var(--cream); }
+.choice.player { gap: 12px; }
+.row2 { display: flex; gap: 10px; align-items: center; }
+.row2 .big-btn { flex: 1; }
+.emoji-q { font-size: 72px; text-align: center; letter-spacing: .06em; line-height: 1.2; }
+.secret { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; background: var(--night-2); border-radius: 14px; padding: 10px 14px; }
+.secret b { font-family: var(--f-brand); font-size: 30px; color: var(--mustard); }
+.padwrap { display: flex; flex-direction: column; gap: 10px; }
+.pad { width: 100%; height: auto; aspect-ratio: 1; border-radius: 14px; touch-action: none; border: 6px solid #7a4a26; background: #f6ead2; }
+.tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tools .spacer { flex: 1; }
+.tools .btn { padding: 8px 14px; }
+.swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+.sw { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #0000; box-shadow: 0 0 0 2px #0006 inset; }
+.sw[aria-pressed="true"] { border-color: var(--cream); transform: scale(1.12); }
+.sizes { display: flex; gap: 6px; }
+.sz { width: 40px; height: 40px; border-radius: 10px; background: var(--night-3); border: 2px solid transparent; display: grid; place-items: center; }
+.sz i { background: var(--cream); border-radius: 50%; display: block; }
+.sz[aria-pressed="true"] { border-color: var(--mustard); }
+.hintword { font-family: var(--f-display); font-size: 26px; letter-spacing: .06em; text-align: center; white-space: pre-wrap; }
 .progress { font-size: 14px; font-weight: 700; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
 </style>
 </head>
@@ -83,7 +106,7 @@ function start() {
 // Only rebuild when what THIS player sees changes, so typing isn't interrupted.
 function screenKey() {
   const g = S.game ? { ...S.game } : null;
-  if (g) for (const k of ["answered", "written", "picked", "voted", "guessed", "done", "answeredCount", "earned", "now"]) delete g[k];
+  if (g) for (const k of ["answered", "written", "picked", "voted", "guessed", "done", "answeredCount", "earned", "now", "feed", "solvedIds", "strokes"]) delete g[k];
   const rank = S.game && S.game.phase === "final" ? S.players.map(p => p.id + ":" + p.score).join() : "";
   return JSON.stringify({ me: S.me, g, editing, errMsg, online, rank });
 }
@@ -98,6 +121,8 @@ function render(force) {
   const fresh = phaseKey !== lastPhaseKey; lastPhaseKey = phaseKey;
 
   const screen = h("div", { class: "screen" + (fresh ? " fresh" : "") });
+  const append = screen.append.bind(screen);
+  screen.append = (...kids) => append(...kids.filter(k => k != null && k !== false));
   const kids = [];
   if (!online) kids.push(h("div", { class: "offline", role: "status", text: "Reconnecting… stay on this page." }));
   if (!S) { app.replaceChildren(...kids); return; }
@@ -111,7 +136,7 @@ function render(force) {
   if (!g) lobby(screen);
   else if (g.phase === "intro") screen.append(h("div", { class: "progress", text: "Get ready" }), h("div", { class: "title", text: g.title }), h("p", { class: "q", text: g.blurb }), lookUp("Eyes on the big screen"));
   else if (g.phase === "final") finalScreen(screen, g);
-  else ({ trivia, fib, quip, guess })[g.type](screen, g);
+  else ({ trivia, fib, quip, guess, tf, order, emoji, herd, likely, draw })[g.type](screen, g);
 
   const keep = {};
   for (const el of app.querySelectorAll("input[id], textarea[id]")) keep[el.id] = el.value;
@@ -163,7 +188,7 @@ function lobby(screen) {
 
 // ---------- games ----------
 function trivia(screen, g) {
-  screen.append(h("div", { class: "progress", text: `Question ${g.i + 1} of ${g.total}` }), h("div", { class: "q", text: g.q }));
+  screen.append(h("div", { class: "progress", text: `Question ${g.i + 1} of ${g.total}${g.cat ? " · " + g.cat : ""}` }), h("div", { class: "q", text: g.q }));
   if (g.phase === "question") {
     if (g.mine != null) return screen.append(lookUp("Locked in!", `You picked ${"ABCD"[g.mine]}. Waiting for everyone else.`));
     screen.append(h("div", { class: "choices" }, g.choices.map((c, k) => h("button", { class: `choice c${k}`, onclick: e => { e.currentTarget.disabled = true; act({ choice: k }); } },
@@ -235,6 +260,152 @@ function guess(screen, g) {
   }
 }
 
+function tf(screen, g) {
+  screen.append(h("div", { class: "progress", text: `Statement ${g.i + 1} of ${g.total}` }), h("div", { class: "q", text: g.s }));
+  if (g.phase === "question") {
+    if (g.mine != null) return screen.append(lookUp("Locked in!", `You said ${g.mine ? "fact" : "fiction"}.`));
+    screen.append(h("div", { class: "choices two" },
+      h("button", { class: "choice big-choice c1", onclick: e => { e.currentTarget.disabled = true; act({ choice: true }); } }, h("span", { text: "Fact" })),
+      h("button", { class: "choice big-choice fiction", onclick: e => { e.currentTarget.disabled = true; act({ choice: false }); } }, h("span", { text: "Fiction" }))),
+      g.streak > 1 ? h("div", { class: "muted", text: `🔥 ${g.streak} in a row! Keep it going.` }) : null);
+  } else {
+    const p = g.results[S.me.id] || 0;
+    screen.append(p ? lookUp("Right! " + pts(p), g.streaks[S.me.id] > 1 ? `🔥 Streak of ${g.streaks[S.me.id]}` : g.why, "good")
+      : lookUp(g.mine == null ? "Too slow!" : "Nope!", `It's ${g.truth ? "a fact" : "fiction"}. ${g.why}`, "bad"));
+  }
+}
+
+let orderPick = { step: null, seq: [] };
+function order(screen, g) {
+  screen.append(h("div", { class: "progress", text: `Puzzle ${g.i + 1} of ${g.total}` }), h("div", { class: "q", text: g.q }));
+  if (g.phase === "question") {
+    if (g.mine) return screen.append(lookUp("Locked in!", g.mine.map((k, n) => `${n + 1}. ${g.shown[k]}`).join("   ")));
+    if (orderPick.step !== g.step) orderPick = { step: g.step, seq: [] };
+    const seq = orderPick.seq;
+    const redraw = () => { lastKey = null; render(); };
+    screen.append(h("div", { class: "muted", text: "Tap them in order, first to last." }),
+      h("div", { class: "choices" }, g.shown.map((c, k) => {
+        const at = seq.indexOf(k);
+        return h("button", { class: `choice c${k}` + (at >= 0 ? " picked" : ""), onclick: () => { if (at >= 0) seq.splice(at); else seq.push(k); redraw(); } },
+          h("span", { class: "shape", text: at >= 0 ? String(at + 1) : "·" }), h("span", { text: c }));
+      })),
+      h("div", { class: "err", role: "alert", text: errMsg }),
+      h("div", { class: "row2" },
+        h("button", { class: "btn ghost", text: "Start over", disabled: !seq.length, onclick: () => { seq.length = 0; redraw(); } }),
+        h("button", { class: "btn go big-btn", text: "Lock it in", disabled: seq.length !== g.shown.length, onclick: () => act({ order: seq.slice() }) })));
+  } else {
+    const p = g.results[S.me.id] || 0, r = g.right[S.me.id];
+    screen.append(lookUp(p ? pts(p) : "No points", (r == null ? "You didn't lock in. " : `${r} of ${g.correct.length} in the right spot. `) + "Right order: " + g.correct.join(" → "), p ? "good" : "bad"));
+  }
+}
+
+function emoji(screen, g) {
+  screen.append(h("div", { class: "progress", text: `Puzzle ${g.i + 1} of ${g.total}${g.cat ? " · " + g.cat : ""}` }), h("div", { class: "emoji-q", text: g.e }));
+  if (g.phase === "question") {
+    if (g.solved) return screen.append(lookUp("You got it!", "Nice. Watch the others squirm.", "good"));
+    const inp = h("input", { class: "field", id: "emoji-" + g.step, maxlength: 40, autocomplete: "off", placeholder: g.cat ? `Name the ${g.cat.toLowerCase()}` : "Your answer", "data-autofocus": "" });
+    screen.append(h("form", { class: "form", onsubmit: e => { e.preventDefault(); const v = inp.value; inp.value = ""; act({ text: v }); } },
+      inp, h("div", { class: "err", role: "alert", text: errMsg }), h("button", { class: "btn go big-btn", type: "submit", text: "Guess" })),
+      g.tries ? h("div", { class: "muted", text: `Guesses so far: ${g.tries}` }) : null);
+  } else {
+    const p = g.results[S.me.id] || 0;
+    screen.append(lookUp(p ? pts(p) : "No points", "It was " + g.answer, p ? "good" : "bad"));
+  }
+}
+
+function herd(screen, g) {
+  screen.append(h("div", { class: "progress", text: `Question ${g.i + 1} of ${g.total}` }), h("div", { class: "q", text: g.q }));
+  if (g.phase === "question") {
+    if (g.mine != null) return screen.append(lookUp("Locked in!", `You picked ${g.options[g.mine]}. Let's see if the herd agrees.`));
+    screen.append(h("div", { class: "muted", text: "Pick what you think most people will pick." }),
+      h("div", { class: "choices" }, g.options.map((c, k) => h("button", { class: `choice c${k % 4}`, onclick: e => { e.currentTarget.disabled = true; act({ choice: k }); } },
+        h("span", { class: "shape", text: "ABCD"[k] }), h("span", { text: c })))));
+  } else {
+    const p = g.results[S.me.id] || 0, lone = (g.lone || []).includes(S.me.id);
+    screen.append(lookUp(p ? "With the herd! " + pts(p) : lone ? "Lone steer!" : "Off the trail", "The herd picked " + g.herd.map(k => g.options[k]).join(" & "), p ? "good" : "bad"));
+  }
+}
+
+function likely(screen, g) {
+  screen.append(h("div", { class: "progress", text: `Question ${g.i + 1} of ${g.total}` }), h("div", { class: "muted", text: "Who's most likely to…" }), h("div", { class: "q", text: g.q + "?" }));
+  if (g.phase === "vote") {
+    if (g.mine) { const t = S.players.find(p => p.id === g.mine); return screen.append(lookUp("Vote cast", `You picked ${t ? t.name : "someone"}.`)); }
+    screen.append(h("div", { class: "choices" }, S.players.filter(p => p.id !== S.me.id && p.online).map(p => h("button", { class: "choice plain player", onclick: e => { e.currentTarget.disabled = true; act({ target: p.id }); } },
+      avatar(p, "sm"), h("span", { text: p.name })))));
+  } else {
+    const p = g.results[S.me.id] || 0, crowned = g.crowned.includes(S.me.id);
+    const names = g.crowned.map(id => (S.players.find(x => x.id === id) || {}).name).filter(Boolean);
+    screen.append(lookUp(crowned ? "👑 It's you!" : p ? "You read the room! " + pts(p) : "Not this time", names.length ? "The room picked " + names.join(" & ") : "", p ? "good" : "bad"));
+  }
+}
+
+// ---------- Scarecrow Sketch: drawing pad for the drawer, guesses for everyone else ----------
+let pad = null;
+function drawPad(step) {
+  if (pad && pad.step === step) return pad;
+  const COLORS = ["#1d140e", "#e2702c", "#e7b54a", "#b8322f", "#4f9a95", "#6b8f3a", "#7a4a26", "#ffffff"];
+  const SIZES = [6, 14, 28];
+  const st = { step, strokes: [], color: COLORS[0], size: SIZES[0], dirty: false, cur: null };
+  const cv = h("canvas", { class: "pad", width: 800, height: 800 });
+  const ctx = cv.getContext("2d");
+  const paint = () => {
+    ctx.fillStyle = "#f6ead2"; ctx.fillRect(0, 0, 800, 800); ctx.lineCap = "round"; ctx.lineJoin = "round";
+    for (const s of st.strokes) {
+      const p = s.p; ctx.strokeStyle = ctx.fillStyle = s.c; ctx.lineWidth = s.w * .8;
+      if (p.length === 2) { ctx.beginPath(); ctx.arc(p[0] * .8, p[1] * .8, s.w * .4, 0, 6.28); ctx.fill(); continue; }
+      ctx.beginPath(); ctx.moveTo(p[0] * .8, p[1] * .8); for (let i = 2; i < p.length; i += 2) ctx.lineTo(p[i] * .8, p[i + 1] * .8); ctx.stroke();
+    }
+  };
+  const pt = e => { const r = cv.getBoundingClientRect(); return [Math.round((e.clientX - r.left) / r.width * 1000), Math.round((e.clientY - r.top) / r.height * 1000)]; };
+  cv.addEventListener("pointerdown", e => { e.preventDefault(); cv.setPointerCapture(e.pointerId); st.cur = { c: st.color, w: st.size, p: pt(e) }; st.strokes.push(st.cur); st.dirty = true; paint(); });
+  cv.addEventListener("pointermove", e => {
+    if (!st.cur) return; e.preventDefault();
+    const [x, y] = pt(e), p = st.cur.p;
+    if (Math.hypot(x - p[p.length - 2], y - p[p.length - 1]) < 6) return;
+    p.push(x, y); st.dirty = true; paint();
+  });
+  const end = () => { st.cur = null; };
+  cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
+  const swatches = h("div", { class: "swatches" }, COLORS.map(c => h("button", { class: "sw", style: { background: c }, "aria-label": "Color", "aria-pressed": String(c === st.color),
+    onclick: e => { st.color = c; for (const b of swatches.children) b.setAttribute("aria-pressed", String(b === e.currentTarget)); } })));
+  const sizes = h("div", { class: "sizes" }, SIZES.map(w => h("button", { class: "sz", "aria-label": "Brush size", "aria-pressed": String(w === st.size),
+    onclick: e => { st.size = w; for (const b of sizes.children) b.setAttribute("aria-pressed", String(b === e.currentTarget)); } }, h("i", { style: { width: w / 1.4 + "px", height: w / 1.4 + "px" } }))));
+  st.el = h("div", { class: "padwrap" }, cv,
+    h("div", { class: "tools" }, swatches),
+    h("div", { class: "tools" }, sizes, h("span", { class: "spacer" }),
+      h("button", { class: "btn ghost", text: "Undo", onclick: () => { st.strokes.pop(); st.dirty = true; paint(); } }),
+      h("button", { class: "btn ghost", text: "Clear", onclick: () => { st.strokes = []; st.dirty = true; paint(); } })));
+  paint();
+  // Send the picture to the big screen a few times a second while drawing.
+  st.timer = setInterval(() => {
+    if (!S || !S.game || S.game.step !== step) { clearInterval(st.timer); return; }
+    if (st.dirty) { st.dirty = false; post("/api/act", { id: myId, strokes: st.strokes }); }
+  }, 350);
+  pad = st;
+  return st;
+}
+
+function draw(screen, g) {
+  screen.append(h("div", { class: "progress", text: `Drawing ${g.i + 1} of ${g.total}` }));
+  if (g.phase === "draw") {
+    if (g.isDrawer) {
+      screen.append(h("div", { class: "secret" }, h("span", { class: "muted", text: "Draw this (shh!)" }), h("b", { text: g.word })),
+        drawPad(g.step).el, h("div", { class: "muted", text: "No letters or numbers. Your drawing shows on the big screen." }));
+      return;
+    }
+    const drawer = S.players.find(p => p.id === g.drawer);
+    if (g.solved) return screen.append(lookUp("You got it!", "Now watch everyone else struggle.", "good"));
+    const inp = h("input", { class: "field", id: "draw-" + g.step, maxlength: 30, autocomplete: "off", placeholder: "What is it?", "data-autofocus": "" });
+    screen.append(h("div", { class: "q", text: `${drawer ? drawer.name : "Someone"} is drawing. Look at the big screen!` }),
+      h("div", { class: "hintword", text: g.hint.split("").join(" ") }),
+      h("form", { class: "form", onsubmit: e => { e.preventDefault(); const v = inp.value; inp.value = ""; act({ text: v }); } },
+        inp, h("div", { class: "err", role: "alert", text: errMsg }), h("button", { class: "btn go big-btn", type: "submit", text: "Guess" })));
+  } else {
+    const p = g.results[S.me.id] || 0;
+    screen.append(lookUp(p ? pts(p) : "No points", "The word was " + g.word, p ? "good" : "bad"));
+  }
+}
+
 function finalScreen(screen, g) {
   const ranked = [...S.players].sort((a, b) => b.score - a.score);
   const place = ranked.findIndex(p => p.id === S.me.id) + 1;
@@ -243,7 +414,7 @@ function finalScreen(screen, g) {
   screen.append(h("div", { class: "progress", text: g.title + " is over" }),
     h("div", { class: "me" }, avatar(S.me, "lg"), h("div", { class: "title", text: `${place}${suffix(place)} place` }),
       h("div", { class: "muted", text: `${pts(earned)} this game · ${S.me.score.toLocaleString("en-US")} total` })),
-    lookUp("Check the leaderboard!", "Stay on this page, more games are coming."));
+    g.nextUp ? lookUp("Next up: " + g.nextUp, "Starting in a few seconds. Stay on this page!", "good") : lookUp("Check the leaderboard!", "Stay on this page, more games are coming."));
 }
 
 start();

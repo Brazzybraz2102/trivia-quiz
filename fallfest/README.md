@@ -4,14 +4,22 @@ Jackbox-style party games for the Braznarkel Ranch Fall Fest. One computer shows
 
 ## The games
 
+**Mix It Up** plays a random run of the games below back to back, with short rounds and one running leaderboard. Pick how many games (2–12) and press **Mix it up!** Between games the scoreboard shows for a few seconds, then the next game starts by itself. **Start next game** skips the wait.
+
 | Game | How it plays | Players |
 | --- | --- | --- |
-| **Pumpkin Patch Pop Quiz** | Multiple-choice trivia. Faster right answers score more (500–1,000). | 1+ |
-| **Fib-o-Lantern** | A real but strange fact with a blank. Everyone writes a believable fake answer, then tries to find the truth among the fakes. +1,000 for finding the truth, +500 for each person your fib fools. | 2+ (best with 4+) |
-| **Hayride Head-to-Head** | Each player gets two funny prompts, and each prompt goes to two players. Everyone else votes for the better answer. Up to 1,000 per matchup, +250 for a clean sweep. | 3+ |
-| **Guess the Gourd** | Every answer is a number. Closest guess gets 1,000, then 600 and 300. An exact guess gets 1,500. | 1+ |
+| **Pumpkin Patch Pop Quiz** | Multiple-choice trivia across 10 categories: fall, geography, science, movies, music, sports, food, ranch life and history. Faster right answers score more. | 1+ |
+| **Fact or Fiction** | Lightning round of true-or-false statements. 10 seconds each, with a bonus for streaks of right answers. | 1+ |
+| **Fib-o-Lantern** | A strange true fact with a blank. Everyone writes a believable fake answer, then tries to find the truth. Points for the truth and for every friend you fool. | 2+ |
+| **Guess the Gourd** | Every answer is a number. Closest guess wins, and an exact guess gets a bonus. | 1+ |
+| **Line 'Em Up** | Tap four answers into the right order, like oldest to newest. Points for each one in the right spot. | 1+ |
+| **Emoji Roundup** | Name the movie, song or thing from a few emoji. Type it in; small typos count. | 1+ |
+| **Herd Mentality** | No right answers. Pick what you think most people will pick. Run with the herd to score. | 2+ |
+| **Most Likely To** | "Who's most likely to get lost in the corn maze?" Vote for a player. Pick who the room picks to score. | 3+ |
+| **Scarecrow Sketch** | One player draws a secret word on their phone while it shows live on the TV. Everyone else races to guess. | 2+ |
+| **Hayride Head-to-Head** | Two players answer the same funny prompt and everyone else votes for the better one. | 3+ |
 
-Scores carry across games, so the lobby doubles as the fest-wide leaderboard.
+Scores carry across every game, so the lobby doubles as the fest-wide leaderboard.
 
 ## Run it
 
@@ -56,7 +64,13 @@ All questions live in `content.json`. Edit it with any text editor. Changes load
 
 ```jsonc
 {
-  "trivia": [ { "q": "Question?", "a": "Right answer", "wrong": ["Wrong 1", "Wrong 2", "Wrong 3"] } ],
+  "trivia": [ { "cat": "Category", "q": "Question?", "a": "Right answer", "wrong": ["Wrong 1", "Wrong 2", "Wrong 3"] } ],
+  "tf":     [ { "s": "A statement.", "t": true, "why": "Shown after the answer." } ],
+  "order":  [ { "q": "Oldest to newest", "items": ["first", "second", "third", "fourth"] } ],
+  "emoji":  [ { "e": "🦁👑", "a": "The Lion King", "cat": "Movie", "alts": ["Lion King"] } ],
+  "herd":   [ { "q": "Best pie?", "options": ["Apple", "Pumpkin", "Pecan", "Cherry"] } ],
+  "likely": [ "get lost in the corn maze" ],
+  "draw":   [ { "w": "scarecrow", "alts": [] } ],
   "fib":    [ { "q": "A fact with a ____ in it.", "a": "the truth", "alts": ["other accepted spellings"], "decoys": ["fake used if few players", "another"] } ],
   "guess":  [ { "q": "How many…?", "a": 206, "unit": "bones" } ],   // leave unit "" for years
   "quip":   [ "A funny prompt for two players to answer" ]
@@ -65,11 +79,7 @@ All questions live in `content.json`. Edit it with any text editor. Changes load
 
 ## Ideas for more games
 
-These came out of the brainstorm and would fit the same setup:
-
-- **Scarecrow Sketch:** one player draws a secret fall word on their phone, and everyone else guesses (Drawful style).
-- **Most Likely To…:** "Who's most likely to get lost in the corn maze?" Everyone votes for another player.
 - **Costume Contest:** players upload a photo or describe a costume, and the crowd votes.
-- **Haunted Hot Potato:** a bomb timer passes from phone to phone. Answer a category to pass it on.
+- **Haunted Hot Potato:** a bomb timer passes from phone to phone. Name something in a category to pass it on.
 - **Harvest Bracket:** head-to-head votes on fall favorites (apple pie vs. pumpkin pie) until one wins.
 - **Spooky Story Chain:** each player adds one line to a story, and the room votes on the best twist.

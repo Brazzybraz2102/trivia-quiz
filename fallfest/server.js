@@ -21,6 +21,21 @@ const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { c
 const pick = (list, n) => shuffle(list).slice(0, Math.min(n, list.length));
 const id = () => crypto.randomBytes(6).toString("hex");
 const norm = s => String(s).toLowerCase().replace(/^(the|a|an)\s+/, "").replace(/[^a-z0-9]/g, "");
+function lev(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++)
+    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+// "yes" for a match (small typos allowed on longer answers), "close" for a near miss.
+function fuzzy(guess, answers) {
+  const g = norm(guess); if (!g) return "no";
+  let best = Infinity, len = 0;
+  for (const a of answers) { const n = norm(a); const d = lev(g, n); if (d < best) { best = d; len = n.length; } }
+  const ok = len >= 8 ? 2 : len >= 5 ? 1 : 0;
+  return best <= ok ? "yes" : best <= ok + 2 ? "close" : "no";
+}
 
 // A small family-friendly filter for text that ends up on the big screen.
 const BLOCKED = ["fuck", "shit", "bitch", "cunt", "dick", "pussy", "cock", "nigg", "fag", "slut", "whore", "retard", "rape", "porn", "penis", "vagina", "asshole", "bastard"];
@@ -30,16 +45,17 @@ function clean(s, max) {
   return t;
 }
 
+const SOURCES = ["trivia", "tf", "fib", "guess", "order", "emoji", "herd", "likely", "draw", "quip"];
 let content = loadContent();
 function loadContent() {
   try {
     const c = JSON.parse(fs.readFileSync(path.join(ROOT, "content.json"), "utf8"));
-    for (const k of ["trivia", "fib", "guess", "quip"]) if (!Array.isArray(c[k])) c[k] = [];
+    for (const k of SOURCES) if (!Array.isArray(c[k])) c[k] = [];
     c.brand = { ranch: "Braznarkel Ranch", event: "Fall Fest", year: "2026", ...(c.brand || {}) };
     return c;
   } catch (e) {
     console.error("Couldn't read content.json:", e.message);
-    return content || { trivia: [], fib: [], guess: [], quip: [] };
+    return content || Object.fromEntries(SOURCES.map(k => [k, []]).concat([["brand", { ranch: "Braznarkel Ranch", event: "Fall Fest", year: "2026" }]]));
   }
 }
 
@@ -53,6 +69,7 @@ const online = () => [...players.values()].filter(p => p.online > 0);
 const award = (pid, pts) => {
   const p = players.get(pid); if (!p || !pts) return;
   p.score += pts; G.earned[pid] = (G.earned[pid] || 0) + pts;
+  if (MIX) MIX.earned[pid] = (MIX.earned[pid] || 0) + pts;
 };
 
 // ---------- games ----------
@@ -60,11 +77,11 @@ const GAMES = {
   trivia: {
     title: "Pumpkin Patch Pop Quiz",
     blurb: "Multiple choice on your phone. Faster right answers score more.",
-    min: 1, rounds: 8, maxRounds: 20, unit: "questions", source: "trivia",
+    min: 1, rounds: 8, maxRounds: 30, unit: "questions", source: "trivia", mix: 4,
     setup(G) {
       G.items = pick(content.trivia, G.rounds).map(t => {
         const choices = shuffle([t.a, ...(t.wrong || []).slice(0, 3)]);
-        return { q: t.q, choices, correct: choices.indexOf(t.a) };
+        return { q: t.q, cat: t.cat || "", choices, correct: choices.indexOf(t.a) };
       });
       G.rounds = G.items.length; G.i = -1;
     },
@@ -96,7 +113,7 @@ const GAMES = {
     },
     view(G, viewer) {
       const it = G.items[G.i]; if (!it) return {};
-      const v = { i: G.i, total: G.items.length, q: it.q, choices: it.choices, answered: Object.keys(G.answers) };
+      const v = { i: G.i, total: G.items.length, q: it.q, cat: it.cat, choices: it.choices, answered: Object.keys(G.answers) };
       if (viewer !== "host") v.mine = G.answers[viewer] ? G.answers[viewer].c : null;
       if (G.phase === "reveal") {
         v.correct = it.correct; v.results = G.results;
@@ -109,7 +126,7 @@ const GAMES = {
   fib: {
     title: "Fib-o-Lantern",
     blurb: "Write a fake answer that sounds true, then find the real one. Fool your friends for points.",
-    min: 2, rounds: 4, maxRounds: 10, unit: "questions", source: "fib",
+    min: 2, rounds: 4, maxRounds: 10, unit: "questions", source: "fib", mix: 2,
     setup(G) { G.items = pick(content.fib, G.rounds); G.rounds = G.items.length; G.i = -1; },
     begin(G) { this.nextQ(G); },
     nextQ(G) {
@@ -189,7 +206,7 @@ const GAMES = {
   quip: {
     title: "Hayride Head-to-Head",
     blurb: "Two players answer the same funny prompt. Everyone else votes for the best one.",
-    min: 3, rounds: 1, maxRounds: 3, unit: "rounds", source: "quip",
+    min: 3, rounds: 1, maxRounds: 3, unit: "rounds", source: "quip", mix: 1,
     setup(G) { G.round = 0; G.used = new Set(); },
     begin(G) { this.beginRound(G); },
     beginRound(G) {
@@ -282,7 +299,7 @@ const GAMES = {
   guess: {
     title: "Guess the Gourd",
     blurb: "Every answer is a number. Closest guess wins. Nail it exactly for a bonus.",
-    min: 1, rounds: 6, maxRounds: 15, unit: "questions", source: "guess",
+    min: 1, rounds: 6, maxRounds: 15, unit: "questions", source: "guess", mix: 3,
     setup(G) { G.items = pick(content.guess, G.rounds); G.rounds = G.items.length; G.i = -1; },
     begin(G) { this.nextQ(G); },
     nextQ(G) {
@@ -320,6 +337,268 @@ const GAMES = {
       return v;
     },
   },
+
+  tf: {
+    title: "Fact or Fiction",
+    blurb: "Lightning round. Is it true or made up? Answer fast and build a streak.",
+    min: 1, rounds: 8, maxRounds: 20, unit: "statements", source: "tf", mix: 5,
+    setup(G) { G.items = pick(content.tf, G.rounds); G.rounds = G.items.length; G.i = -1; G.streak = {}; },
+    begin(G) { this.nextQ(G); },
+    nextQ(G) {
+      G.i++;
+      if (G.i >= G.items.length) return finish(G);
+      G.answers = {}; G.qStart = Date.now(); G.qSecs = 10;
+      setPhase("question", G.qSecs);
+    },
+    next(G) {
+      if (G.phase === "question") {
+        const truth = !!G.items[G.i].t;
+        G.results = {};
+        for (const p of players.values()) {
+          const a = G.answers[p.id];
+          if (a && a.v === truth) {
+            G.streak[p.id] = (G.streak[p.id] || 0) + 1;
+            const pts = 300 + Math.round(200 * Math.max(0, 1 - (a.t - G.qStart) / (G.qSecs * 1000))) + 100 * (G.streak[p.id] - 1);
+            award(p.id, pts); G.results[p.id] = pts;
+          } else G.streak[p.id] = 0;
+        }
+        setPhase("reveal", 7);
+      } else if (G.phase === "reveal") this.nextQ(G);
+    },
+    act(G, pid, m) {
+      if (G.phase !== "question" || G.answers[pid] || typeof m.choice !== "boolean") return;
+      G.answers[pid] = { v: m.choice, t: Date.now() };
+      if (online().every(p => G.answers[p.id])) advance();
+    },
+    view(G, viewer) {
+      const it = G.items[G.i]; if (!it) return {};
+      const v = { i: G.i, total: G.items.length, s: it.s, answered: Object.keys(G.answers) };
+      if (viewer !== "host") { v.mine = G.answers[viewer] ? G.answers[viewer].v : null; v.streak = G.streak[viewer] || 0; }
+      if (G.phase === "reveal") {
+        v.truth = !!it.t; v.why = it.why || ""; v.results = G.results;
+        v.counts = { true: Object.values(G.answers).filter(a => a.v).length, false: Object.values(G.answers).filter(a => !a.v).length };
+        v.streaks = G.streak;
+      }
+      return v;
+    },
+  },
+
+  order: {
+    title: "Line 'Em Up",
+    blurb: "Tap the four answers into the right order. Points for every one in the right spot.",
+    min: 1, rounds: 5, maxRounds: 10, unit: "puzzles", source: "order", mix: 3,
+    setup(G) { G.items = pick(content.order, G.rounds); G.rounds = G.items.length; G.i = -1; },
+    begin(G) { this.nextQ(G); },
+    nextQ(G) {
+      G.i++;
+      if (G.i >= G.items.length) return finish(G);
+      const it = G.items[G.i];
+      do { G.shown = shuffle(it.items); } while (G.shown.every((x, k) => x === it.items[k]));
+      G.answers = {};
+      setPhase("question", 35);
+    },
+    next(G) {
+      if (G.phase === "question") {
+        const it = G.items[G.i];
+        G.results = {}; G.right = {};
+        for (const [pid, ans] of Object.entries(G.answers)) {
+          const right = ans.filter((s, k) => G.shown[s] === it.items[k]).length;
+          const pts = right * 250 + (right === it.items.length ? 250 : 0);
+          award(pid, pts); G.results[pid] = pts; G.right[pid] = right;
+        }
+        setPhase("reveal", 9);
+      } else if (G.phase === "reveal") this.nextQ(G);
+    },
+    act(G, pid, m) {
+      if (G.phase !== "question" || G.answers[pid] || !Array.isArray(m.order)) return;
+      const n = G.shown.length, o = m.order.map(Number);
+      if (o.length !== n || new Set(o).size !== n || o.some(x => !(x >= 0 && x < n))) return { error: "Tap every answer once." };
+      G.answers[pid] = o;
+      if (online().every(p => G.answers[p.id])) advance();
+    },
+    view(G, viewer) {
+      const it = G.items[G.i]; if (!it) return {};
+      const v = { i: G.i, total: G.items.length, q: it.q, shown: G.shown, answered: Object.keys(G.answers) };
+      if (viewer !== "host") v.mine = G.answers[viewer] || null;
+      if (G.phase === "reveal") { v.correct = it.items; v.results = G.results; v.right = G.right; }
+      return v;
+    },
+  },
+
+  emoji: {
+    title: "Emoji Roundup",
+    blurb: "Name the movie, song or thing from the emoji. Type it in. Spelling close counts.",
+    min: 1, rounds: 6, maxRounds: 20, unit: "puzzles", source: "emoji", mix: 4,
+    setup(G) { G.items = pick(content.emoji, G.rounds); G.rounds = G.items.length; G.i = -1; },
+    begin(G) { this.nextQ(G); },
+    nextQ(G) {
+      G.i++;
+      if (G.i >= G.items.length) return finish(G);
+      G.solved = {}; G.tries = {}; G.qStart = Date.now(); G.qSecs = 30;
+      setPhase("question", G.qSecs);
+    },
+    next(G) {
+      if (G.phase === "question") { G.results = {}; for (const [pid, t] of Object.entries(G.solved)) { const pts = 500 + Math.round(500 * Math.max(0, 1 - (t - G.qStart) / (G.qSecs * 1000))); award(pid, pts); G.results[pid] = pts; } setPhase("reveal", 7); }
+      else if (G.phase === "reveal") this.nextQ(G);
+    },
+    act(G, pid, m) {
+      if (G.phase !== "question" || G.solved[pid]) return;
+      const it = G.items[G.i];
+      const r = fuzzy(m.text, [it.a, ...(it.alts || [])]);
+      G.tries[pid] = (G.tries[pid] || 0) + 1;
+      if (r === "yes") { G.solved[pid] = Date.now(); if (online().every(p => G.solved[p.id])) advance(); return; }
+      return { error: r === "close" ? "So close! Check your spelling." : "Nope. Try again!" };
+    },
+    view(G, viewer) {
+      const it = G.items[G.i]; if (!it) return {};
+      const v = { i: G.i, total: G.items.length, e: it.e, cat: it.cat || "", solvedIds: Object.keys(G.solved).sort((a, b) => G.solved[a] - G.solved[b]) };
+      if (viewer !== "host") { v.solved = !!G.solved[viewer]; v.tries = G.tries[viewer] || 0; }
+      if (G.phase === "reveal") { v.answer = it.a; v.results = G.results; }
+      return v;
+    },
+  },
+
+  herd: {
+    title: "Herd Mentality",
+    blurb: "No right answers. Pick what you think most people will pick. Run with the herd to score.",
+    min: 2, rounds: 6, maxRounds: 12, unit: "questions", source: "herd", mix: 3,
+    setup(G) { G.items = pick(content.herd, G.rounds); G.rounds = G.items.length; G.i = -1; },
+    begin(G) { this.nextQ(G); },
+    nextQ(G) {
+      G.i++;
+      if (G.i >= G.items.length) return finish(G);
+      G.answers = {};
+      setPhase("question", 15);
+    },
+    next(G) {
+      if (G.phase === "question") {
+        const n = G.items[G.i].options.length;
+        G.counts = Array.from({ length: n }, (_, k) => Object.values(G.answers).filter(c => c === k).length);
+        const top = Math.max(0, ...G.counts);
+        G.herd = top ? G.counts.map((c, k) => c === top ? k : -1).filter(k => k >= 0) : [];
+        G.results = {};
+        for (const [pid, c] of Object.entries(G.answers)) if (G.herd.includes(c)) { award(pid, 500); G.results[pid] = 500; }
+        G.lone = Object.keys(G.answers).length >= 3 ? Object.keys(G.answers).filter(pid => G.counts[G.answers[pid]] === 1) : [];
+        setPhase("reveal", 8);
+      } else if (G.phase === "reveal") this.nextQ(G);
+    },
+    act(G, pid, m) {
+      const c = +m.choice;
+      if (G.phase !== "question" || G.answers[pid] != null || !(c >= 0 && c < G.items[G.i].options.length)) return;
+      G.answers[pid] = c;
+      if (online().every(p => G.answers[p.id] != null)) advance();
+    },
+    view(G, viewer) {
+      const it = G.items[G.i]; if (!it) return {};
+      const v = { i: G.i, total: G.items.length, q: it.q, options: it.options, answered: Object.keys(G.answers) };
+      if (viewer !== "host") v.mine = G.answers[viewer] ?? null;
+      if (G.phase === "reveal") { v.counts = G.counts; v.herd = G.herd; v.results = G.results; v.lone = G.lone; v.picks = G.answers; }
+      return v;
+    },
+  },
+
+  likely: {
+    title: "Most Likely To",
+    blurb: "Who in this crowd is most likely to…? Vote for a player. Pick who the room picks to score.",
+    min: 3, rounds: 5, maxRounds: 15, unit: "questions", source: "likely", mix: 3,
+    setup(G) { G.items = pick(content.likely, G.rounds); G.rounds = G.items.length; G.i = -1; },
+    begin(G) { this.nextQ(G); },
+    nextQ(G) {
+      G.i++;
+      if (G.i >= G.items.length) return finish(G);
+      G.votes = {};
+      setPhase("vote", 20);
+    },
+    next(G) {
+      if (G.phase === "vote") {
+        const tally = {};
+        for (const t of Object.values(G.votes)) tally[t] = (tally[t] || 0) + 1;
+        const top = Math.max(0, ...Object.values(tally));
+        G.tally = tally; G.crowned = top ? Object.keys(tally).filter(k => tally[k] === top) : [];
+        G.results = {};
+        const add = (pid, n) => { award(pid, n); G.results[pid] = (G.results[pid] || 0) + n; };
+        for (const pid of G.crowned) add(pid, 200);
+        for (const [voter, t] of Object.entries(G.votes)) if (G.crowned.includes(t)) add(voter, 300);
+        setPhase("reveal", 8);
+      } else if (G.phase === "reveal") this.nextQ(G);
+    },
+    act(G, pid, m) {
+      if (G.phase !== "vote" || G.votes[pid] || m.target === pid || !players.has(m.target)) return;
+      G.votes[pid] = m.target;
+      if (online().every(p => G.votes[p.id])) advance();
+    },
+    view(G, viewer) {
+      const v = { i: G.i, total: G.items.length, q: G.items[G.i], voted: Object.keys(G.votes) };
+      if (viewer !== "host") v.mine = G.votes[viewer] || null;
+      if (G.phase === "reveal") { v.tally = G.tally; v.crowned = G.crowned; v.results = G.results; }
+      return v;
+    },
+  },
+
+  draw: {
+    title: "Scarecrow Sketch",
+    blurb: "One player draws a secret word on their phone. Everyone else races to guess it.",
+    min: 2, rounds: 3, maxRounds: 12, unit: "drawings", source: "draw", mix: 2,
+    setup(G) {
+      const ps = shuffle(online().map(p => p.id));
+      G.drawers = Array.from({ length: G.rounds }, (_, k) => ps[k % ps.length]);
+      G.words = pick(content.draw, G.rounds); G.rounds = Math.min(G.rounds, G.words.length); G.i = -1;
+    },
+    begin(G) { this.nextQ(G); },
+    nextQ(G) {
+      G.i++;
+      while (G.i < G.rounds && !players.get(G.drawers[G.i])?.online) G.i++;
+      if (G.i >= G.rounds) return finish(G);
+      G.strokes = []; G.solved = {}; G.feed = []; G.qStart = Date.now(); G.qSecs = 75;
+      setPhase("draw", G.qSecs);
+    },
+    guessers(G) { return online().filter(p => p.id !== G.drawers[G.i]); },
+    next(G) {
+      if (G.phase === "draw") {
+        G.results = {};
+        const add = (pid, n) => { award(pid, n); G.results[pid] = (G.results[pid] || 0) + n; };
+        for (const [pid, t] of Object.entries(G.solved)) add(pid, 300 + Math.round(500 * Math.max(0, 1 - (t - G.qStart) / (G.qSecs * 1000))));
+        const n = Object.keys(G.solved).length;
+        if (n) add(G.drawers[G.i], 200 * n);
+        setPhase("reveal", 8);
+      } else if (G.phase === "reveal") this.nextQ(G);
+    },
+    act(G, pid, m) {
+      if (G.phase !== "draw") return;
+      const word = G.words[G.i];
+      if (pid === G.drawers[G.i]) {
+        if (!Array.isArray(m.strokes)) return;
+        const COLORS = ["#1d140e", "#e2702c", "#e7b54a", "#b8322f", "#4f9a95", "#6b8f3a", "#7a4a26", "#ffffff"];
+        let budget = 8000;
+        G.strokes = m.strokes.slice(0, 400).map(s => {
+          const p = Array.isArray(s.p) ? s.p.slice(0, Math.max(0, budget)).map(n => Math.max(0, Math.min(1000, Math.round(+n) || 0))) : [];
+          budget -= p.length;
+          return { c: COLORS.includes(s.c) ? s.c : COLORS[0], w: Math.max(2, Math.min(40, +s.w || 6)), p: p.length % 2 ? p.slice(0, -1) : p };
+        });
+        return;
+      }
+      if (G.solved[pid]) return;
+      const text = clean(m.text, 30);
+      if (!text) return;
+      const r = fuzzy(text, [word.w, ...(word.alts || [])]);
+      if (r === "yes") {
+        G.solved[pid] = Date.now(); G.feed.push({ id: pid, ok: true });
+        if (this.guessers(G).every(p => G.solved[p.id])) advance();
+      } else G.feed.push({ id: pid, text });
+      G.feed = G.feed.slice(-12);
+      if (r === "close") return { error: "So close!" };
+      if (r !== "yes") return { error: "Nope, keep guessing." };
+    },
+    view(G, viewer) {
+      const word = G.words[G.i]; if (!word) return {};
+      const drawer = G.drawers[G.i];
+      const v = { i: G.i, total: G.rounds, drawer, hint: word.w.replace(/[a-z]/gi, "_"), feed: G.feed, solvedIds: Object.keys(G.solved) };
+      if (viewer === "host") v.strokes = G.strokes;
+      else { v.isDrawer = viewer === drawer; v.solved = !!G.solved[viewer]; if (v.isDrawer) v.word = word.w; }
+      if (G.phase === "reveal") { v.word = word.w; v.results = G.results; v.strokes = G.strokes; }
+      return v;
+    },
+  },
 };
 
 // ---------- game flow ----------
@@ -335,20 +614,57 @@ function advance() {
   if (!G) return;
   const mod = GAMES[G.type];
   if (G.phase === "intro") mod.begin(G);
-  else if (G.phase !== "final") mod.next(G);
+  else if (G.phase === "final") { if (MIX && MIX.i < MIX.queue.length - 1) nextInMix(); }
+  else mod.next(G);
   broadcast();
 }
-function finish(G) { setPhase("final", 0); }
+function finish(G) {
+  // In a mix, the scoreboard shows briefly, then the next game starts on its own.
+  if (MIX) {
+    MIX.queue = MIX.queue.filter((q, k) => k <= MIX.i || online().length >= GAMES[q.type].min);
+    G.nextUp = MIX.i < MIX.queue.length - 1 ? GAMES[MIX.queue[MIX.i + 1].type].title : null;
+    return setPhase("final", G.nextUp ? 12 : 0);
+  }
+  setPhase("final", 0);
+}
 
-function startGame(type, rounds) {
+// ---------- Mix It Up: a random run of mini-games ----------
+let MIX = null;
+function startMix(count) {
+  content = loadContent();
+  const n = online().length;
+  const ok = Object.keys(GAMES).filter(k => n >= GAMES[k].min && content[GAMES[k].source].length);
+  if (!ok.length) return "Get at least one player connected first.";
+  const want = Math.max(2, Math.min(12, +count || 6));
+  let queue = [];
+  while (queue.length < want) {
+    const bag = shuffle(ok).filter(k => k !== queue[queue.length - 1]);
+    queue.push(...bag);
+  }
+  queue = queue.slice(0, want).map(type => ({ type, rounds: GAMES[type].mix || 2 }));
+  MIX = { queue, i: 0, earned: {} };
+  return startGame(queue[0].type, queue[0].rounds, true);
+}
+function nextInMix() {
+  MIX.i++;
+  const q = MIX.queue[MIX.i];
+  const err = startGame(q.type, q.rounds, true);
+  if (err) {
+    MIX.queue.splice(MIX.i, 1); MIX.i--;
+    if (MIX.i < MIX.queue.length - 1) return nextInMix();
+    G.nextUp = null; setPhase("final", 0);
+  }
+}
+
+function startGame(type, rounds, fromMix) {
   const mod = GAMES[type];
   if (!mod) return "Unknown game.";
-  content = loadContent();
+  if (!fromMix) { MIX = null; content = loadContent(); }
   if (!content[mod.source].length) return `content.json has no "${mod.source}" questions.`;
   if (online().length < mod.min) return `${mod.title} needs at least ${mod.min} player${mod.min > 1 ? "s" : ""} connected.`;
   G = { type, rounds: Math.max(1, Math.min(mod.maxRounds, +rounds || mod.rounds)), earned: {} };
   mod.setup(G);
-  setPhase("intro", 8);
+  setPhase("intro", fromMix ? 6 : 8);
   return null;
 }
 
@@ -361,14 +677,16 @@ function gameView(viewer) {
   const mod = GAMES[G.type];
   return {
     type: G.type, title: mod.title, blurb: mod.blurb, phase: G.phase, deadline: G.deadline, step: G.step,
-    earned: G.earned, ...(G.phase === "intro" || G.phase === "final" ? {} : mod.view(G, viewer)),
+    earned: G.earned, nextUp: G.nextUp || null,
+    mix: MIX ? { i: MIX.i, n: MIX.queue.length, earned: MIX.earned, last: MIX.i === MIX.queue.length - 1 } : null,
+    ...(G.phase === "intro" || G.phase === "final" ? {} : mod.view(G, viewer)),
   };
 }
 function view(c) {
   const base = { now: Date.now(), brand: content.brand, players: publicPlayers(), game: gameView(c.role === "host" ? "host" : c.pid) };
   if (c.role === "host") {
     return { ...base, role: "host", joinUrl: joinUrl(),
-      catalog: Object.entries(GAMES).map(([k, m]) => ({ key: k, title: m.title, blurb: m.blurb, min: m.min, rounds: m.rounds, maxRounds: m.maxRounds, unit: m.unit, available: content[m.source].length })) };
+      catalog: Object.entries(GAMES).map(([k, m]) => ({ key: k, title: m.title, blurb: m.blurb, min: m.min, rounds: m.rounds, maxRounds: m.maxRounds, unit: m.unit, available: content[m.source].length, mix: m.mix || 2 })) };
   }
   const me = players.get(c.pid);
   return { ...base, role: "player", me: me ? { id: me.id, name: me.name, emoji: me.emoji, color: me.color, score: me.score } : null };
@@ -414,7 +732,7 @@ function serveFile(res, file) {
 function readJSON(req) {
   return new Promise(resolve => {
     let body = "";
-    req.on("data", d => { body += d; if (body.length > 10000) req.destroy(); });
+    req.on("data", d => { body += d; if (body.length > 300000) req.destroy(); });
     req.on("end", () => { try { resolve(JSON.parse(body || "{}")); } catch { resolve({}); } });
   });
 }
@@ -483,7 +801,8 @@ const server = http.createServer(async (req, res) => {
     switch (body.cmd) {
       case "start": error = startGame(body.type, body.rounds); break;
       case "next": advance(); break;
-      case "lobby": clearTimeout(timer); G = null; content = loadContent(); break;
+      case "mix": error = startMix(body.count); break;
+      case "lobby": clearTimeout(timer); G = null; MIX = null; content = loadContent(); break;
       case "kick": players.delete(body.pid); break;
       case "resetScores": for (const pl of players.values()) pl.score = 0; break;
       case "clearPlayers": if (!G) { players.clear(); colorIdx = 0; } break;
@@ -496,6 +815,14 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(404); res.end();
 });
 
+server.on("error", e => {
+  if (e.code === "EADDRINUSE") {
+    console.error(`\n  Port ${PORT} is already in use. The game is probably already running in another window.`);
+    console.error(`  Close that window first, or start on another port, for example: PORT=${PORT + 1} node server.js\n`);
+    process.exit(1);
+  }
+  throw e;
+});
 server.listen(PORT, "0.0.0.0", () => {
   const ips = lanIPs();
   const b = content.brand;

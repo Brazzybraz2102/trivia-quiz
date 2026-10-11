@@ -1,52 +1,1264 @@
 {
-  "brand": { "ranch": "Braznarkel Ranch", "event": "Fall Fest", "year": "2026" },
-
+  "brand": {
+    "ranch": "Braznarkel Ranch",
+    "event": "Fall Fest",
+    "year": "2026"
+  },
   "trivia": [
-    { "q": "Halloween grew out of Samhain, a festival from which country?", "a": "Ireland", "wrong": ["Mexico", "Germany", "Spain"] },
-    { "q": "What is a group of crows called?", "a": "A murder", "wrong": ["A flock of doom", "A parliament", "A gaggle"] },
-    { "q": "Who wrote \"The Legend of Sleepy Hollow\"?", "a": "Washington Irving", "wrong": ["Edgar Allan Poe", "Mark Twain", "Stephen King"] },
-    { "q": "In \"The Legend of Sleepy Hollow,\" what does the Headless Horseman throw at Ichabod Crane?", "a": "A pumpkin", "wrong": ["An apple", "His sword", "A lantern"] },
-    { "q": "In which U.S. state is the real village of Sleepy Hollow?", "a": "New York", "wrong": ["Massachusetts", "Pennsylvania", "Connecticut"] },
-    { "q": "In \"The Nightmare Before Christmas,\" Jack Skellington is known as the what?", "a": "Pumpkin King", "wrong": ["Skeleton Prince", "Lord of Halloween", "Ghost Mayor"] },
-    { "q": "Count Dracula's castle is in which region?", "a": "Transylvania", "wrong": ["Bavaria", "Tuscany", "Siberia"] },
-    { "q": "Día de los Muertos is a holiday mainly associated with which country?", "a": "Mexico", "wrong": ["Spain", "Brazil", "Peru"] },
-    { "q": "In which month do Canadians celebrate Thanksgiving?", "a": "October", "wrong": ["November", "September", "December"] },
-    { "q": "Which of these is NOT a type of squash?", "a": "Rutabaga", "wrong": ["Butternut", "Acorn", "Spaghetti"] },
-    { "q": "On the autumnal equinox, what is roughly true?", "a": "Day and night are about equal length", "wrong": ["It's the longest night of the year", "The moon is always full", "It's the shortest day of the year"] },
-    { "q": "How many Sanderson sisters are there in \"Hocus Pocus\"?", "a": "3", "wrong": ["2", "4", "5"] },
-    { "q": "What is the name of the famous friendly ghost?", "a": "Casper", "wrong": ["Boo", "Slimer", "Moaning Myrtle"] },
-    { "q": "Starbucks first sold the Pumpkin Spice Latte in which year?", "a": "2003", "wrong": ["1995", "2009", "2014"] },
-    { "q": "Apple cider is pressed from what?", "a": "Apples", "wrong": ["Pears", "Grapes", "Pumpkins"] },
-    { "q": "Which famous escape artist died on Halloween in 1926?", "a": "Harry Houdini", "wrong": ["P. T. Barnum", "Buffalo Bill", "Charles Dickens"] },
-    { "q": "Which candy was originally sold under the name \"Chicken Feed\"?", "a": "Candy corn", "wrong": ["Jelly beans", "Peanut M&M's", "Sugar Babies"] },
-    { "q": "Botanically speaking, a pumpkin is a what?", "a": "Fruit", "wrong": ["Vegetable", "Root", "Grain"] }
+    {
+      "q": "Halloween grew out of Samhain, a festival from which country?",
+      "a": "Ireland",
+      "wrong": [
+        "Mexico",
+        "Germany",
+        "Spain"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "What is a group of crows called?",
+      "a": "A murder",
+      "wrong": [
+        "A flock of doom",
+        "A parliament",
+        "A gaggle"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "Who wrote \"The Legend of Sleepy Hollow\"?",
+      "a": "Washington Irving",
+      "wrong": [
+        "Edgar Allan Poe",
+        "Mark Twain",
+        "Stephen King"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "In \"The Legend of Sleepy Hollow,\" what does the Headless Horseman throw at Ichabod Crane?",
+      "a": "A pumpkin",
+      "wrong": [
+        "An apple",
+        "His sword",
+        "A lantern"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "In which U.S. state is the real village of Sleepy Hollow?",
+      "a": "New York",
+      "wrong": [
+        "Massachusetts",
+        "Pennsylvania",
+        "Connecticut"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "In \"The Nightmare Before Christmas,\" Jack Skellington is known as the what?",
+      "a": "Pumpkin King",
+      "wrong": [
+        "Skeleton Prince",
+        "Lord of Halloween",
+        "Ghost Mayor"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "Count Dracula's castle is in which region?",
+      "a": "Transylvania",
+      "wrong": [
+        "Bavaria",
+        "Tuscany",
+        "Siberia"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "Día de los Muertos is a holiday mainly associated with which country?",
+      "a": "Mexico",
+      "wrong": [
+        "Spain",
+        "Brazil",
+        "Peru"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "In which month do Canadians celebrate Thanksgiving?",
+      "a": "October",
+      "wrong": [
+        "November",
+        "September",
+        "December"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "Which of these is NOT a type of squash?",
+      "a": "Rutabaga",
+      "wrong": [
+        "Butternut",
+        "Acorn",
+        "Spaghetti"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "On the autumnal equinox, what is roughly true?",
+      "a": "Day and night are about equal length",
+      "wrong": [
+        "It's the longest night of the year",
+        "The moon is always full",
+        "It's the shortest day of the year"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "How many Sanderson sisters are there in \"Hocus Pocus\"?",
+      "a": "3",
+      "wrong": [
+        "2",
+        "4",
+        "5"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "What is the name of the famous friendly ghost?",
+      "a": "Casper",
+      "wrong": [
+        "Boo",
+        "Slimer",
+        "Moaning Myrtle"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "Starbucks first sold the Pumpkin Spice Latte in which year?",
+      "a": "2003",
+      "wrong": [
+        "1995",
+        "2009",
+        "2014"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "Apple cider is pressed from what?",
+      "a": "Apples",
+      "wrong": [
+        "Pears",
+        "Grapes",
+        "Pumpkins"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "Which famous escape artist died on Halloween in 1926?",
+      "a": "Harry Houdini",
+      "wrong": [
+        "P. T. Barnum",
+        "Buffalo Bill",
+        "Charles Dickens"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "Which candy was originally sold under the name \"Chicken Feed\"?",
+      "a": "Candy corn",
+      "wrong": [
+        "Jelly beans",
+        "Peanut M&M's",
+        "Sugar Babies"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "q": "Botanically speaking, a pumpkin is a what?",
+      "a": "Fruit",
+      "wrong": [
+        "Vegetable",
+        "Root",
+        "Grain"
+      ],
+      "cat": "Fall & Halloween"
+    },
+    {
+      "cat": "Geography",
+      "q": "What is the largest ocean on Earth?",
+      "a": "Pacific",
+      "wrong": [
+        "Atlantic",
+        "Indian",
+        "Arctic"
+      ]
+    },
+    {
+      "cat": "Geography",
+      "q": "Which country has the most people?",
+      "a": "India",
+      "wrong": [
+        "China",
+        "United States",
+        "Indonesia"
+      ]
+    },
+    {
+      "cat": "Geography",
+      "q": "What is the capital of Australia?",
+      "a": "Canberra",
+      "wrong": [
+        "Sydney",
+        "Melbourne",
+        "Perth"
+      ]
+    },
+    {
+      "cat": "Geography",
+      "q": "Which river flows through Egypt?",
+      "a": "The Nile",
+      "wrong": [
+        "The Amazon",
+        "The Danube",
+        "The Tigris"
+      ]
+    },
+    {
+      "cat": "Geography",
+      "q": "Mount Kilimanjaro is in which country?",
+      "a": "Tanzania",
+      "wrong": [
+        "Kenya",
+        "Uganda",
+        "Ethiopia"
+      ]
+    },
+    {
+      "cat": "Science",
+      "q": "What gas do plants take in from the air?",
+      "a": "Carbon dioxide",
+      "wrong": [
+        "Oxygen",
+        "Nitrogen",
+        "Helium"
+      ]
+    },
+    {
+      "cat": "Science",
+      "q": "What is the hardest natural substance?",
+      "a": "Diamond",
+      "wrong": [
+        "Gold",
+        "Iron",
+        "Quartz"
+      ]
+    },
+    {
+      "cat": "Science",
+      "q": "How many planets are in our solar system?",
+      "a": "8",
+      "wrong": [
+        "7",
+        "9",
+        "10"
+      ]
+    },
+    {
+      "cat": "Science",
+      "q": "What is the chemical symbol for gold?",
+      "a": "Au",
+      "wrong": [
+        "Ag",
+        "Gd",
+        "Go"
+      ]
+    },
+    {
+      "cat": "Science",
+      "q": "What is the largest organ of the human body?",
+      "a": "Skin",
+      "wrong": [
+        "Liver",
+        "Brain",
+        "Lungs"
+      ]
+    },
+    {
+      "cat": "Movies & TV",
+      "q": "Which movie features a toy cowboy named Woody?",
+      "a": "Toy Story",
+      "wrong": [
+        "Cars",
+        "Shrek",
+        "Up"
+      ]
+    },
+    {
+      "cat": "Movies & TV",
+      "q": "Which school does Harry Potter attend?",
+      "a": "Hogwarts",
+      "wrong": [
+        "Durmstrang",
+        "Rivendell",
+        "Narnia Academy"
+      ]
+    },
+    {
+      "cat": "Movies & TV",
+      "q": "In the film \"The Wizard of Oz,\" what color are Dorothy's slippers?",
+      "a": "Ruby red",
+      "wrong": [
+        "Silver",
+        "Gold",
+        "Emerald green"
+      ]
+    },
+    {
+      "cat": "Movies & TV",
+      "q": "Which animated movie features the song \"Let It Go\"?",
+      "a": "Frozen",
+      "wrong": [
+        "Moana",
+        "Tangled",
+        "Encanto"
+      ]
+    },
+    {
+      "cat": "Music",
+      "q": "Which country star sang \"Jolene\"?",
+      "a": "Dolly Parton",
+      "wrong": [
+        "Reba McEntire",
+        "Loretta Lynn",
+        "Patsy Cline"
+      ]
+    },
+    {
+      "cat": "Music",
+      "q": "How many keys are on a standard piano?",
+      "a": "88",
+      "wrong": [
+        "76",
+        "92",
+        "100"
+      ]
+    },
+    {
+      "cat": "Music",
+      "q": "Which band sang \"Bohemian Rhapsody\"?",
+      "a": "Queen",
+      "wrong": [
+        "The Beatles",
+        "ABBA",
+        "Led Zeppelin"
+      ]
+    },
+    {
+      "cat": "Music",
+      "q": "Garth Brooks sang that he has \"friends in low\" what?",
+      "a": "Places",
+      "wrong": [
+        "Spaces",
+        "Towns",
+        "Bars"
+      ]
+    },
+    {
+      "cat": "Sports",
+      "q": "How many points is a touchdown worth, before the extra point?",
+      "a": "6",
+      "wrong": [
+        "3",
+        "7",
+        "5"
+      ]
+    },
+    {
+      "cat": "Sports",
+      "q": "In which sport would you see a slam dunk?",
+      "a": "Basketball",
+      "wrong": [
+        "Volleyball",
+        "Tennis",
+        "Football"
+      ]
+    },
+    {
+      "cat": "Sports",
+      "q": "How many holes are in a standard round of golf?",
+      "a": "18",
+      "wrong": [
+        "9",
+        "12",
+        "21"
+      ]
+    },
+    {
+      "cat": "Sports",
+      "q": "In rodeo, how many seconds must a bronc rider stay on for a score?",
+      "a": "8",
+      "wrong": [
+        "5",
+        "10",
+        "12"
+      ]
+    },
+    {
+      "cat": "Food",
+      "q": "Pizza comes from which country?",
+      "a": "Italy",
+      "wrong": [
+        "Greece",
+        "United States",
+        "France"
+      ]
+    },
+    {
+      "cat": "Food",
+      "q": "Marzipan is made from which nut?",
+      "a": "Almonds",
+      "wrong": [
+        "Cashews",
+        "Walnuts",
+        "Pistachios"
+      ]
+    },
+    {
+      "cat": "Food",
+      "q": "Which fruit wears its seeds on the outside?",
+      "a": "Strawberry",
+      "wrong": [
+        "Blueberry",
+        "Kiwi",
+        "Cherry"
+      ]
+    },
+    {
+      "cat": "Ranch Life",
+      "q": "What is a baby horse called?",
+      "a": "A foal",
+      "wrong": [
+        "A calf",
+        "A kid",
+        "A cub"
+      ]
+    },
+    {
+      "cat": "Ranch Life",
+      "q": "What do you call a female sheep?",
+      "a": "A ewe",
+      "wrong": [
+        "A doe",
+        "A mare",
+        "A sow"
+      ]
+    },
+    {
+      "cat": "Ranch Life",
+      "q": "How many compartments does a cow's stomach have?",
+      "a": "4",
+      "wrong": [
+        "1",
+        "2",
+        "6"
+      ]
+    },
+    {
+      "cat": "Ranch Life",
+      "q": "Which horse breed is named for sprinting a quarter mile?",
+      "a": "American Quarter Horse",
+      "wrong": [
+        "Clydesdale",
+        "Shetland pony",
+        "Arabian"
+      ]
+    },
+    {
+      "cat": "History",
+      "q": "Who was the first person to walk on the Moon?",
+      "a": "Neil Armstrong",
+      "wrong": [
+        "Buzz Aldrin",
+        "Yuri Gagarin",
+        "John Glenn"
+      ]
+    },
+    {
+      "cat": "History",
+      "q": "In which year did the Titanic sink?",
+      "a": "1912",
+      "wrong": [
+        "1905",
+        "1921",
+        "1898"
+      ]
+    },
+    {
+      "cat": "History",
+      "q": "Cowboys drove cattle from Texas to Kansas along which trail?",
+      "a": "The Chisholm Trail",
+      "wrong": [
+        "The Oregon Trail",
+        "The Santa Fe Trail",
+        "The Natchez Trace"
+      ]
+    }
   ],
-
+  "tf": [
+    {
+      "s": "A group of flamingos is called a flamboyance.",
+      "t": true,
+      "why": "It really is. Flamingos travel in flamboyances."
+    },
+    {
+      "s": "The Great Wall of China is visible from the Moon with the naked eye.",
+      "t": false,
+      "why": "Astronauts say you can't see it from the Moon. It's far too narrow."
+    },
+    {
+      "s": "Bananas are berries, but strawberries aren't.",
+      "t": true,
+      "why": "Botanically, bananas count as berries and strawberries don't."
+    },
+    {
+      "s": "Goldfish only remember things for about three seconds.",
+      "t": false,
+      "why": "Goldfish can remember things for months."
+    },
+    {
+      "s": "Octopuses have three hearts.",
+      "t": true,
+      "why": "Two pump blood to the gills and one to the rest of the body."
+    },
+    {
+      "s": "Lightning never strikes the same place twice.",
+      "t": false,
+      "why": "The Empire State Building gets hit around 20 times a year."
+    },
+    {
+      "s": "Pumpkins are about 90% water.",
+      "t": true,
+      "why": "That's why they're so heavy for their size."
+    },
+    {
+      "s": "Venus is the hottest planet in our solar system.",
+      "t": true,
+      "why": "Its thick atmosphere traps heat, making it hotter than Mercury."
+    },
+    {
+      "s": "Bulls charge because they hate the color red.",
+      "t": false,
+      "why": "Bulls can't see red well. They react to the cape's movement."
+    },
+    {
+      "s": "Mount Everest is the tallest mountain measured from base to peak.",
+      "t": false,
+      "why": "From its base on the sea floor, Hawaii's Mauna Kea is taller."
+    },
+    {
+      "s": "Horses can sleep standing up.",
+      "t": true,
+      "why": "Their legs lock so they can doze on their feet."
+    },
+    {
+      "s": "Sloths can hold their breath longer than dolphins.",
+      "t": true,
+      "why": "Sloths can slow their heart rate and hold their breath for up to 40 minutes."
+    },
+    {
+      "s": "Abraham Lincoln held a license to sell liquor.",
+      "t": true,
+      "why": "In 1833 he co-owned a tavern in New Salem, Illinois."
+    },
+    {
+      "s": "The Eiffel Tower is a bit taller in summer than in winter.",
+      "t": true,
+      "why": "The iron expands in the heat, adding several centimeters."
+    },
+    {
+      "s": "Chameleons change color mainly to blend into the background.",
+      "t": false,
+      "why": "They mostly change color to signal mood and control body temperature."
+    },
+    {
+      "s": "Wombat poop is cube-shaped.",
+      "t": true,
+      "why": "Their intestines shape it into cubes, which stay put on rocks and logs."
+    },
+    {
+      "s": "Napoleon was unusually short for his time.",
+      "t": false,
+      "why": "He was about 5'7\", average for a Frenchman of his era."
+    },
+    {
+      "s": "A day on Venus is longer than its year.",
+      "t": true,
+      "why": "Venus spins so slowly that one rotation outlasts one orbit around the Sun."
+    },
+    {
+      "s": "Cows have best friends and get stressed when separated.",
+      "t": true,
+      "why": "Studies found cows are calmer when paired with a favorite companion."
+    },
+    {
+      "s": "Candy corn was invented in the 1980s.",
+      "t": false,
+      "why": "It dates back to the 1880s."
+    }
+  ],
   "fib": [
-    { "q": "Before pumpkins caught on, people in Ireland carved jack-o'-lanterns out of ____.", "a": "turnips", "alts": ["turnip", "rutabagas", "rutabaga"], "decoys": ["potatoes", "beets"] },
-    { "q": "Samhainophobia is the fear of ____.", "a": "Halloween", "alts": [], "decoys": ["scarecrows", "pumpkins"] },
-    { "q": "A group of owls is called a ____.", "a": "parliament", "alts": ["parliament of owls"], "decoys": ["hoot", "council"] },
-    { "q": "A baby turkey is called a ____.", "a": "poult", "alts": ["poults"], "decoys": ["gobblet", "turklet"] },
-    { "q": "Benjamin Franklin called the bald eagle a bird of \"bad moral character\" and said the ____ was more respectable.", "a": "turkey", "alts": ["wild turkey"], "decoys": ["owl", "robin"] },
-    { "q": "Apple trees belong to the same plant family as ____.", "a": "roses", "alts": ["rose", "the rose"], "decoys": ["oak trees", "sunflowers"] },
-    { "q": "Bobby Pickett, who sang \"Monster Mash,\" went by the nickname Bobby \"____\" Pickett.", "a": "Boris", "alts": [], "decoys": ["Bones", "Frankie"] },
-    { "q": "Candy corn's makers originally sold it under the name \"____.\"", "a": "Chicken Feed", "alts": ["chickenfeed"], "decoys": ["Harvest Drops", "Sweet Kernels"] },
-    { "q": "Besides yellow-orange carotenoids, the red and purple colors in fall leaves come from pigments called ____.", "a": "anthocyanins", "alts": ["anthocyanin"], "decoys": ["chlorophyll", "autumnins"] },
-    { "q": "Harry Houdini died in 1926 on ____.", "a": "Halloween", "alts": ["october 31", "october 31st", "oct 31"], "decoys": ["Friday the 13th", "Christmas Eve"] }
+    {
+      "q": "Before pumpkins caught on, people in Ireland carved jack-o'-lanterns out of ____.",
+      "a": "turnips",
+      "alts": [
+        "turnip",
+        "rutabagas",
+        "rutabaga"
+      ],
+      "decoys": [
+        "potatoes",
+        "beets"
+      ]
+    },
+    {
+      "q": "Samhainophobia is the fear of ____.",
+      "a": "Halloween",
+      "alts": [],
+      "decoys": [
+        "scarecrows",
+        "pumpkins"
+      ]
+    },
+    {
+      "q": "A group of owls is called a ____.",
+      "a": "parliament",
+      "alts": [
+        "parliament of owls"
+      ],
+      "decoys": [
+        "hoot",
+        "council"
+      ]
+    },
+    {
+      "q": "A baby turkey is called a ____.",
+      "a": "poult",
+      "alts": [
+        "poults"
+      ],
+      "decoys": [
+        "gobblet",
+        "turklet"
+      ]
+    },
+    {
+      "q": "Benjamin Franklin called the bald eagle a bird of \"bad moral character\" and said the ____ was more respectable.",
+      "a": "turkey",
+      "alts": [
+        "wild turkey"
+      ],
+      "decoys": [
+        "owl",
+        "robin"
+      ]
+    },
+    {
+      "q": "Apple trees belong to the same plant family as ____.",
+      "a": "roses",
+      "alts": [
+        "rose",
+        "the rose"
+      ],
+      "decoys": [
+        "oak trees",
+        "sunflowers"
+      ]
+    },
+    {
+      "q": "Bobby Pickett, who sang \"Monster Mash,\" went by the nickname Bobby \"____\" Pickett.",
+      "a": "Boris",
+      "alts": [],
+      "decoys": [
+        "Bones",
+        "Frankie"
+      ]
+    },
+    {
+      "q": "Candy corn's makers originally sold it under the name \"____.\"",
+      "a": "Chicken Feed",
+      "alts": [
+        "chickenfeed"
+      ],
+      "decoys": [
+        "Harvest Drops",
+        "Sweet Kernels"
+      ]
+    },
+    {
+      "q": "Besides yellow-orange carotenoids, the red and purple colors in fall leaves come from pigments called ____.",
+      "a": "anthocyanins",
+      "alts": [
+        "anthocyanin"
+      ],
+      "decoys": [
+        "chlorophyll",
+        "autumnins"
+      ]
+    },
+    {
+      "q": "Harry Houdini died in 1926 on ____.",
+      "a": "Halloween",
+      "alts": [
+        "october 31",
+        "october 31st",
+        "oct 31"
+      ],
+      "decoys": [
+        "Friday the 13th",
+        "Christmas Eve"
+      ]
+    }
   ],
-
   "guess": [
-    { "q": "How many pounds did the world-record pumpkin weigh in 2023?", "a": 2749, "unit": "pounds" },
-    { "q": "In what year did the Pilgrims hold the harvest feast now called the first Thanksgiving?", "a": 1621, "unit": "" },
-    { "q": "In what year did \"It's the Great Pumpkin, Charlie Brown\" first air on TV?", "a": 1966, "unit": "" },
-    { "q": "In what year did John Carpenter's \"Halloween\" come out?", "a": 1978, "unit": "" },
-    { "q": "How many bones are in the adult human skeleton?", "a": 206, "unit": "bones" },
-    { "q": "In what year did Abraham Lincoln make Thanksgiving a national holiday?", "a": 1863, "unit": "" },
-    { "q": "How tall is the Statue of Liberty from the ground to the tip of her torch?", "a": 305, "unit": "feet" },
-    { "q": "How many teeth does an adult have, counting wisdom teeth?", "a": 32, "unit": "teeth" },
-    { "q": "How many eyes do most spiders have?", "a": 8, "unit": "eyes" }
+    {
+      "q": "How many pounds did the world-record pumpkin weigh in 2023?",
+      "a": 2749,
+      "unit": "pounds"
+    },
+    {
+      "q": "In what year did the Pilgrims hold the harvest feast now called the first Thanksgiving?",
+      "a": 1621,
+      "unit": ""
+    },
+    {
+      "q": "In what year did \"It's the Great Pumpkin, Charlie Brown\" first air on TV?",
+      "a": 1966,
+      "unit": ""
+    },
+    {
+      "q": "In what year did John Carpenter's \"Halloween\" come out?",
+      "a": 1978,
+      "unit": ""
+    },
+    {
+      "q": "How many bones are in the adult human skeleton?",
+      "a": 206,
+      "unit": "bones"
+    },
+    {
+      "q": "In what year did Abraham Lincoln make Thanksgiving a national holiday?",
+      "a": 1863,
+      "unit": ""
+    },
+    {
+      "q": "How tall is the Statue of Liberty from the ground to the tip of her torch?",
+      "a": 305,
+      "unit": "feet"
+    },
+    {
+      "q": "How many teeth does an adult have, counting wisdom teeth?",
+      "a": 32,
+      "unit": "teeth"
+    },
+    {
+      "q": "How many eyes do most spiders have?",
+      "a": 8,
+      "unit": "eyes"
+    }
   ],
-
+  "order": [
+    {
+      "q": "Oldest to newest",
+      "items": [
+        "Great Pyramid of Giza",
+        "The Colosseum",
+        "Eiffel Tower",
+        "Empire State Building"
+      ]
+    },
+    {
+      "q": "Closest to the Sun first",
+      "items": [
+        "Venus",
+        "Mars",
+        "Saturn",
+        "Neptune"
+      ]
+    },
+    {
+      "q": "Lightest to heaviest",
+      "items": [
+        "Chicken",
+        "Sheep",
+        "Cow",
+        "Elephant"
+      ]
+    },
+    {
+      "q": "Oldest movie to newest",
+      "items": [
+        "The Wizard of Oz",
+        "Star Wars",
+        "Jurassic Park",
+        "Frozen"
+      ]
+    },
+    {
+      "q": "Oldest invention to newest",
+      "items": [
+        "Printing press",
+        "Telephone",
+        "Television",
+        "iPhone"
+      ]
+    },
+    {
+      "q": "Joined the U.S. first to last",
+      "items": [
+        "Delaware",
+        "Texas",
+        "Alaska",
+        "Hawaii"
+      ]
+    },
+    {
+      "q": "Fewest legs to most",
+      "items": [
+        "Snake",
+        "Chicken",
+        "Horse",
+        "Spider"
+      ]
+    },
+    {
+      "q": "Biggest country to smallest",
+      "items": [
+        "Russia",
+        "Canada",
+        "Brazil",
+        "Mexico"
+      ]
+    },
+    {
+      "q": "Earliest in the year to latest",
+      "items": [
+        "Valentine's Day",
+        "Fourth of July",
+        "Halloween",
+        "Thanksgiving"
+      ]
+    },
+    {
+      "q": "Least valuable coin to most",
+      "items": [
+        "Penny",
+        "Nickel",
+        "Dime",
+        "Quarter"
+      ]
+    }
+  ],
+  "emoji": [
+    {
+      "e": "🦁👑",
+      "a": "The Lion King",
+      "cat": "Movie",
+      "alts": [
+        "Lion King"
+      ]
+    },
+    {
+      "e": "🕷️🧑",
+      "a": "Spider-Man",
+      "cat": "Movie",
+      "alts": [
+        "Spiderman"
+      ]
+    },
+    {
+      "e": "🧊❄️👸",
+      "a": "Frozen",
+      "cat": "Movie",
+      "alts": []
+    },
+    {
+      "e": "🦈🌊🚤",
+      "a": "Jaws",
+      "cat": "Movie",
+      "alts": []
+    },
+    {
+      "e": "👻🔫👨‍🔬",
+      "a": "Ghostbusters",
+      "cat": "Movie",
+      "alts": []
+    },
+    {
+      "e": "🍫🏭🎫",
+      "a": "Charlie and the Chocolate Factory",
+      "cat": "Movie",
+      "alts": [
+        "Willy Wonka",
+        "Willy Wonka and the Chocolate Factory",
+        "Wonka"
+      ]
+    },
+    {
+      "e": "🧙‍♂️💍🌋",
+      "a": "The Lord of the Rings",
+      "cat": "Movie",
+      "alts": [
+        "Lord of the Rings",
+        "LOTR"
+      ]
+    },
+    {
+      "e": "🚢🧊💔",
+      "a": "Titanic",
+      "cat": "Movie",
+      "alts": []
+    },
+    {
+      "e": "🦖🏞️🚙",
+      "a": "Jurassic Park",
+      "cat": "Movie",
+      "alts": [
+        "Jurassic World"
+      ]
+    },
+    {
+      "e": "🐠🔍",
+      "a": "Finding Nemo",
+      "cat": "Movie",
+      "alts": [
+        "Nemo"
+      ]
+    },
+    {
+      "e": "⭐⚔️🌌",
+      "a": "Star Wars",
+      "cat": "Movie",
+      "alts": []
+    },
+    {
+      "e": "🏠🎈👴",
+      "a": "Up",
+      "cat": "Movie",
+      "alts": []
+    },
+    {
+      "e": "🎃👑💀🎄",
+      "a": "The Nightmare Before Christmas",
+      "cat": "Movie",
+      "alts": [
+        "Nightmare Before Christmas"
+      ]
+    },
+    {
+      "e": "🐎🛣️🏙️",
+      "a": "Old Town Road",
+      "cat": "Song",
+      "alts": []
+    },
+    {
+      "e": "🎸🏨🌴",
+      "a": "Hotel California",
+      "cat": "Song",
+      "alts": []
+    },
+    {
+      "e": "👶🦈",
+      "a": "Baby Shark",
+      "cat": "Song",
+      "alts": []
+    },
+    {
+      "e": "🌧️☔💜",
+      "a": "Purple Rain",
+      "cat": "Song",
+      "alts": []
+    },
+    {
+      "e": "🧟‍♂️🌕💃",
+      "a": "Thriller",
+      "cat": "Song",
+      "alts": []
+    },
+    {
+      "e": "🧸🍯🎈",
+      "a": "Winnie the Pooh",
+      "cat": "Character",
+      "alts": [
+        "Pooh",
+        "Pooh Bear"
+      ]
+    },
+    {
+      "e": "🤠🐴🌵",
+      "a": "Cowboy",
+      "cat": "Thing",
+      "alts": [
+        "Cowboys",
+        "Cowgirl"
+      ]
+    }
+  ],
+  "herd": [
+    {
+      "q": "Best pie?",
+      "options": [
+        "Apple",
+        "Pumpkin",
+        "Pecan",
+        "Cherry"
+      ]
+    },
+    {
+      "q": "Best fall drink?",
+      "options": [
+        "Apple cider",
+        "Pumpkin spice latte",
+        "Hot chocolate",
+        "Chai"
+      ]
+    },
+    {
+      "q": "Candy corn is…",
+      "options": [
+        "Delicious",
+        "Disgusting",
+        "OK in small doses",
+        "Never tried it"
+      ]
+    },
+    {
+      "q": "Best Halloween candy?",
+      "options": [
+        "Chocolate bars",
+        "Gummies",
+        "Lollipops",
+        "Candy corn"
+      ]
+    },
+    {
+      "q": "You'd rather ride…",
+      "options": [
+        "A horse",
+        "A tractor",
+        "A hay wagon",
+        "A mechanical bull"
+      ]
+    },
+    {
+      "q": "Pineapple on pizza?",
+      "options": [
+        "Yes",
+        "No"
+      ]
+    },
+    {
+      "q": "Best season?",
+      "options": [
+        "Fall",
+        "Winter",
+        "Spring",
+        "Summer"
+      ]
+    },
+    {
+      "q": "Best pet?",
+      "options": [
+        "Dog",
+        "Cat",
+        "Horse",
+        "Goat"
+      ]
+    },
+    {
+      "q": "Breakfast for dinner?",
+      "options": [
+        "Always",
+        "Sometimes",
+        "Never"
+      ]
+    },
+    {
+      "q": "Best part of a fall festival?",
+      "options": [
+        "Hayride",
+        "Corn maze",
+        "Pumpkin patch",
+        "The food"
+      ]
+    },
+    {
+      "q": "If you were a farm animal, you'd be a…",
+      "options": [
+        "Horse",
+        "Goat",
+        "Chicken",
+        "Pig"
+      ]
+    },
+    {
+      "q": "Best movie snack?",
+      "options": [
+        "Popcorn",
+        "Candy",
+        "Nachos",
+        "Nothing"
+      ]
+    }
+  ],
+  "likely": [
+    "get lost in the corn maze",
+    "eat a whole pie by themselves",
+    "befriend every animal on the ranch",
+    "scream in a haunted house",
+    "win a pie-eating contest",
+    "fall asleep on the hayride",
+    "show up in the best costume",
+    "start a line dance",
+    "adopt a goat on impulse",
+    "become a famous country singer",
+    "forget where they parked",
+    "take 100 photos of the leaves",
+    "win a rodeo",
+    "survive a zombie apocalypse",
+    "carve the most impressive pumpkin"
+  ],
+  "draw": [
+    {
+      "w": "scarecrow",
+      "alts": []
+    },
+    {
+      "w": "pumpkin",
+      "alts": [
+        "jack o lantern",
+        "jackolantern"
+      ]
+    },
+    {
+      "w": "tractor",
+      "alts": []
+    },
+    {
+      "w": "horse",
+      "alts": [
+        "pony"
+      ]
+    },
+    {
+      "w": "haunted house",
+      "alts": []
+    },
+    {
+      "w": "corn",
+      "alts": [
+        "corn on the cob"
+      ]
+    },
+    {
+      "w": "apple pie",
+      "alts": [
+        "pie"
+      ]
+    },
+    {
+      "w": "owl",
+      "alts": []
+    },
+    {
+      "w": "cowboy hat",
+      "alts": [
+        "hat"
+      ]
+    },
+    {
+      "w": "campfire",
+      "alts": [
+        "fire",
+        "bonfire"
+      ]
+    },
+    {
+      "w": "bat",
+      "alts": []
+    },
+    {
+      "w": "ghost",
+      "alts": []
+    },
+    {
+      "w": "windmill",
+      "alts": []
+    },
+    {
+      "w": "hay bale",
+      "alts": [
+        "hay",
+        "haybale"
+      ]
+    },
+    {
+      "w": "turkey",
+      "alts": []
+    },
+    {
+      "w": "spider web",
+      "alts": [
+        "spiderweb",
+        "web",
+        "cobweb"
+      ]
+    },
+    {
+      "w": "barn",
+      "alts": []
+    },
+    {
+      "w": "cowboy boot",
+      "alts": [
+        "boot",
+        "boots"
+      ]
+    },
+    {
+      "w": "moon",
+      "alts": [
+        "full moon"
+      ]
+    },
+    {
+      "w": "witch hat",
+      "alts": [
+        "witches hat",
+        "witch's hat"
+      ]
+    },
+    {
+      "w": "skeleton",
+      "alts": []
+    },
+    {
+      "w": "caramel apple",
+      "alts": [
+        "candy apple",
+        "toffee apple"
+      ]
+    },
+    {
+      "w": "cactus",
+      "alts": []
+    },
+    {
+      "w": "horseshoe",
+      "alts": []
+    }
+  ],
   "quip": [
     "The worst thing to find in your Halloween candy bag",
     "A terrible name for a pumpkin spice product",
