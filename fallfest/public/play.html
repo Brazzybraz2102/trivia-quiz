@@ -46,11 +46,11 @@
 .emojis button { background: var(--night-2); border: 3px solid transparent; border-radius: 14px; font-size: 28px; padding: 6px 0; }
 .emojis button[aria-pressed="true"] { border-color: var(--pumpkin); background: var(--night-3); }
 .joinhero { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 6px; margin-top: 4px; }
-.joinhero .seal { width: 150px; animation: stamp .7s cubic-bezier(.2,1.5,.4,1); }
+.joinhero .seal { width: 210px; animation: stamp .7s cubic-bezier(.2,1.5,.4,1); }
 @keyframes stamp { from { transform: scale(1.6) rotate(-14deg); opacity: 0; } }
 .joinhero .title { font-size: 40px; }
 .joinhero .sub { font-family: var(--f-display); letter-spacing: .3em; color: var(--cream); background: var(--cranberry); padding: 2px 10px 2px 14px; font-size: 15px; }
-.bar .badge { width: 34px; filter: none; }
+.bar .logo { width: 40px; filter: none; }
 .me { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 20px 0; }
 .big-btn { font-size: 22px; padding: 16px; }
 .offline { background: var(--cranberry); color: var(--cream); border-radius: 12px; padding: 8px 12px; font-weight: 700; text-align: center; }
@@ -85,7 +85,7 @@
 <script src="/static/common.js"></script>
 <script>
 "use strict";
-const { h, connect, countdown, post, avatar, pts, num, badge } = FF;
+const { h, connect, countdown, post, avatar, pts, num, logo } = FF;
 const app = document.getElementById("app");
 const EMOJI = ["🎃", "🍂", "🍁", "🌽", "🦃", "🍎", "🥧", "🦉", "🍄", "🐿️", "👻", "🦇", "🕷️", "🌻", "🧣", "☕", "🍩", "🍏", "🐈‍⬛", "🌰"];
 
@@ -129,7 +129,7 @@ function render(force) {
 
   if (!S.me || editing) { app.replaceChildren(...kids, joinScreen()); return; }
 
-  kids.push(h("div", { class: "bar" }, badge(S.brand), avatar(S.me, "sm"), h("span", { class: "nm", text: S.me.name }),
+  kids.push(h("div", { class: "bar" }, logo(), avatar(S.me, "sm"), h("span", { class: "nm", text: S.me.name }),
     g && g.deadline ? countdown(g.deadline) : null,
     h("span", { class: "score", text: S.me.score.toLocaleString("en-US") + " pts" })));
 
@@ -171,7 +171,7 @@ function joinScreen() {
     onclick: ev => { draft.emoji = e; for (const b of emojis.children) b.setAttribute("aria-pressed", String(b === ev.currentTarget)); } })));
   setTimeout(() => nameIn.focus());
   return h("div", { class: "screen fresh" },
-    h("div", { class: "joinhero" }, h("div", { class: "seal" }, badge(S && S.brand)), h("div", { class: "title", text: `${(S && S.brand || {}).event || "Fall Fest"}` }), h("div", { class: "sub", text: `${(S && S.brand || {}).ranch || "Braznarkel Ranch"} · ${(S && S.brand || {}).year || "2026"}`.toUpperCase() })),
+    h("div", { class: "joinhero" }, h("div", { class: "seal" }, logo()), h("div", { class: "title", text: `${(S && S.brand || {}).event || "Fall Fest"}` }), h("div", { class: "sub", text: `${(S && S.brand || {}).year || "2026"}` })),
     h("form", { class: "form", onsubmit: submit },
       h("label", { class: "eyebrow", for: "name", text: "Your name" }), nameIn,
       h("div", { class: "eyebrow", text: "Pick your icon" }), emojis, err,

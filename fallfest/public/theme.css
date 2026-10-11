@@ -1,7 +1,7 @@
 /* Braznarkel Ranch · Fall Fest 2026
    A ranch after dark: walnut and saddle leather underfoot, brass hardware, barn red,
    turquoise like western jewelry, parchment for anything you read. Cards wear a
-   leather-stitch edge; the brand is a branding-iron badge in brass. */
+   leather-stitch edge; the ranch logo leads every screen. */
 :root {
   --night: #15100d;      /* walnut, the ground of every screen */
   --night-2: #241a14;    /* saddle leather, raised surfaces */
@@ -90,10 +90,8 @@ h1, h2, h3 { margin: 0; text-wrap: balance; }
 .c0 { --c: var(--pumpkin); } .c1 { --c: var(--teal); } .c2 { --c: #c9483f; } .c3 { --c: var(--mustard); }
 .shape { font-family: var(--f-display); }
 
-/* the ranch badge */
-.badge { display: block; width: 100%; height: auto; filter: drop-shadow(0 8px 0 #070504); }
-.badge .ring-txt { font-family: var(--f-brand); }
-.badge .mono { font-family: var(--f-display); }
+/* the ranch logo */
+.logo { display: block; width: 100%; height: auto; aspect-ratio: 1; filter: drop-shadow(0 8px 0 #070504); user-select: none; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
