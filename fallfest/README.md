@@ -52,7 +52,7 @@ To run the host screen from a different device (a tablet, say), use the `/host?k
 
 ## Branding
 
-The ranch logo is `public/logo.svg` (a copy of `brand/braznarkel-ranch-logo.svg`). Replace that file to change the logo on every screen.
+The ranch wordmark logo is `public/logo.svg` (a copy of `brand/braznarkel-ranch-logo.svg`). Replace that file to change the logo on every screen.
 
 The event name and year come from the `brand` block at the top of `content.json`. They drive the badge, the big-screen title, the phone screens and the leaderboard. Change them for next year and they show up the next time the host goes back to the lobby:
 

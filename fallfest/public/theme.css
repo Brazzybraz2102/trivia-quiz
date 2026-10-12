@@ -91,7 +91,7 @@ h1, h2, h3 { margin: 0; text-wrap: balance; }
 .shape { font-family: var(--f-display); }
 
 /* the ranch logo */
-.logo { display: block; width: 100%; height: auto; aspect-ratio: 1; filter: drop-shadow(0 8px 0 #070504); user-select: none; }
+.logo { display: block; width: 100%; height: auto; aspect-ratio: 920 / 248; filter: drop-shadow(0 6px 0 #070504); user-select: none; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

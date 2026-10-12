@@ -1,4 +1,5 @@
-# Builds the Braznarkel Ranch logo (no dog) as a self-contained SVG.
+# Builds the Braznarkel Ranch wordmark logo as a self-contained SVG.
+# The full scene is assembled first because the wordmark reuses its defs and banner.
 import sys
 from fontTools.ttLib import TTFont
 from fontTools.pens.svgPathPen import SVGPathPen
@@ -169,5 +170,14 @@ svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width=
   <path d="{small}" fill="#ffffff" stroke="#0b1520" stroke-width="6" paint-order="stroke"/>
 </svg>
 '''
-open(OUT, "w").write(svg)
-print("wrote", OUT, len(svg))
+
+# Wordmark only: the name banner on its own, no illustration.
+banner = svg[svg.index("  <!-- name banner -->"):svg.index("</svg>")]
+defs = svg[svg.index("  <defs>"):svg.index("  </defs>") + len("  </defs>")]
+word = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="52 730 920 248" width="920" height="248">
+  <title>Braznarkel Ranch</title>
+{defs}
+{banner}</svg>
+'''
+open(OUT, "w").write(word)
+print("wrote", OUT, len(word))

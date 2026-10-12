@@ -21,7 +21,7 @@ body.playing .scene { opacity: .35; }
 .stage { min-height: 100%; display: flex; flex-direction: column; gap: 20px; padding-block: 20px 84px; max-width: 1500px; margin: 0 auto; }
 .top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .brand { display: flex; align-items: center; gap: 10px; font-size: 22px; }
-.brand .logo { width: 58px; filter: none; }
+.brand .logo { width: 150px; filter: none; }
 .top .spacer { flex: 1; }
 .joinchip { font-weight: 700; color: var(--muted); }
 .joinchip b { color: var(--mustard); }
@@ -29,15 +29,17 @@ body.playing .scene { opacity: .35; }
 /* lobby */
 .lobby { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 28px; align-items: start; }
 .hero { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
-.mark { display: flex; align-items: center; gap: clamp(16px, 2.4vw, 34px); }
-.mark .seal { width: clamp(190px, 22vw, 340px); flex: none; }
+.mark { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; }
+.mark .seal { width: min(100%, 640px); }
 .fresh .mark .seal { animation: stamp .7s cubic-bezier(.2,1.5,.4,1); }
 @keyframes stamp { from { transform: scale(1.6) rotate(-14deg); opacity: 0; } }
 .wordmark { display: flex; flex-direction: column; min-width: 0; }
 .wordmark .ranch { font-size: clamp(18px, 2vw, 32px); line-height: 1; letter-spacing: .08em; color: var(--muted); }
-.wordmark .event { font-size: clamp(60px, 9vw, 150px); line-height: .92; margin-top: .06em; }
+.wordmark .event { font-size: clamp(54px, 7vw, 120px); line-height: .95; }
+.wordmark { flex-direction: row !important; flex-wrap: wrap; align-items: center; gap: 4px 22px; }
+.wordmark .ranch { flex-basis: 100%; }
 .ribbon {
-  align-self: flex-start; margin-top: 10px; position: relative; background: var(--cranberry); color: var(--cream);
+  align-self: center; position: relative; background: var(--cranberry); color: var(--cream);
   font-family: var(--f-display); font-size: clamp(20px, 2.2vw, 34px); letter-spacing: .3em; padding: .12em .6em .12em .9em;
   box-shadow: 0 5px 0 #070504; clip-path: polygon(0 0, 100% 0, calc(100% - .45em) 50%, 100% 100%, 0 100%, .45em 50%);
 }
@@ -89,7 +91,7 @@ body.playing .scene { opacity: .35; }
 .big-q { font-family: var(--f-display); font-size: clamp(30px, 4.4vw, 68px); line-height: 1.08; max-width: 24ch; text-shadow: 0 4px 0 #070504; text-wrap: balance; }
 .big-q .blank { display: inline-block; min-width: 3.5em; border-bottom: .12em solid var(--mustard); color: var(--mustard); }
 .intro h1 { font-family: var(--f-brand); font-size: clamp(56px, 8.5vw, 140px); line-height: 1; }
-.intro .seal { width: clamp(150px, 16vw, 230px); }
+.intro .seal { width: clamp(280px, 32vw, 500px); }
 .fresh .intro h1 { animation: drop .6s cubic-bezier(.2,1.4,.4,1); }
 .intro p { font-size: clamp(20px, 2.2vw, 32px); max-width: 34ch; margin: 0; }
 @keyframes drop { from { transform: translateY(-60px) rotate(-6deg); opacity: 0; } }
@@ -320,7 +322,7 @@ function onPhaseChange(g) {
 function topBar(g) {
   const host = S.joinUrl.replace(/^https?:\/\//, "");
   return h("div", { class: "top" },
-    g ? h("div", { class: "brand" }, logo(), h("span", { class: "western brass", text: `${S.brand.ranch} ${S.brand.event} ${S.brand.year}` })) : null,
+    g ? h("div", { class: "brand" }, logo(), h("span", { class: "western brass", text: `${S.brand.event} ${S.brand.year}` })) : null,
     h("div", { class: "spacer" }),
     g ? h("div", { class: "joinchip" }, "Join at ", h("b", { text: host })) : null);
 }
@@ -340,7 +342,7 @@ function lobby() {
       h("div", { class: "mark" },
         h("div", { class: "seal" }, logo(S.brand.ranch)),
         h("h1", { class: "wordmark western" },
-          h("span", { class: "ranch", text: "The " + S.brand.year + " annual" }),
+          h("span", { class: "ranch", text: "The annual" }),
           h("span", { class: "event brass", text: S.brand.event }),
           h("span", { class: "ribbon", text: S.brand.year }))),
       h("div", { class: "joincard stitched" },
