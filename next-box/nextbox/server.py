@@ -19,7 +19,7 @@ import time
 import traceback
 from datetime import date, timedelta
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,12 +37,12 @@ from .jobs import Context, print_text
 from .mylist import TAG_COLORS, LocalTasks, Tags, is_local, parse_dump
 from .printer import COLORS, DRIVERS
 from .printers import REASONS, PrinterError, Printers
-from .providers import PROVIDERS, READY, ProviderError
+from .providers import ProviderError, display_name, oauth
+from .providers import providers as provider_list
 from .store import normalize_id
 from .vault import Vault
 
 WEB_DIR = PROJECT_DIR / "web"
-READY_NAMES = {k: v["name"] for k, v in READY.items()}
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
 COOKIE = "nextbox_session"
 STARTED = time.time()
@@ -123,6 +123,11 @@ class TaskIn(BaseModel):
 
 class DumpBody(BaseModel):
     text: str
+
+
+class CalendarBody(BaseModel):
+    kind: str
+    fields: dict[str, str]
 
 
 class TagBody(BaseModel):
@@ -225,7 +230,8 @@ class Caller:
 
 
 def create_app(ctx: Context, vision: scan.VisionFn | None = None,
-               accounts: Accounts | None = None, builder: Builder | None = None) -> FastAPI:
+               accounts: Accounts | None = None, builder: Builder | None = None,
+               calendar_builder=None) -> FastAPI:
     """`ctx.tasks_factory`, when set, is one to-do app shared by everyone (tests only).
     Otherwise each person's own connection is used."""
     app = FastAPI(title="Next Box", docs_url="/docs")
@@ -253,7 +259,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     registry = ctx.printers or Printers(data_dir, ctx.settings)
     build = _build_id()
     _migrate_feedback(events, feedback_store, accounts)
-    connections = Connections(ctx.settings, accounts, vault, **({"builder": builder} if builder else {}))
+    connections = Connections(ctx.settings, accounts, vault, **({"builder": builder} if builder else {}),
+                              **({"calendar_builder": calendar_builder} if calendar_builder else {}))
 
     # ------------------------------------------------------------------ auth
     def _bearer(request: Request) -> str | None:
@@ -339,6 +346,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                                    auto_print_enabled=s["auto_print_enabled"],
                                    tasks_factory=factory, _tasks=None,
                                    tag_colors=Tags(accounts.db, name).colors(),
+                                   events=lambda day: connections.events_for(name, day),
                                    wins=lambda: wins_yesterday(name))
 
     def wins_yesterday(name: str) -> int:
@@ -441,7 +449,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return {"username": name, "role": user["role"]}
 
     def _set_cookie(response: Response, request: Request, token: str) -> None:
-        response.set_cookie(COOKIE, token, max_age=30 * 86400, httponly=True, samesite="strict",
+        # Lax (not Strict) so coming back from "Sign in with Google" keeps you signed in. Cross-site
+        # writes are still refused: browsers don't send Lax cookies on them, and auth() checks Origin.
+        response.set_cookie(COOKIE, token, max_age=30 * 86400, httponly=True, samesite="lax",
                             secure=request.url.scheme == "https", path="/")
 
     @app.post("/auth/logout")
@@ -841,7 +851,66 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     # ----------------------------------------------------------- to-do app connection
     @app.get("/providers")
     def providers():
-        return PROVIDERS
+        return provider_list()
+
+    # ---------------------------------------------------------------- calendars
+    @app.get("/calendars")
+    def get_calendars(caller: Caller = Depends(person)):
+        return {"calendars": connections.calendars(caller.name), "kinds": connections.calendar_kinds()}
+
+    @app.post("/calendars")
+    def add_calendar(body: CalendarBody, caller: Caller = Depends(person)):
+        try:
+            entry = connections.add_calendar(caller.name, body.kind, body.fields)
+        except ProviderError as exc:
+            events.log(caller.name, "calendar_add", ok=False, detail={"kind": body.kind}, error=str(exc))
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            events.log(caller.name, "calendar_add", ok=False, kind="error", detail={"kind": body.kind},
+                       error=str(exc), trace=traceback.format_exc())
+            raise HTTPException(400, f"Couldn't add that calendar: {exc}") from exc
+        events.log(caller.name, "calendar_add", detail={"kind": body.kind})
+        return entry
+
+    @app.delete("/calendars/{cal_id}")
+    def remove_calendar(cal_id: str, caller: Caller = Depends(person)):
+        connections.remove_calendar(caller.name, cal_id)
+        events.log(caller.name, "calendar_remove")
+        return {"ok": True}
+
+    @app.get("/calendars/today")
+    def calendar_today(caller: Caller = Depends(person)):
+        found, problems = connections.events_for(caller.name, ctx.today())
+        return {"events": found, "problems": problems}
+
+    # ------------------------------------------------- sign in with Google / Microsoft / TickTick
+    @app.get("/connect/{app_name}/{purpose}/start")
+    def signin_start(app_name: str, purpose: str, caller: Caller = Depends(person)):
+        try:
+            return RedirectResponse(oauth.start(app_name, purpose, caller.name), status_code=303)
+        except ProviderError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/connect/{app_name}/callback")
+    def signin_callback(app_name: str, state: str = "", code: str = "", error: str = ""):
+        """Where Google/Microsoft/TickTick send the person back. Who it's for comes from the
+        one-time state, not a cookie, so it works whatever the browser does with cookies."""
+        who = oauth.who_started(state)
+        if error or not code or not who:
+            msg = "Sign-in was cancelled." if error else "That sign-in expired. Try again."
+            return RedirectResponse(f"/app/#settings&signin={quote(msg)}", status_code=303)
+        try:
+            result = connections.finish_signin(who, app_name, state, code)
+        except ProviderError as exc:
+            events.log(who, "signin", ok=False, detail={"app": app_name}, error=str(exc))
+            return RedirectResponse(f"/app/#settings&signin={quote(str(exc))}", status_code=303)
+        events.log(who, "signin", detail={"app": app_name, "kind": result["kind"]})
+        return RedirectResponse(f"/app/#settings&signin={quote('Connected ' + oauth.APPS[app_name]['name'])}",
+                                status_code=303)
+
+    @app.get("/super/signin-setup")
+    def signin_setup(caller: Caller = Depends(super_only)):
+        return oauth.setup_status()
 
     @app.get("/connection")
     def get_connection(caller: Caller = Depends(person)):
@@ -1044,7 +1113,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 "household_id": u["household_id"], "household": homes.get(u["household_id"], u["household_id"]),
                 "disabled": u["disabled"], "beta": u["beta"], "debug": u["debug"], "must_change": u["must_change"],
                 "created": u["created"], "last_login": u["last_login"], "sessions": live.get(u["username"], 0),
-                "app": READY_NAMES.get(conn_.get("provider"), conn_.get("provider")) if conn_ else None,
+                "app": display_name(conn_.get("provider")) if conn_ else None,
                 "open_tasks": open_tasks.get(u["username"], 0), "prints_30d": prints.get(u["username"], 0),
                 "errors_7d": errors.get(u["username"], 0),
                 "consented": consent.get("version") == DATA_NOTICE_VERSION,

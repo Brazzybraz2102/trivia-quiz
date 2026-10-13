@@ -148,3 +148,21 @@ def test_caldav_single_list_and_bad_login(cal, radicale):
     assert CalDAVTasks(url, user, "pw", list_name="Work").check()["account"] == user
     with pytest.raises(ProviderError, match="Couldn't reach"):
         CalDAVTasks("http://127.0.0.1:9/", user, "pw").check()
+
+
+def test_caldav_calendar_events(radicale):
+    import caldav
+
+    from nextbox.calendars import CalDAVCalendars
+    client = caldav.DAVClient(radicale, username="eventsuser", password="pw")
+    principal = client.principal()
+    cal = principal.make_calendar(name="Family", supported_calendar_component_set=["VEVENT"])
+    day = dt.date.today()
+    start = dt.datetime.combine(day, dt.time(10, 30))
+    cal.save_event(dtstart=start, dtend=start + dt.timedelta(hours=1), summary="Soccer practice")
+    cal.save_event(dtstart=day, dtend=day + dt.timedelta(days=1), summary="Trash day")
+    cal.save_event(dtstart=start + dt.timedelta(days=2), dtend=start + dt.timedelta(days=2, hours=1), summary="Later")
+    source = CalDAVCalendars(radicale, "eventsuser", "pw")
+    assert source.check()["calendars"] == ["Family"]
+    assert [(e["start"], e["title"]) for e in source.events(day)] == [(None, "Trash day"), ("10:30", "Soccer practice")]
+    assert CalDAVCalendars(radicale, "eventsuser", "pw", only="Nope")._calendars() == []

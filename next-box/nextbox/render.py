@@ -150,7 +150,8 @@ def _dotted(d: ImageDraw.ImageDraw, y: int, x0: int, x1: int) -> None:
 
 def render_day(day_name: str, date_text: str, rows: list[DayRow], code: str, footer: str = "",
                subtitle: str = "", waiting: list[str] | None = None, accent: bool = False,
-               waiting_head: str = "Also waiting", win: str = "") -> Image.Image:
+               waiting_head: str = "Also waiting", win: str = "",
+               schedule: list[tuple[str, str]] | None = None) -> Image.Image:
     """The daily sheet: big day name, legend on top, time column, checkboxes on the right.
     Read-back matches rows top to bottom against the manifest, so row order is the contract."""
     day_f, date_f, sub_f = _font(84, True), _font(40, True), _font(28)
@@ -175,6 +176,21 @@ def render_day(day_name: str, date_text: str, rows: list[DayRow], code: str, foo
     if subtitle:
         d.text((left, y), subtitle, font=sub_f, fill=0)
         y += 38
+    if schedule:
+        # Today's calendar: no boxes (events aren't tasks), time on the left like the task rows.
+        d.line((left, y, right, y), fill=0, width=4)
+        y += 8
+        sched_head, sched_time, sched_f = _font(22, True), _font(26, True), _font(28)
+        d.text((left, y), "SCHEDULE", font=sched_head, fill=0)
+        y += 32
+        for when, what in schedule:
+            if when:
+                d.text((left, y + 2), when, font=sched_time if when != "all day" else _font(20, True), fill=0)
+            for i, line in enumerate(_wrap(d, what, sched_f, right - left - 112)[:2]):
+                d.text((left + 112, y), line, font=sched_f, fill=0)
+                y += 34
+            y += 4
+        y += 4
     d.line((left, y, right, y), fill=0, width=4)
     y += 10
     legend = "✓ done    → move    ✗ drop"

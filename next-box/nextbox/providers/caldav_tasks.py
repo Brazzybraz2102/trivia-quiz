@@ -71,6 +71,9 @@ class CalDAVTasks(TaskProvider):
             raise ProviderError("CalDAV needs a server address, username and app password.")
         import caldav
 
+        from .http import check_public_url
+        if client is None:
+            url = check_public_url(url, "The server address")
         self._client = client or caldav.DAVClient(url=url, username=username, password=password,
                                                   timeout=20)
         self._list_name = list_name.strip()

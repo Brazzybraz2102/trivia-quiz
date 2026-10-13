@@ -101,6 +101,12 @@ def fresh_database():
 
 
 @pytest.fixture(autouse=True)
+def local_servers_ok(monkeypatch):
+    """Tests run a real CalDAV server on 127.0.0.1; the private-network guard has its own tests."""
+    monkeypatch.setenv("NEXTBOX_ALLOW_PRIVATE_URLS", "1")
+
+
+@pytest.fixture(autouse=True)
 def no_real_printer(monkeypatch):
     def boom(*a, **k):
         raise AssertionError("tests must never talk to the printer")

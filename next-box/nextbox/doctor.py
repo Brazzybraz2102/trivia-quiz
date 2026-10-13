@@ -102,6 +102,13 @@ def run_doctor(settings: Settings, accounts: Accounts) -> int:
     else:
         say(BAD, f"nothing answers at http://localhost:{settings.port}", "see the service line above")
 
+    from .providers import oauth
+    for app, st in oauth.setup_status().items():
+        name = oauth.APPS[app]["name"]
+        if st["ready"]:
+            say(OK, f"Sign in with {name} is on (sign-in comes back to {st['redirect_uri']})")
+        else:
+            say(NOTE, f"Sign in with {name} is off (needs {', '.join(st['missing'])} in .env)")
     printers = Printers(settings.data_dir, settings).all()
     if settings.dry_run:
         say(NOTE, "preview only (NEXTBOX_DRY_RUN=1): nothing is sent to a printer")

@@ -35,6 +35,7 @@ PREFS = {
     "gentle_words": (True, lambda v: isinstance(v, bool)),   # "waiting 3d", not "overdue 3d"
     "show_wins": (True, lambda v: isinstance(v, bool)),      # "Yesterday: 4 done" on the daily ticket
     "show_next_step": (True, lambda v: isinstance(v, bool)), # a task's first unticked tiny step under it
+    "show_calendar": (True, lambda v: isinstance(v, bool)),  # today's events at the top of the daily ticket
     "new_tasks_to": ("nextbox", lambda v: v in ("nextbox", "linked")),  # where new tasks go
     "sticker_size": ("normal", lambda v: v in ("normal", "big")),
     "show_waiting": (True, lambda v: isinstance(v, bool)),
@@ -93,6 +94,7 @@ class Accounts:
         out["prefs"] = {**default_prefs(), **(row["prefs"] or {})}
         conn = row["connection"]
         out["connection"] = {k: v for k, v in conn.items() if k != "secret"} if conn else None
+        out["calendars"] = [{k: v for k, v in c.items() if k != "secret"} for c in (row.get("calendars") or [])]
         return out
 
     @staticmethod
@@ -387,6 +389,18 @@ class Accounts:
             if not self._row(conn, username):
                 raise AuthError(f"no user {username}")
             conn.execute(update(db.users).where(db.users.c.username == username).values(connection=connection))
+
+    def calendars(self, username: str) -> list[dict]:
+        """Includes the sealed secrets: server-side use only."""
+        with self.db.connect() as conn:
+            row = self._row(conn, username)
+        return list(row["calendars"] or []) if row else []
+
+    def set_calendars(self, username: str, calendars: list[dict]) -> None:
+        with self.db.begin() as conn:
+            if not self._row(conn, username):
+                raise AuthError(f"no user {username}")
+            conn.execute(update(db.users).where(db.users.c.username == username).values(calendars=calendars or None))
 
     def owner(self, household_id: str | None = None) -> str | None:
         """Self-hosted (no household given): the oldest active superadmin, whose to-do app Home

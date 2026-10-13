@@ -1,32 +1,52 @@
-"""Each person's tasks: their built-in list, plus an optional linked app (connect, check, disconnect)."""
+"""Each person's tasks and calendars: their built-in list, an optional linked to-do app, and any
+number of calendars. Secrets (tokens, passwords, calendar links) are sealed by the Vault."""
 from __future__ import annotations
 
+import datetime as dt
+import secrets as _secrets
 import time
 from collections.abc import Callable
 
 from .auth import Accounts
+from .calendars import KINDS as CALENDAR_KINDS
+from .calendars import CalendarSource, build_calendar, sort_events
 from .config import Settings
 from .mylist import LocalTasks, Merged
-from .providers import READY, ProviderError, TaskProvider, build_provider, secret_fields
+from .providers import READY, ProviderError, TaskProvider, build_provider, display_name, oauth, secret_fields
 from .vault import Vault
 
 NOT_CONNECTED = "Connect your to-do app in Settings first."
+MAX_CALENDARS = 8
 
 Builder = Callable[[str, dict, dict], TaskProvider]
+CalendarBuilder = Callable[[str, dict, dict], CalendarSource]
 
 
 class NotConnected(ProviderError):
     pass
 
 
+def _split(kind_fields: list[dict], fields: dict) -> tuple[dict, dict]:
+    missing = [f["label"] for f in kind_fields if not f.get("optional") and not str(fields.get(f["name"], "")).strip()]
+    if missing:
+        raise ProviderError(f"Fill in: {', '.join(missing)}")
+    names = {f["name"] for f in kind_fields}
+    hidden = {f["name"] for f in kind_fields if f.get("secret")}
+    config = {k: str(v).strip() for k, v in fields.items() if k in names and k not in hidden}
+    secret = {k: str(v).strip() for k, v in fields.items() if k in hidden}
+    return config, secret
+
+
 class Connections:
     def __init__(self, settings: Settings, accounts: Accounts, vault: Vault,
-                 builder: Builder = build_provider):
+                 builder: Builder = build_provider, calendar_builder: CalendarBuilder = build_calendar):
         self.settings = settings
         self.accounts = accounts
         self.vault = vault
         self.builder = builder
+        self.calendar_builder = calendar_builder
 
+    # --- to-do app ---------------------------------------------------------------------------
     def provider_for(self, username: str) -> TaskProvider:
         """Everyone has the built-in list; a linked app adds its tasks next to it."""
         local = LocalTasks(self.accounts.db, username, self.accounts.household_of(username) or "home")
@@ -37,11 +57,20 @@ class Connections:
         prefs = (self.accounts.get(username) or {}).get("prefs") or {}
         return Merged(local, linked, new_tasks_to=prefs.get("new_tasks_to", "nextbox"))
 
+    def _open(self, sealed: str | None, username: str, resave: Callable[[dict], None]) -> dict:
+        secrets = self.vault.open(sealed) if sealed else {}
+        secrets["_save"] = resave  # sign-in apps hand back refreshed tokens through this
+        return secrets
+
     def linked_for(self, username: str) -> TaskProvider:
         conn = self.accounts.connection(username)
         if conn:
-            secrets = self.vault.open(conn["secret"]) if conn.get("secret") else {}
-            return self.builder(conn["provider"], conn.get("config", {}), secrets)
+            def resave(tokens: dict, username=username) -> None:
+                current = self.accounts.connection(username)
+                if current and current.get("provider") == conn["provider"]:
+                    self.accounts.set_connection(username, {**current, "secret": self.vault.seal(tokens)})
+            return self.builder(conn["provider"], conn.get("config", {}),
+                                self._open(conn.get("secret"), username, resave))
         # Before per-person connections, .env held one Todoist token: it still serves the owner.
         if self.settings.todoist_token and username == self.accounts.owner():
             return self.builder("todoist", {}, {"token": self.settings.todoist_token})
@@ -51,24 +80,14 @@ class Connections:
         user = self.accounts.get(username) or {}
         conn = user.get("connection")
         if conn:
-            return {"connected": True, **conn, "name": READY.get(conn["provider"], {}).get("name", conn["provider"])}
+            return {"connected": True, **conn, "name": display_name(conn["provider"])}
         if self.settings.todoist_token and username == self.accounts.owner():
             return {"connected": True, "provider": "todoist", "name": "Todoist", "legacy": True,
                     "account": "token in .env", "config": {}}
         return {"connected": False}
 
-    def connect(self, username: str, provider: str, fields: dict) -> dict:
-        if provider not in READY:
-            raise ProviderError(f"{provider} can't be connected yet")
-        spec = READY[provider]["fields"]
-        missing = [f["label"] for f in spec if not f.get("optional") and not str(fields.get(f["name"], "")).strip()]
-        if missing:
-            raise ProviderError(f"Fill in: {', '.join(missing)}")
-        names = {f["name"] for f in spec}
-        secret_names = secret_fields(provider)
-        config = {k: str(v).strip() for k, v in fields.items() if k in names and k not in secret_names}
-        secrets = {k: str(v).strip() for k, v in fields.items() if k in secret_names}
-        info = self.builder(provider, config, secrets).check()  # refuse to save a connection that doesn't work
+    def _save_connection(self, username: str, provider: str, config: dict, secrets: dict) -> dict:
+        info = self.builder(provider, config, dict(secrets)).check()  # never save one that doesn't work
         self.accounts.set_connection(username, {
             "provider": provider, "config": config, "secret": self.vault.seal(secrets),
             "account": str(info.get("account", ""))[:120], "lists": list(info.get("lists", []))[:50],
@@ -76,5 +95,79 @@ class Connections:
         })
         return self.status(username)
 
+    def connect(self, username: str, provider: str, fields: dict) -> dict:
+        if provider not in READY:
+            raise ProviderError(f"{provider} can't be connected with a token" +
+                                ("; use its Sign in button" if provider in oauth.TASKS else ""))
+        config, secrets = _split(READY[provider]["fields"], fields)
+        assert set(secrets) <= secret_fields(provider)
+        return self._save_connection(username, provider, config, secrets)
+
     def disconnect(self, username: str) -> None:
         self.accounts.set_connection(username, None)
+
+    # --- sign in with Google / Microsoft / TickTick --------------------------------------------
+    def finish_signin(self, username: str, app: str, state: str, code: str, client=None) -> dict:
+        purpose, tokens = oauth.finish(app, state, code, username, client=client)
+        if purpose == "tasks":
+            return {"kind": "tasks", **self._save_connection(username, oauth.TASK_KEYS[(app, purpose)], {}, tokens)}
+        return {"kind": "calendar", **self._add_calendar(username, oauth.CAL_KEYS[(app, purpose)], {}, tokens)}
+
+    # --- calendars -----------------------------------------------------------------------------
+    def calendar_kinds(self) -> list[dict]:
+        out = [dict(k) for k in CALENDAR_KINDS]
+        for (app, _), key in oauth.CAL_KEYS.items():
+            name = "Google Calendar" if app == "google" else "Outlook / Microsoft 365 Calendar"
+            on = oauth.ready(app)
+            out.append({"key": key, "name": name, "app": app, "status": "oauth" if on else "needs_setup",
+                        **({} if on else {"reason": f"Needs a one-time {oauth.APPS[app]['name']} sign-in setup by "
+                                                    "the Next Box owner. A calendar link (.ics) works today."})})
+        return out
+
+    def calendars(self, username: str) -> list[dict]:
+        return [{k: v for k, v in c.items() if k != "secret"} for c in self.accounts.calendars(username)]
+
+    def _add_calendar(self, username: str, kind: str, config: dict, secrets: dict) -> dict:
+        existing = self.accounts.calendars(username)
+        if len(existing) >= MAX_CALENDARS:
+            raise ProviderError(f"{MAX_CALENDARS} calendars is the limit")
+        info = self.calendar_builder(kind, config, dict(secrets)).check()
+        entry = {"id": _secrets.token_hex(4), "provider": kind, "config": config, "secret": self.vault.seal(secrets),
+                 "account": str(info.get("account", ""))[:120], "calendars": list(info.get("calendars", []))[:20],
+                 "name": config.get("name") or str(info.get("account", "") or kind)[:60],
+                 "connected_at": int(time.time())}
+        self.accounts.set_calendars(username, existing + [entry])
+        return {k: v for k, v in entry.items() if k != "secret"}
+
+    def add_calendar(self, username: str, kind: str, fields: dict) -> dict:
+        spec = next((k for k in CALENDAR_KINDS if k["key"] == kind), None)
+        if not spec:
+            raise ProviderError(f"{kind} calendars connect with a Sign in button" if kind in oauth.CALENDARS
+                                else f"unknown calendar kind {kind}")
+        config, secrets = _split(spec["fields"], fields)
+        return self._add_calendar(username, kind, config, secrets)
+
+    def remove_calendar(self, username: str, cal_id: str) -> None:
+        keep = [c for c in self.accounts.calendars(username) if c.get("id") != cal_id]
+        self.accounts.set_calendars(username, keep)
+
+    def events_for(self, username: str, day: dt.date) -> tuple[list[dict], list[str]]:
+        """Today's events from every calendar. A calendar that fails is reported, not fatal."""
+        events, problems = [], []
+        for entry in self.accounts.calendars(username):
+            def resave(tokens: dict, cid=entry["id"]) -> None:
+                cals = self.accounts.calendars(username)
+                for c in cals:
+                    if c.get("id") == cid:
+                        c["secret"] = self.vault.seal(tokens)
+                self.accounts.set_calendars(username, cals)
+            try:
+                source = self.calendar_builder(entry["provider"], entry.get("config", {}),
+                                               self._open(entry.get("secret"), username, resave))
+                for e in source.events(day):
+                    events.append({**e, "calendar": e.get("calendar") or entry.get("name", "")})
+            except ProviderError as exc:
+                problems.append(f"{entry.get('name', 'A calendar')}: {exc}")
+            except Exception as exc:  # a broken feed must not stop the daily ticket
+                problems.append(f"{entry.get('name', 'A calendar')} didn't work: {str(exc)[:120]}")
+        return sort_events(events), problems

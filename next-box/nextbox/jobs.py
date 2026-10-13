@@ -39,6 +39,7 @@ class Context:
     printers: Printers | None = None  # None: the single .env printer (older setups, tests)
     tag_colors: dict = field(default_factory=dict)  # this person's tags: name -> label color
     wins: Callable[[], int] | None = None  # how many tasks they finished yesterday
+    events: Callable[[date], tuple[list, list]] | None = None  # (today's calendar events, problems)
     _tasks: TaskProvider | None = field(default=None, repr=False)
 
     @property
@@ -177,8 +178,31 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
     return {"status": "printed" if sent else "dry_run", **record}
 
 
+MAX_EVENTS = 8
+
+
+def _schedule(ctx: Context) -> tuple[list[tuple[str, str]], str]:
+    """Today's calendar for the top of the daily ticket: [(time, title)], plus a note if a calendar failed."""
+    if ctx.events is None or not ctx.prefs.get("show_calendar", True):
+        return [], ""
+    try:
+        found, problems = ctx.events(ctx.today())
+    except Exception as exc:  # the to-do part still prints
+        return [], f"Calendar didn't work: {str(exc)[:120]}"
+    h24 = bool(ctx.prefs.get("time_24h"))
+
+    def clock(hhmm: str) -> str:
+        h, m = int(hhmm[:2]), hhmm[3:5]
+        return f"{h:02d}:{m}" if h24 else f"{h % 12 or 12}:{m}{'a' if h < 12 else 'p'}"
+    lines = [("all day" if e["all_day"] else clock(e["start"]), _clean(e["title"])) for e in found[:MAX_EVENTS]]
+    if len(found) > MAX_EVENTS:
+        lines.append(("", f"+{len(found) - MAX_EVENTS} more"))
+    return lines, "; ".join(problems)[:300]
+
+
 def _task_label(ctx: Context, *, kind: str, title: str, subtitle: str, tasks: list[dict],
-                source: str, dry_run: bool | None, reason: str) -> dict:
+                source: str, dry_run: bool | None, reason: str,
+                schedule: list[tuple[str, str]] | None = None, calendar_note: str = "") -> dict:
     today = ctx.today()
     tasks = sorted(tasks, key=lambda t: _sort_key(t, today))
     max_rows = int(ctx.prefs.get("max_rows", MAX_ROWS))
@@ -213,9 +237,12 @@ def _task_label(ctx: Context, *, kind: str, title: str, subtitle: str, tasks: li
     def draw(accent: bool) -> Image.Image:
         return render_day(title, subtitle, rows, code=label_id, footer=footer, waiting=waiting_names,
                           accent=accent, waiting_head="Not today" if gentle else "Also waiting",
-                          win=footer_win)
-    return _finish(ctx, reason=reason, kind=kind, title=title, draw=draw, label_id=label_id,
-                   manifest=manifest, source=source, dry_run=dry_run)
+                          win=footer_win, schedule=schedule)
+    result = _finish(ctx, reason=reason, kind=kind, title=title, draw=draw, label_id=label_id,
+                     manifest=manifest, source=source, dry_run=dry_run)
+    if calendar_note:
+        result["note"] = (result.get("note", "") + " " + calendar_note).strip()
+    return result
 
 
 def _first_tag(ctx: Context, task: dict) -> tuple[str, str]:
@@ -372,6 +399,7 @@ def print_today(ctx: Context, source: str = "manual", dry_run: bool | None = Non
         raise
     title = today.strftime("%A")
     subtitle = today.strftime("%B %-d")
+    schedule, cal_note = _schedule(ctx)
     late = [t for t in tasks if _is_late(t, today)]
     if ctx.prefs.get("split_overdue") and late and len(late) < len(tasks):
         # Overdue tasks get their own ticket, so they can come out on (say) red labels.
@@ -379,11 +407,13 @@ def print_today(ctx: Context, source: str = "manual", dry_run: bool | None = Non
                             source=source, dry_run=dry_run, reason="overdue")
         main = _task_label(ctx, kind="today", title=title, subtitle=subtitle,
                            tasks=[t for t in tasks if not _is_late(t, today)],
-                           source=source, dry_run=dry_run, reason="today")
+                           source=source, dry_run=dry_run, reason="today", schedule=schedule,
+                           calendar_note=cal_note)
         return {**main, "also": [extra]}
     all_late = bool(late) and len(late) == len(tasks) and ctx.prefs.get("split_overdue")
     return _task_label(ctx, kind="today", title=title, subtitle=subtitle, tasks=tasks,
-                       source=source, dry_run=dry_run, reason="overdue" if all_late else "today")
+                       source=source, dry_run=dry_run, reason="overdue" if all_late else "today",
+                       schedule=schedule, calendar_note=cal_note)
 
 
 def print_filter(ctx: Context, query: str, title: str | None = None,

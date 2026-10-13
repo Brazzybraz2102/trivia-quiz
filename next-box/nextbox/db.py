@@ -39,6 +39,7 @@ users = Table(
     Column("last_login", BigInteger, nullable=True),
     Column("prefs", JSON, nullable=False, default=dict),
     Column("connection", JSON, nullable=True),      # to-do app; the secret inside is sealed by the Vault
+    Column("calendars", JSON, nullable=True),       # [{id, provider, config, secret (sealed), account, ...}]
     Column("consent", JSON, nullable=True),
     Column("support_until", BigInteger, nullable=True),  # time-limited support access granted by the person
 )

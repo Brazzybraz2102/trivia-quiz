@@ -66,6 +66,7 @@ async function boot() {
   loadConnection();
   loadLabels();
   loadList();
+  loadToday();
   $("#noticeText").textContent = me.data_notice;
   $("#noticeWhen").textContent = me.consented ? `You accepted this on ${when(me.consented_at)}.` : "";
   if (!me.consented) { $("#noticeBody").textContent = me.data_notice; $("#noticeDialog").showModal(); }
@@ -207,7 +208,7 @@ async function loadConnection() {
   try {
     [providers, conn] = await Promise.all([providers.length ? providers : api("/providers"), api("/connection")]);
   } catch (e) { $("#appStatus").textContent = e.message; return; }
-  const ready = providers.filter((p) => p.status === "ready");
+  const ready = providers.filter((p) => p.status === "ready" || p.status === "oauth");
   const spec = providers.find((p) => p.key === conn.provider);
   $$(".appName").forEach((el) => el.textContent = conn.connected ? conn.name : "my list");
   $("#filterHelp").textContent = spec?.filter_help || "";
@@ -231,13 +232,19 @@ async function loadConnection() {
     $("#provSel").innerHTML = ready.map((p) => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join("");
     $("#provSel").onchange = renderProviderFields;
     $("#provOther").innerHTML = (ready.filter((p) => p.also).map((p) => `<p><b>${esc(p.name)}</b> also covers ${esc(p.also)}.</p>`).join("")) +
-      providers.filter((p) => p.status !== "ready").map((p) => `<p><b>${esc(p.name)}</b>: ${p.status === "needs_setup" ? "coming soon." : "not possible."} ${esc(p.reason)}</p>`).join("");
+      providers.filter((p) => p.status !== "ready" && p.status !== "oauth").map((p) => `<p><b>${esc(p.name)}</b>: ${p.status === "needs_setup" ? "not switched on yet." : "not possible."} ${esc(p.reason)}</p>`).join("");
     renderProviderFields();
   }
 }
 
 function renderProviderFields() {
   const p = providers.find((x) => x.key === $("#provSel").value);
+  $("#provGo").textContent = p.status === "oauth" ? `Sign in with ${p.app === "google" ? "Google" : p.app === "microsoft" ? "Microsoft" : "TickTick"}` : "Connect";
+  if (p.status === "oauth") {
+    $("#provFields").innerHTML = `<p class="muted">You'll sign in on ${esc(p.name)}'s own page, then come straight back here. Next Box never sees your password.</p>`;
+    $("#provMsg").textContent = "";
+    return;
+  }
   $("#provFields").innerHTML = (p.fields || []).map((f) => `<div class="field">
       <label for="pf_${esc(f.name)}">${esc(f.label)}${f.optional ? " (optional)" : ""}</label>
       <input id="pf_${esc(f.name)}" data-field="${esc(f.name)}" type="${f.secret ? "password" : "text"}" autocomplete="off" autocapitalize="none">
@@ -246,6 +253,8 @@ function renderProviderFields() {
 }
 
 $("#provGo").onclick = async () => {
+  const chosen = providers.find((x) => x.key === $("#provSel").value);
+  if (chosen?.status === "oauth") { location.href = `/connect/${encodeURIComponent(chosen.app)}/tasks/start`; return; }
   const fields = {};
   $$("#provFields [data-field]").forEach((el) => fields[el.dataset.field] = el.value);
   $("#provGo").disabled = true; $("#provMsg").textContent = "";
@@ -277,7 +286,7 @@ $("#mustForm").onsubmit = async (e) => {
 $("#logout").onclick = async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); showLogin("Signed out."); };
 
 // ---------------------------------------------------------------- tabs
-const loaders = { mylist: () => loadList(), printed: loadHistory, settings: () => { loadSessions(); loadLabels(); loadTags(); }, admin: () => { loadAdmin(); loadPrinters(); loadInvites(); },
+const loaders = { mylist: () => { loadList(); loadToday(); }, printed: loadHistory, settings: () => { loadSessions(); loadLabels(); loadTags(); loadCalendars(); }, admin: () => { loadAdmin(); loadPrinters(); loadInvites(); },
                   debug: loadDebug, board: () => loadBoard(), usage: () => loadUsage() };
 $$("nav button").forEach((b) => b.onclick = () => {
   $$("nav button").forEach((x) => x.classList.toggle("on", x === b));
@@ -1135,3 +1144,71 @@ $("#ivList").addEventListener("click", async (e) => {
   if (!confirm(`Cancel invite ${code}?`)) return;
   try { await api(`/admin/invites/${encodeURIComponent(code)}`, { method: "DELETE" }); loadInvites(); } catch (err) { toast(err.message); }
 });
+
+
+// ---------------------------------------------------------------- calendars
+let calKinds = [];
+async function loadCalendars() {
+  let r;
+  try { r = await api("/calendars"); } catch (e) { $("#calList").textContent = e.message; return; }
+  calKinds = r.kinds;
+  $("#calList").innerHTML = r.calendars.map((c) => `<div class="tagrow" data-cal="${esc(c.id)}">
+      <div style="flex:1;min-width:0"><b>${esc(c.name)}</b><div class="muted">${esc((calKinds.find((k) => k.key === c.provider) || {}).name || c.provider)}${c.calendars?.length ? " · " + c.calendars.map(esc).join(", ") : ""}</div></div>
+      <button class="plain small" data-remove>Remove</button></div>`).join("") || `<p class="muted">No calendars yet. Add one to see today's events here and on your daily ticket.</p>`;
+  const usable = calKinds.filter((k) => k.status === "ready" || k.status === "oauth");
+  const cur = $("#calKind").value;
+  $("#calKind").innerHTML = usable.map((k) => `<option value="${esc(k.key)}">${esc(k.name)}</option>`).join("");
+  if (cur && usable.some((k) => k.key === cur)) $("#calKind").value = cur;
+  $("#calOther").innerHTML = calKinds.filter((k) => k.also).map((k) => `<p><b>${esc(k.name)}</b> covers ${esc(k.also)}.</p>`).join("") +
+    calKinds.filter((k) => k.status === "needs_setup").map((k) => `<p><b>${esc(k.name)}</b>: not switched on yet. ${esc(k.reason)}</p>`).join("");
+  renderCalFields();
+}
+function renderCalFields() {
+  const k = calKinds.find((x) => x.key === $("#calKind").value);
+  if (!k) return;
+  $("#calGo").textContent = k.status === "oauth" ? `Sign in with ${k.app === "google" ? "Google" : "Microsoft"}` : "Add calendar";
+  $("#calFields").innerHTML = k.status === "oauth" ? `<p class="muted">You'll sign in on ${esc(k.name)}'s own page and come straight back. Next Box only reads events.</p>` :
+    (k.fields || []).map((f) => `<div class="field"><label for="cf_${esc(f.name)}">${esc(f.label)}${f.optional ? " (optional)" : ""}</label>
+      <input id="cf_${esc(f.name)}" data-cfield="${esc(f.name)}" type="${f.secret ? "password" : "text"}" autocomplete="off" autocapitalize="none">
+      ${f.help ? `<div class="muted">${esc(f.help)}</div>` : ""}</div>`).join("");
+  $("#calMsg").textContent = "";
+}
+$("#calKind").onchange = renderCalFields;
+$("#calGo").onclick = async () => {
+  const k = calKinds.find((x) => x.key === $("#calKind").value);
+  if (k?.status === "oauth") { location.href = `/connect/${encodeURIComponent(k.app)}/calendar/start`; return; }
+  const fields = {};
+  $$("#calFields [data-cfield]").forEach((el) => fields[el.dataset.cfield] = el.value);
+  $("#calGo").disabled = true; $("#calMsg").textContent = "Checking…";
+  try {
+    await api("/calendars", { method: "POST", json: { kind: k.key, fields } });
+    $$("#calFields input").forEach((el) => el.value = "");
+    $("#calMsg").textContent = ""; toast("Calendar added"); loadCalendars(); loadToday();
+  } catch (e) { $("#calMsg").textContent = e.message; }
+  finally { $("#calGo").disabled = false; }
+};
+$("#calList").addEventListener("click", async (e) => {
+  if (!e.target.matches("[data-remove]")) return;
+  const id = e.target.closest("[data-cal]").dataset.cal;
+  if (!confirm("Remove this calendar from Next Box? The calendar itself isn't changed.")) return;
+  try { await api(`/calendars/${encodeURIComponent(id)}`, { method: "DELETE" }); loadCalendars(); loadToday(); } catch (err) { toast(err.message); }
+});
+
+async function loadToday() {
+  let r;
+  try { r = await api("/calendars/today"); } catch { $("#todayCard").hidden = true; return; }
+  const clock = (hhmm) => { const h = +hhmm.slice(0, 2); return me?.prefs?.time_24h ? hhmm : `${h % 12 || 12}:${hhmm.slice(3, 5)}${h < 12 ? "a" : "p"}`; };
+  $("#todayCard").hidden = !r.events.length && !r.problems.length;
+  $("#todayEvents").innerHTML = r.events.map((e) => `<div class="mini"><b style="display:inline-block;min-width:70px">${e.all_day ? "all day" : esc(clock(e.start))}</b>${esc(e.title)}${e.location ? ` <span class="muted">· ${esc(e.location)}</span>` : ""}</div>`).join("")
+    + r.problems.map((p) => `<div class="mini err">${esc(p)}</div>`).join("");
+}
+
+// Coming back from "Sign in with ...": show what happened and open Settings.
+{
+  const m = location.hash.match(/signin=([^&]*)/);
+  if (m) {
+    const msg = decodeURIComponent(m[1]);
+    history.replaceState(null, "", location.pathname);
+    setTimeout(() => { toast(msg); $("nav button[data-tab=settings]")?.click(); }, 600);
+  }
+}

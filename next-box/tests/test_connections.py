@@ -136,7 +136,7 @@ def test_cli_connect_and_print_as_a_user(world, monkeypatch, capsys):
     monkeypatch.setenv("NEXTBOX_ENV_FILE", str(ctx.settings.data_dir / "none.env"))
     monkeypatch.setenv("NEXTBOX_DRY_RUN", "1")
     monkeypatch.setattr(connections, "build_provider", apps)
-    monkeypatch.setattr(connections.Connections.__init__, "__defaults__", (apps,))
+    monkeypatch.setattr(connections.Connections.__init__, "__defaults__", (apps, connections.build_calendar))
     monkeypatch.setattr("getpass.getpass", lambda prompt="": "cli-token")
     assert cli.main(["connect", "sam", "todoist"]) == 0
     assert cli.main(["--user", "sam", "--json", "today"]) == 0

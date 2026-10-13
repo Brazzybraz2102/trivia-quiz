@@ -195,6 +195,8 @@
       </div>
     </div>
 
+    <div class="card" id="todayCard" hidden><h2>Today's calendar</h2><div id="todayEvents"></div></div>
+
     <div class="card"><h2>Brain dump</h2>
       <textarea id="dumpText" placeholder="Everything on your mind, one per line. Don't sort it, just get it out."></textarea>
       <p class="muted hint">Optional: <code>#errand</code> tag · <code>!</code> urgent · <code>tomorrow</code> <code>fri</code> · <code>3pm</code> · <code>~15m</code> how long · <code>every day</code></p>
@@ -268,6 +270,17 @@
       <label class="setting"><div class="label"><b>Gentle words</b><span>"waiting 3d" instead of "overdue 3d", and "Not today" for the rest.</span></div><input type="checkbox" data-pref="gentle_words"></label>
       <label class="setting"><div class="label"><b>Show yesterday's wins</b><span>"Yesterday you finished 4. ✓" on the daily ticket.</span></div><input type="checkbox" data-pref="show_wins"></label>
       <label class="setting"><div class="label"><b>Print the next tiny step</b><span>Under each task that has steps.</span></div><input type="checkbox" data-pref="show_next_step"></label>
+    </div>
+
+    <div class="card"><h2>Calendars</h2>
+      <p class="muted">Today's events show on My list and print at the top of your daily ticket. Next Box only reads them.</p>
+      <div id="calList">…</div>
+      <h3>Add a calendar</h3>
+      <div class="row"><select id="calKind" aria-label="Kind of calendar"></select></div>
+      <div id="calFields"></div>
+      <div class="row"><button class="go" id="calGo">Add calendar</button><span id="calMsg" class="err"></span></div>
+      <details class="muted" style="margin-top:10px"><summary>Which calendars work?</summary><div id="calOther"></div></details>
+      <label class="setting"><div class="label"><b>Print today's calendar</b><span>At the top of the daily ticket.</span></div><input type="checkbox" data-pref="show_calendar"></label>
     </div>
 
     <div class="card" id="appCard"><h2>Linked to-do app (optional)</h2>

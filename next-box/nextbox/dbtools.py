@@ -108,6 +108,9 @@ def _mask(columns: list[str], row: tuple) -> list:
             data = json.loads(val) if isinstance(val, str) else dict(val)
             data.pop("secret", None)
             val = json.dumps(data)
+        elif col == "calendars" and val:
+            data = json.loads(val) if isinstance(val, str) else list(val)
+            val = json.dumps([{k: v for k, v in c.items() if k != "secret"} for c in data])
         elif col == "png" and val:
             val = f"<image, {len(val):,} bytes>"
         out.append(val)

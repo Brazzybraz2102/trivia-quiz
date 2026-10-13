@@ -398,3 +398,30 @@ Endpoints: `GET /super/overview`, `GET /super/users`, `GET /super/users.csv`,
   refuses a non-empty target and resets id counters), and sets `DATABASE_URL`. New columns in
   later versions are added automatically (`db._add_missing_columns`, nullable columns only).
 
+## 20. Every major to-do app and calendar
+**To-do apps** (`nextbox/providers/`, one linked app per person, next to My list):
+- token: Todoist, CalDAV, Notion (`notion.py`: finds the title, a Checkbox or Status column for done,
+  a Date column and a Multi-select for tags; delete = Notion's trash), Asana (`asana.py`: tasks
+  assigned to you in one workspace).
+- sign-in (`oauth.py`): Google Tasks, Microsoft To Do, TickTick. Authorization code + PKCE, a
+  single-use `state` (10 minutes, in memory) that names the person who started it, so the
+  callback needs no cookie. Only tokens are kept, sealed; access tokens are refreshed when needed
+  and a rotated refresh token is saved back. Shown as "needs setup" until the owner puts
+  `<APP>_CLIENT_ID`, `<APP>_CLIENT_SECRET` and `NEXTBOX_PUBLIC_URL` in `.env`.
+- not possible: Apple Reminders, Things, Any.do, Google Keep (no way in for other apps).
+Ids that need a list id too, or contain / + =, are packed (`providers/ids.py`: `gt.`/`ms.`/`tt.` +
+base64url) so they're safe in URLs.
+
+**Calendars** (`nextbox/calendars.py`, up to 8 per person, read-only, never stored):
+subscription links (.ics, repeats expanded, 5 MB cap, 5-minute cache), CalDAV accounts, and
+Google Calendar / Outlook by sign-in. `GET /calendars/today`; the daily ticket prints a SCHEDULE
+box (no checkboxes, up to 8 events) above the tasks (`show_calendar` pref). A calendar that fails
+is named in the ticket's note; the ticket still prints.
+
+**Addresses people type are checked** (`providers/http.check_public_url`): https only, and never
+a private, loopback or link-local address, including after redirects. `NEXTBOX_ALLOW_PRIVATE_URLS=1`
+allows a CalDAV server on the home network.
+
+The session cookie is SameSite=Lax (was Strict) so returning from a sign-in page keeps you
+signed in; cookie-authenticated writes are still refused unless their Origin is this site.
+

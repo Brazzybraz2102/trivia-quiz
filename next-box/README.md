@@ -224,6 +224,47 @@ From the command line:
 .venv/bin/nextbox doctor                      # checks the setup and says what to fix
 ```
 
+## Which apps and calendars work
+| App | How people connect | Works today? |
+|---|---|---|
+| Next Box's own list | built in | yes |
+| Todoist | paste an API token | yes |
+| Notion (a to-do database) | paste an integration token + the database link | yes |
+| Asana (tasks assigned to you) | paste a personal access token | yes |
+| Nextcloud, Fastmail, Synology, Zoho task lists | CalDAV address + app password | yes |
+| Google Tasks | Sign in with Google | after the owner setup below |
+| Microsoft To Do (Outlook tasks) | Sign in with Microsoft | after the owner setup below |
+| TickTick | Sign in with TickTick | after the owner setup below |
+| Apple Reminders, Things, Any.do, Google Keep | not possible: these apps don't let other apps in | use My list |
+
+| Calendar | How | Works today? |
+|---|---|---|
+| Google Calendar, Outlook, iCloud, Proton, Yahoo, Fastmail... | paste the calendar's subscription (.ics) link | yes |
+| iCloud, Fastmail, Nextcloud | CalDAV account (iCloud: app-specific password) | yes |
+| Google Calendar, Outlook / Microsoft 365 | Sign in with Google / Microsoft | after the owner setup below |
+
+Each person links one to-do app and up to 8 calendars (Settings). Calendars are read-only: today's
+events show on My list and print in a SCHEDULE box at the top of the daily ticket.
+
+### Sign-in apps: one-time owner setup
+"Sign in with Google / Microsoft / TickTick" needs Next Box registered with each company (free)
+and a public https address for the sign-in to return to, so do this after the Cloudflare address
+works. In `.env` set `NEXTBOX_PUBLIC_URL=https://nextbox.<your domain>`, then for each one you want:
+
+- **Google** (Tasks + Calendar): console.cloud.google.com → new project → enable *Google Tasks API*
+  and *Google Calendar API* → OAuth consent screen (External, add your testers' emails as test
+  users) → Credentials → OAuth client ID → Web application → Authorized redirect URI
+  `https://nextbox.<your domain>/connect/google/callback`. Put the id and secret in `.env` as
+  `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+- **Microsoft** (To Do + Outlook Calendar): entra.microsoft.com → App registrations → New
+  registration → "Accounts in any organizational directory and personal Microsoft accounts" →
+  Redirect URI (Web) `https://nextbox.<your domain>/connect/microsoft/callback` → Certificates &
+  secrets → New client secret. `.env`: `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`.
+- **TickTick**: developer.ticktick.com → Manage Apps → New App → OAuth redirect URL
+  `https://nextbox.<your domain>/connect/ticktick/callback`. `.env`: `TICKTICK_CLIENT_ID`, `TICKTICK_CLIENT_SECRET`.
+
+Then `systemctl --user restart nextbox` and `.venv/bin/nextbox doctor` shows which are on.
+
 ## Everyday use
 | Want | Do |
 |---|---|

@@ -4,7 +4,9 @@ Read SPEC.md first. Its §1 rules override everything:
 
 - Each task lives in one list: the built-in list (`tasks` table, `nextbox/mylist.py`, SPEC §17) or a linked app.
   Never copy, cache or sync a linked app's tasks into the database.
-  New apps go in `nextbox/providers/` behind `TaskProvider`. Never let one person reach another's tasks or tickets.
+  New apps go in `nextbox/providers/` behind `TaskProvider`; calendars behind `CalendarSource` (read-only, never stored).
+  Never let one person reach another's tasks, calendars or tickets.
+- Any address a person types (CalDAV, .ics links) goes through `providers.http.check_public_url` before Next Box fetches it.
 - Never send a real print unless Mike says "print it". Use `nextbox --dry-run ...` or `NEXTBOX_DRY_RUN=1`.
 - Never add an automatic print, cron or retry. The only automatic print is HA's `source="auto"`, guarded by `Store.claim_auto`.
 - Deleting a task always needs the person's explicit confirmation.
