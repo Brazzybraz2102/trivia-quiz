@@ -66,4 +66,8 @@ def test_version_and_credit(ctx):
     ctx.settings.credit = "Created by Mike"
     c = TestClient(create_app(ctx))
     v = c.get("/version").json()
-    assert v["version"] == "0.6.0" and v["credit"] == "Created by Mike" and "build" in v
+    import tomllib
+
+    from nextbox.config import PROJECT_DIR
+    expected = tomllib.loads((PROJECT_DIR / "pyproject.toml").read_text())["project"]["version"]
+    assert v["version"] == expected and v["credit"] == "Created by Mike" and "build" in v

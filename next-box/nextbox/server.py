@@ -1502,11 +1502,17 @@ def _safe_args(args: tuple, kwargs: dict) -> dict:
 
 
 def _version() -> str:
+    """pyproject.toml is the source of truth (installed metadata can lag behind an update)."""
     try:
-        from importlib.metadata import version
-        return version("nextbox")
+        import tomllib
+        with open(PROJECT_DIR / "pyproject.toml", "rb") as fh:
+            return tomllib.load(fh)["project"]["version"]
     except Exception:
-        return "dev"
+        try:
+            from importlib.metadata import version
+            return version("nextbox")
+        except Exception:
+            return "dev"
 
 
 def build_default_app() -> FastAPI:

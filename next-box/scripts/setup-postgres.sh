@@ -14,6 +14,8 @@ if grep -q '^DATABASE_URL=' .env; then
   echo "Next Box already uses PostgreSQL (DATABASE_URL is in .env). Nothing to do."
   exit 0
 fi
+# (If .env lost its DATABASE_URL, e.g. an older .env was copied in, running this again is safe:
+#  it sets a fresh password and keeps the data already in PostgreSQL.)
 
 echo "Installing PostgreSQL (this may ask for your computer password)..."
 sudo apt-get install -y postgresql postgresql-client >/dev/null
@@ -39,7 +41,10 @@ URL="postgresql://nextbox:$PW@127.0.0.1:5432/nextbox"
 
 .venv/bin/pip install -q -c constraints.txt -e '.[dev,postgres]'
 DATA="$(.venv/bin/python -c 'from nextbox.config import load_settings; print(load_settings().data_dir)')"
-if [[ -f "$DATA/nextbox.db" ]]; then
+HAS_DATA="$(sudo -u postgres psql -tAc "SELECT 1 FROM information_schema.tables WHERE table_name='users'" nextbox || true)"
+if [[ "$HAS_DATA" == "1" ]] && [[ "$(sudo -u postgres psql -tAc 'SELECT COUNT(*) FROM users' nextbox)" != "0" ]]; then
+  echo "PostgreSQL already has your Next Box data; keeping it."
+elif [[ -f "$DATA/nextbox.db" ]]; then
   echo "Copying your accounts, lists and history from $DATA/nextbox.db ..."
   printf '%s' "$URL" | .venv/bin/nextbox db copy-to -
 fi
