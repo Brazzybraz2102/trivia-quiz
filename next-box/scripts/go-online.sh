@@ -24,7 +24,7 @@ else
   echo "then press Enter. Nothing will show while you paste; that's on purpose."
   read -rs PASTED
   echo
-  TOKEN="$(printf '%s' "$PASTED" | grep -oE 'eyJ[A-Za-z0-9_=-]{40,}' | head -1 || true)"
+  TOKEN="$(printf '%s' "$PASTED" | grep -oE 'eyJ[A-Za-z0-9_+/=-]{40,}' | head -1 || true)"
   unset PASTED
   if [[ -z "$TOKEN" ]]; then
     echo "That didn't contain a tunnel token. Copy the whole command again and re-run this script."
