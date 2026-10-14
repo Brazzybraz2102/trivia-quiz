@@ -224,6 +224,25 @@ From the command line:
 .venv/bin/nextbox doctor                      # checks the setup and says what to fix
 ```
 
+## Online at nextbox.braznarkel.com (Cloudflare Tunnel)
+Testers open `https://nextbox.braznarkel.com` on their phones. A Cloudflare Tunnel carries it to
+this computer; nothing on your router changes. The shared `NEXTBOX_KEY` (Home Assistant) only works
+on the home network, the API explorer is off (`NEXTBOX_API_DOCS=1` turns it on), and sign-in limits
+use each visitor's real address.
+
+1. dash.cloudflare.com → **Zero Trust** → **Networks → Tunnels** → **Create a tunnel** →
+   Cloudflared → name it `home-pc`.
+2. Choose Debian, copy the **install and run** command it shows, and paste it into this computer's
+   terminal. It installs `cloudflared` as a service that starts at boot. (The long token in that
+   command is a secret: don't share it.)
+3. **Public hostname**: subdomain `nextbox`, domain `braznarkel.com`, type `HTTP`, URL
+   `localhost:8787` → Save.
+4. In `~/next-box/.env` add `NEXTBOX_PUBLIC_URL=https://nextbox.braznarkel.com`, then
+   `systemctl --user restart nextbox`.
+5. Open `https://nextbox.braznarkel.com/app/` on your phone with Wi-Fi off.
+
+Later projects: add another public hostname to the same tunnel (e.g. `next` → `localhost:9000`).
+
 ## Which apps and calendars work
 | App | How people connect | Works today? |
 |---|---|---|

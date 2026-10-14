@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import platform
 import re
 import secrets
@@ -234,7 +235,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                calendar_builder=None) -> FastAPI:
     """`ctx.tasks_factory`, when set, is one to-do app shared by everyone (tests only).
     Otherwise each person's own connection is used."""
-    app = FastAPI(title="Next Box", docs_url="/docs")
+    # The API explorer is off unless asked for: once Next Box is on the internet, nobody needs a map.
+    show_docs = os.environ.get("NEXTBOX_API_DOCS", "").strip() in ("1", "true", "yes")
+    app = FastAPI(title="Next Box", docs_url="/docs" if show_docs else None, redoc_url=None,
+                  openapi_url="/openapi.json" if show_docs else None)
     # No allow_credentials: cookies only work same-origin; other clients use headers.
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                        allow_headers=["*"])
@@ -243,6 +247,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     async def security_headers(request: Request, call_next):
         response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        if request.url.scheme == "https":  # reached through the Cloudflare address: https only from now on
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault("Content-Security-Policy",
                                     "default-src 'self'; img-src 'self' data: blob:; "
@@ -272,6 +278,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     def auth(request: Request, x_nextbox_key: str | None = Header(default=None)) -> Caller:
         if x_nextbox_key:
+            if from_internet(request):
+                # Home Assistant and scripts are on the home network. The shared key never works
+                # through the public address, so it can't be guessed from outside.
+                raise HTTPException(403, "the Next Box key only works on the home network")
             if key and secrets.compare_digest(x_nextbox_key.encode(), key.encode()):
                 return Caller("key", role="service")
             raise HTTPException(401, "wrong X-NextBox-Key")
@@ -289,6 +299,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(403, "Choose your own password first (Settings → Account).")
         return Caller(name, role=user["role"], debug=user["debug"], token=token, prefs=user["prefs"],
                       household=user["household_id"])
+
+    def from_internet(request: Request) -> bool:
+        """Came in through Cloudflare (it adds these headers; a home-network request never has them)."""
+        return any(h in request.headers for h in ("cf-connecting-ip", "cf-ray", "cdn-loop"))
 
     def require(min_role: str):
         def dep(caller: Caller = Depends(auth)) -> Caller:

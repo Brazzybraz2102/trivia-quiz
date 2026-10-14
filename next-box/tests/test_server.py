@@ -132,3 +132,15 @@ def test_password_change_and_removal_sign_out(ctx):
 def test_scan_refuses_files_that_arent_photos(ctx):
     r = client(ctx).post("/scan", headers=H, files={"photo": ("p.jpg", b"not a photo", "image/jpeg")})
     assert r.status_code == 415 and "photo" in r.json()["detail"]
+
+
+def test_ready_for_the_internet(ctx):
+    c = client(ctx)
+    assert c.get("/docs").status_code == 404 and c.get("/openapi.json").status_code == 404
+    # The shared key works on the home network...
+    assert c.get("/status", headers=H).status_code == 200
+    # ...but never through the Cloudflare address.
+    r = c.get("/status", headers={**H, "CF-Connecting-IP": "203.0.113.9", "CF-Ray": "abc"})
+    assert r.status_code == 403 and "home network" in r.json()["detail"]
+    secure = TestClient(create_app(ctx), base_url="https://nextbox.example.com")
+    assert "max-age" in secure.get("/health").headers.get("strict-transport-security", "")

@@ -314,7 +314,10 @@ def main(argv: list[str] | None = None) -> int:
             from .server import build_default_app
 
             # No access log: request lines (IP + time) would let someone match people to feedback.
-            uvicorn.run(build_default_app(), host=settings.host, port=settings.port, access_log=False)
+            # proxy_headers: behind the Cloudflare tunnel (which connects from this computer), use the
+            # visitor's real address for sign-in limits and https for cookies. Only trusted from localhost.
+            uvicorn.run(build_default_app(), host=settings.host, port=settings.port, access_log=False,
+                        proxy_headers=True, forwarded_allow_ips="127.0.0.1,::1")
             return 0
         if args.cmd == "printed":
             for r in ctx.store.list_printed(args.n, by=who):
