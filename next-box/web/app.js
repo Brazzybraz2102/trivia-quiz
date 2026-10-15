@@ -1352,7 +1352,10 @@ function dayCard(d) {
   return `<div class="card jday"><h3>${esc(dayName(d.day))}</h3>${wins}${pages}</div>`;
 }
 
+function fitText(t) { t.style.height = "auto"; t.style.height = (t.scrollHeight + 4) + "px"; }
+
 function wireJournal() {
+  $$("#jDays textarea").forEach((t) => { fitText(t); t.oninput = () => fitText(t); });  // show the whole page of notes
   $$("#jDays [data-jsave]").forEach((b) => b.onclick = async () => {
     const page = b.closest("[data-page]");
     try { await api(`/journal/${page.dataset.page}`, { method: "PATCH", json: { notes: page.querySelector("textarea").value } }); toast("Saved"); }
