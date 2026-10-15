@@ -76,6 +76,7 @@ tickets = Table(
     Column("created_at", String(19), nullable=False),
     Column("record", JSON, nullable=False),
     Column("png", LargeBinary, nullable=True),
+    Column("parts", LargeBinary, nullable=True),  # stickers: each one's image (a small zip), for printing on paper
     Index("ix_tickets_by_time", "by", "created_at"),
     Index("ix_tickets_household_time", "household_id", "created_at"),
 )

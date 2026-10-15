@@ -425,3 +425,10 @@ allows a CalDAV server on the home network.
 The session cookie is SameSite=Lax (was Strict) so returning from a sign-in page keeps you
 signed in; cookie-authenticated writes are still refused unless their Origin is this site.
 
+## 21. Print on paper (any printer)
+`GET /printed/{id}/pdf?paper=letter|a4` (owner or superadmin; default from the `paper_size` pref)
+returns a PDF made by `nextbox/paper.py`: stickers at real size (300 dpi) in rows with dashed cut
+lines, as many pages as needed; any other ticket 3.5 in wide, split across pages if long. Sticker
+images are kept per ticket in `tickets.parts` (a small zip of PNGs). Next Box never sends the PDF to
+a printer; the person prints it from their device.
+

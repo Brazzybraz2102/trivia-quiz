@@ -284,6 +284,14 @@ works. In `.env` set `NEXTBOX_PUBLIC_URL=https://nextbox.<your domain>`, then fo
 
 Then `systemctl --user restart nextbox` and `.venv/bin/nextbox doctor` shows which are on.
 
+## Print on any printer
+Every ticket, sticker set and card has a **Print on paper** button. It opens a PDF laid out on US
+Letter or A4 (Settings → Printing) that people print the normal way from their phone or computer.
+Stickers keep their real label size in a grid with cut lines, so full-sheet sticker paper (Avery
+5165 / L7167 or similar) becomes a sheet of stickers. Lists and cards print 3.5 inches wide and
+continue on the next page if they're long. Next Box never sends these to a printer itself: the
+person prints them.
+
 ## Getting new people started
 - **Quick start page:** `https://nextbox.braznarkel.com/app/guide.html` explains everything in 10 short
   sections. Send it with an invite. It's also linked from the sign-in page and Settings → Help.

@@ -111,7 +111,7 @@ def _is_late(task: dict, today: date) -> bool:
     return bool(due) and due[:10] < today.isoformat()
 
 
-NO_PRINTER = "Your household has no printer yet, so this is a preview. An admin can add one under Admin → Printers."
+NO_PRINTER = "No label printer in your household yet. Tap Print on paper to print it on any printer."
 
 
 def _available(ctx: Context) -> list[PrinterConfig]:
@@ -174,7 +174,7 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
         record["note"] = note
     if text:
         record["text"] = text
-    ctx.store.save_printed(record, png=img)
+    ctx.store.save_printed(record, png=img, parts=drawn if isinstance(drawn, list) and len(drawn) > 1 else None)
     return {"status": "printed" if sent else "dry_run", **record}
 
 

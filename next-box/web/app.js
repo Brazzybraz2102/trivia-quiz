@@ -309,7 +309,7 @@ function showPrint(r) {
   if (r.status === "skipped") { box.innerHTML = `<b>Skipped</b> ${esc(r.reason)}`; return; }
   const one = (t) => `<p><b>${t.status === "printed" ? "Printed" : "Preview"}</b> #${esc(t.id)} · ${t.manifest.length} rows
     ${t.printer ? ` · ${sw(t.printer.color)}${esc(t.printer.name)}` : ""}</p>${t.note ? `<p class="muted">${esc(t.note)}</p>` : ""}
-    <img src="${png(t.id)}" alt="ticket preview">`;
+    ${paperButton(t.id)}<img src="${png(t.id)}" alt="ticket preview">`;
   box.innerHTML = [...(r.also || []), r].map(one).join("<hr>");
 }
 
@@ -808,7 +808,7 @@ async function printFrom(path, body, button) {
     const r = await api(path, { method: "POST", json: { ...body, dry_run } });
     box.hidden = false;
     const one = (t) => `<p><b>${t.status === "printed" ? "Printed" : "Preview"}</b> #${esc(t.id)} · ${t.manifest.length} task${t.manifest.length === 1 ? "" : "s"}
-      ${t.printer ? ` · ${esc(t.printer.name)}` : ""}</p>${t.note ? `<p class="muted">${esc(t.note)}</p>` : ""}<img src="${png(t.id)}" alt="label preview">`;
+      ${t.printer ? ` · ${esc(t.printer.name)}` : ""}</p>${t.note ? `<p class="muted">${esc(t.note)}</p>` : ""}${paperButton(t.id)}<img src="${png(t.id)}" alt="label preview">`;
     box.innerHTML = [r, ...(r.also || [])].map(one).join("<hr>");
     box.scrollIntoView({ behavior: "smooth", block: "nearest" });
     loadGuide();
@@ -1237,8 +1237,8 @@ const STEPS = {
   calendar: { title: "Add your calendar (optional)", text: "Today's events show here and print at the top of your daily ticket. Google, Outlook and iCloud all work.",
               go: ["Add a calendar", () => goto("settings", "#calCard")], skip: true },
   printer: { title: () => guide?.can_add_printer ? "Add your label printer" : "Your printer",
-             text: () => guide?.can_add_printer ? "Admin → Printers. Not ready yet? Everything still works as previews."
-                                                : "Whoever runs your household adds the printer. Until then you'll see previews of everything.",
+             text: () => guide?.can_add_printer ? "Admin → Printers for a label printer. No label printer? Every ticket has Print on paper, which works with any printer."
+                                                : "No label printer? Every ticket has Print on paper, which works with any printer. A household admin can add a label printer later.",
              go: () => guide?.can_add_printer ? ["Add printer", () => goto("admin", "#printerList")] : null, skip: true },
   preview: { title: "Make your first stickers", text: "Tick a task or two and tap Stickers. With “Preview only” on, nothing prints: you just see how it looks.",
              go: ["Show me", () => $(".printbar").scrollIntoView({ behavior: "smooth", block: "center" })] },
@@ -1293,3 +1293,10 @@ $("#guideShow").onclick = async () => {
   goto("mylist", "#guideCard");
   loadGuide();
 };
+
+
+// ---------------------------------------------------------------- print on paper (any printer)
+function paperButton(id) {
+  return `<div class="row"><a class="go small" style="text-decoration:none" href="/printed/${encodeURIComponent(id)}/pdf" target="_blank" rel="noopener">Print on paper</a>
+    <span class="muted">Any printer: opens a page, then use your phone's or computer's Print.</span></div>`;
+}

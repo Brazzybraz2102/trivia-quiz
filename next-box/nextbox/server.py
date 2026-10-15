@@ -825,6 +825,27 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(404)
         return FileResponse(path, media_type="image/png")
 
+    @app.get("/printed/{label_id}/pdf")
+    def printed_pdf(label_id: str, paper: str = "", caller: Caller = Depends(auth)):
+        """Print on paper: the ticket laid out on a Letter or A4 page, for any printer."""
+        from . import paper as paper_pdf
+        label_id = normalize_id(label_id)
+        if not re.fullmatch(r"[A-Z0-9-]{4,16}", label_id):
+            raise HTTPException(404)
+        rec = ctx.store.get_printed(label_id)
+        if not rec or (rec.get("by") != acting_as(caller) and caller.role != "superadmin"):
+            raise HTTPException(404)
+        png = ctx.store.get_png(label_id)
+        if not png:
+            raise HTTPException(404)
+        size = paper or caller.prefs.get("paper_size", "letter")
+        if size not in paper_pdf.PAGES:
+            raise HTTPException(400, "paper is letter or a4")
+        data = paper_pdf.ticket_pdf(png, ctx.store.get_parts(label_id), size)
+        events.log(caller.name, "print_paper", detail={"id": label_id, "paper": size})
+        return Response(data, media_type="application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="next-box-{label_id}.pdf"'})
+
     @app.post("/scan")
     async def do_scan(photo: UploadFile = File(...), label_id: str | None = Form(default=None),
                       caller: Caller = Depends(auth)):

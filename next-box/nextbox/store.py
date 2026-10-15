@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import zipfile
 import os
 import secrets
 from collections.abc import Iterator
@@ -23,6 +24,25 @@ ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 def normalize_id(label_id: str) -> str:
     return label_id.strip().lstrip("#").upper()
+
+
+def _zip_images(images: list) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, img in enumerate(images):
+            one = io.BytesIO()
+            img.convert("L").save(one, "PNG")
+            z.writestr(f"{n:03d}.png", one.getvalue())
+    return buf.getvalue()
+
+
+def _unzip_images(data: bytes) -> list:
+    from PIL import Image
+    out = []
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for name in sorted(z.namelist())[:100]:
+            out.append(Image.open(io.BytesIO(z.read(name))).convert("L"))
+    return out
 
 
 class Store:
@@ -76,8 +96,9 @@ class Store:
     def png_path(self, label_id: str) -> Path:
         return self.root / "png" / f"{label_id}.png"
 
-    def save_printed(self, record: dict, png=None) -> None:
-        """`png` is a PIL image or PNG bytes; it's kept with the record."""
+    def save_printed(self, record: dict, png=None, parts: list | None = None) -> None:
+        """`png` is a PIL image or PNG bytes; it's kept with the record. `parts` (images) are the
+        separate stickers, kept so they can be laid out on a sheet of paper later."""
         data = None
         if png is not None:
             if hasattr(png, "save"):
@@ -91,7 +112,13 @@ class Store:
             conn.execute(delete(db.tickets).where(db.tickets.c.id == record["id"]))
             conn.execute(insert(db.tickets).values(
                 id=record["id"], household_id=record.get("household_id") or "home", by=record.get("by", ""),
-                created_at=record["created_at"][:19], record=record, png=data))
+                created_at=record["created_at"][:19], record=record, png=data,
+                parts=_zip_images(parts) if parts else None))
+
+    def get_parts(self, label_id: str) -> list | None:
+        with self.db.connect() as conn:
+            row = conn.execute(select(db.tickets.c.parts).where(db.tickets.c.id == normalize_id(label_id))).first()
+        return _unzip_images(row[0]) if row and row[0] else None
 
     def get_png(self, label_id: str) -> bytes | None:
         with self.db.connect() as conn:
