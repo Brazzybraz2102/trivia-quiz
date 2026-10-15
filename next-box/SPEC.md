@@ -451,3 +451,11 @@ theme, text size (`text_size`), the screen it opens to (`start_tab`), 24-hour ti
 tasks go. `/app/` is served with `app.js?v=<version>-<build>` and every `/app` response says
 `Cache-Control: no-cache`, so phones and Cloudflare never keep showing an old version.
 
+## 24. Standard app pages and navigation
+Static pages in `web/`: privacy.html, terms.html, about.html, guide.html, 404.html (shared
+pages.css/pages.js; operator, contact, version and retention come from the public `GET /about`, set
+by `NEXTBOX_OPERATOR` and `NEXTBOX_CONTACT`). Unknown addresses get the 404 page when a browser asks for
+HTML, JSON otherwise. `POST /auth/signup` needs `agree: true`; the sign-up event records
+`terms_version` (`TERMS_VERSION`). Phones (≤720 px) get a bottom tab bar with a More sheet holding
+the other tabs and the legal/help links; an offline banner follows the browser's online state.
+

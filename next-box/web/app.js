@@ -84,7 +84,7 @@ $("#noticeDialog").addEventListener("cancel", (e) => e.preventDefault());  // mu
 
 // ---------------------------------------------------------------- revision mark
 api("/version").then((v) => {
-  $("#revmark").textContent = ["Next Box rev " + v.version, v.build, v.credit].filter(Boolean).join(" · ");
+  $("#revText").textContent = ["Next Box rev " + v.version, v.build, v.credit].filter(Boolean).join(" · ");
 }).catch(() => {});
 
 // ---------------------------------------------------------------- printers & label colors
@@ -293,8 +293,11 @@ $("#logout").onclick = async () => { await api("/auth/logout", { method: "POST" 
 const loaders = { mylist: () => { loadList(); loadToday(); loadGuide(); }, printed: loadHistory, profile: () => loadProfile(),
                   settings: () => { loadLabels(); loadTags(); loadCalendars(); }, admin: () => { loadAdmin(); loadPrinters(); loadInvites(); },
                   debug: loadDebug, board: () => loadBoard(), usage: () => loadUsage() };
-$$("nav button").forEach((b) => b.onclick = () => {
-  $$("nav button").forEach((x) => x.classList.toggle("on", x === b));
+$$("#topnav button").forEach((b) => b.onclick = () => {
+  $$("#topnav button").forEach((x) => { x.classList.toggle("on", x === b); x.toggleAttribute("aria-current", x === b); if (x === b) x.setAttribute("aria-current", "page"); });
+  $$(".bottombar [data-go]").forEach((x) => x.classList.toggle("on", x.dataset.go === b.dataset.tab));
+  $("#moreBtn").classList.toggle("on", !["mylist", "print", "scan"].includes(b.dataset.tab));
+  window.scrollTo(0, 0);
   $$("section").forEach((s) => s.classList.toggle("on", s.id === b.dataset.tab));
   $("#dryRow").hidden = !["mylist", "print"].includes(b.dataset.tab);  // only where things get printed
   loaders[b.dataset.tab]?.();
@@ -439,7 +442,7 @@ $("#signoutOthers").onclick = async () => {
 
 // ---------------------------------------------------------------- feedback (anonymous)
 let fbMode = "guided";
-const currentPage = () => (me ? document.querySelector("nav button.on")?.dataset.tab : "login") || "";
+const currentPage = () => (me ? document.querySelector("#topnav button.on")?.dataset.tab : "login") || "";
 
 function pick(group, el) { $$(`${group} button`).forEach((b) => b.classList.toggle("on", b === el)); }
 $$("#fbType button").forEach((b) => b.onclick = () => pick("#fbType", b));
@@ -458,7 +461,7 @@ function openFeedback() {
   $("#fbDialog").showModal();
 }
 document.addEventListener("click", (e) => { if (e.target.closest("[data-feedback]")) { e.preventDefault(); openFeedback(); } });
-document.addEventListener("click", (e) => { const g = e.target.closest("[data-goto]"); if (g) $(`nav button[data-tab=${g.dataset.goto}]`).click(); });
+document.addEventListener("click", (e) => { const g = e.target.closest("[data-goto]"); if (g) $(`#topnav button[data-tab=${g.dataset.goto}]`).click(); });
 $("#fbClose").onclick = () => $("#fbDialog").close();
 
 $("#fbSend").onclick = async () => {
@@ -475,7 +478,7 @@ $("#fbSend").onclick = async () => {
     const item = await api("/feedback", { method: "POST", json: body });
     $("#fbDone").innerHTML = `<p class="ok"><b>Posted anonymously. Thank you!</b> Here's exactly what everyone will see:</p>${feedbackCard(item, false)}`;
     $("#fbDone").hidden = false; $("#fbSend").hidden = true;
-    if (document.querySelector("nav button.on")?.dataset.tab === "board") loadBoard();
+    if (document.querySelector("#topnav button.on")?.dataset.tab === "board") loadBoard();
   } catch (e) { $("#fbErr").textContent = e.message; }
   finally { $("#fbSend").disabled = false; }
 };
@@ -1103,7 +1106,7 @@ $("#joinForm").onsubmit = async (e) => {
   $("#joinMsg").textContent = "";
   try {
     await api("/auth/signup", { method: "POST", json: { invite: $("#joinCode").value, username: $("#joinUser").value,
-      email: $("#joinEmail").value || null, password: $("#joinPass").value } });
+      email: $("#joinEmail").value || null, password: $("#joinPass").value, agree: $("#joinAgree").checked } });
     $("#joinPass").value = "";
     history.replaceState(null, "", location.pathname);
     boot();
@@ -1218,7 +1221,7 @@ async function loadToday() {
   if (m) {
     const msg = decodeURIComponent(m[1]);
     history.replaceState(null, "", location.pathname);
-    setTimeout(() => { toast(msg); $("nav button[data-tab=settings]")?.click(); }, 600);
+    setTimeout(() => { toast(msg); $("#topnav button[data-tab=settings]")?.click(); }, 600);
   }
 }
 
@@ -1227,7 +1230,7 @@ async function loadToday() {
 const isApp = () => window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
 const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
 function goto(tab, selector) {
-  $(`nav button[data-tab=${tab}]`)?.click();
+  $(`#topnav button[data-tab=${tab}]`)?.click();
   setTimeout(() => { const el = selector && $(selector); if (el) { el.scrollIntoView({ behavior: "smooth", block: "start" }); el.querySelector?.("textarea,input,select")?.focus?.(); } }, 150);
 }
 let guide = null;
@@ -1429,3 +1432,28 @@ $("#setJump").onclick = (e) => {
   const b = e.target.closest("[data-jump]");
   if (b) document.getElementById(b.dataset.jump)?.scrollIntoView({ behavior: "smooth", block: "start" });
 };
+
+
+// ---------------------------------------------------------------- phone navigation, offline
+$$(".bottombar [data-go]").forEach((b) => b.onclick = () => $(`#topnav button[data-tab=${b.dataset.go}]`).click());
+$("#moreBtn").onclick = () => {
+  const tabs = $$("#topnav button").filter((b) => !b.hidden && !["mylist", "print", "scan"].includes(b.dataset.tab));
+  const icons = { printed: "🧾", board: "💬", profile: "👤", settings: "⚙️", admin: "🛠️", superusers: "👥", usage: "📊", debug: "🐞" };
+  $("#moreMenu").innerHTML = tabs.map((b) => `<button data-more="${b.dataset.tab}">${icons[b.dataset.tab] || "•"} ${esc(b.textContent)}</button>`).join("");
+  $("#moreDialog").showModal();
+};
+$("#moreMenu").onclick = (e) => {
+  const b = e.target.closest("[data-more]");
+  if (!b) return;
+  $("#moreDialog").close();
+  $(`#topnav button[data-tab=${b.dataset.more}]`).click();
+};
+$("#moreClose").onclick = () => $("#moreDialog").close();
+const setOnline = () => { $("#offlineBanner").hidden = navigator.onLine; };
+window.addEventListener("online", setOnline);
+window.addEventListener("offline", setOnline);
+setOnline();
+window.addEventListener("unhandledrejection", (e) => {
+  const msg = String(e.reason?.message || e.reason || "");
+  toast(msg.includes("fetch") || msg.includes("NetworkError") ? "Can't reach Next Box. Check your connection." : "Something went wrong. Try again.");
+});

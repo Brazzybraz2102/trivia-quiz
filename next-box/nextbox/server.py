@@ -24,7 +24,7 @@ from urllib.parse import quote, urlparse
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -221,6 +221,10 @@ class SignupBody(BaseModel):
     password: str
     invite: str
     email: str | None = None
+    agree: bool = False  # the Terms of Use and Privacy Policy
+
+
+TERMS_VERSION = 1  # bump when terms.html or privacy.html change in a way people should re-read
 
 
 class InviteBody(BaseModel):
@@ -461,6 +465,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(429, "too many attempts; wait 5 minutes")
         if not body.invite.strip():
             raise HTTPException(400, "you need an invite code to join")
+        if not body.agree:
+            raise HTTPException(400, "Please agree to the Terms of Use and Privacy Policy to join.")
         try:
             user = accounts.sign_up(body.username, body.password, email=body.email or None, invite=body.invite)
         except AuthError as exc:
@@ -470,7 +476,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                        detail={"ip": client}, error=str(exc))
             raise HTTPException(400, str(exc)) from exc
         name = user["username"]
-        events.log(name, "signup", kind="auth", detail={"ip": client, "household": user["household_id"]},
+        events.log(name, "signup", kind="auth", detail={"ip": client, "household": user["household_id"],
+                                                        "terms_version": TERMS_VERSION},
                    household=user["household_id"])
         token = accounts.create_session(name, client, request.headers.get("user-agent", ""))
         accounts.touch_login(name)
@@ -516,6 +523,14 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         accounts.record_consent(name, DATA_NOTICE_VERSION)
         events.log(name, "data_notice_accepted", kind="auth", detail={"version": DATA_NOTICE_VERSION})
         return {"ok": True}
+
+    @app.get("/about")
+    def about():
+        """Public facts for the About, Privacy and Terms pages (no sign-in needed)."""
+        return {"name": "Next Box", "version": _version(), "build": build,
+                "operator": os.environ.get("NEXTBOX_OPERATOR", "").strip() or "Braznarkel",
+                "contact": os.environ.get("NEXTBOX_CONTACT", "").strip(),
+                "retention_days": ctx.settings.retention_days, "terms_version": TERMS_VERSION}
 
     @app.get("/version")
     def version():
@@ -1612,6 +1627,16 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         body = json.dumps(bundle, indent=2, ensure_ascii=False, default=str)
         return Response(body, media_type="application/json", headers={
             "Content-Disposition": f'attachment; filename="nextbox-debug-{name}-{time.strftime("%Y%m%d-%H%M")}.json"'})
+
+    @app.exception_handler(404)
+    async def not_found(request: Request, exc):
+        """People get a friendly page; apps and scripts get the usual JSON."""
+        page = Path(WEB_DIR) / "404.html"
+        wants_page = "text/html" in request.headers.get("accept", "") and request.method == "GET"
+        if wants_page and page.exists() and not request.url.path.startswith(("/auth", "/super", "/admin", "/list", "/print")):
+            return Response(page.read_text(), status_code=404, media_type="text/html")
+        detail = getattr(exc, "detail", None) or "Not Found"
+        return JSONResponse({"detail": detail}, status_code=404)
 
     if Path(WEB_DIR).is_dir():
         @app.get("/app/", include_in_schema=False)

@@ -71,18 +71,18 @@ def test_invite_join_and_own_household(site):
     own = boss.post("/admin/invites", json={"own_household": True, "beta": False}).json()
     assert join["link"] == f"/app/#join={join['code']}"
     # No code, no account.
-    assert client().post("/auth/signup", json={"username": "x", "password": "long enough", "invite": ""}).status_code == 400
-    assert client().post("/auth/signup", json={"username": "x", "password": "long enough", "invite": "BAD-CODE-1"}).status_code == 400
+    assert client().post("/auth/signup", json={"username": "x", "password": "long enough", "invite": "", "agree": True}).status_code == 400
+    assert client().post("/auth/signup", json={"username": "x", "password": "long enough", "invite": "BAD-CODE-1", "agree": True}).status_code == 400
     sam = client()
-    r = sam.post("/auth/signup", json={"username": "Sam", "password": "sam password", "invite": join["code"].lower()})
+    r = sam.post("/auth/signup", json={"username": "Sam", "password": "sam password", "invite": join["code"].lower(), "agree": True})
     assert r.status_code == 200 and r.json() == {"username": "sam", "role": "user"}
     assert sam.get("/auth/me").json()["household_id"] == "home" and a.get("sam")["beta"]
     # Used once only.
     assert client().post("/auth/signup", json={"username": "sam2", "password": "long enough",
-                                                "invite": join["code"]}).status_code == 400
+                                                "invite": join["code"], "agree": True}).status_code == 400
     kim = client()
     assert kim.post("/auth/signup", json={"username": "kim", "password": "kim password", "invite": own["code"],
-                                          "email": "kim@example.com"}).status_code == 200
+                                          "email": "kim@example.com", "agree": True}).status_code == 200
     k = a.get("kim")
     assert k["household_id"] != "home" and k["role"] == "admin" and not k["beta"]
     statuses = {i["code"]: i["status"] for i in boss.get("/admin/invites").json()}
@@ -102,7 +102,7 @@ def test_invite_join_and_own_household(site):
 def test_guessing_codes_gets_locked_out(site):
     ctx, a, client, login = site
     c = client()
-    codes = [c.post("/auth/signup", json={"username": f"g{i}", "password": "long enough", "invite": f"AAAA-BBBB-{i:04d}"}).status_code
+    codes = [c.post("/auth/signup", json={"username": f"g{i}", "password": "long enough", "invite": f"AAAA-BBBB-{i:04d}", "agree": True}).status_code
              for i in range(6)]
     assert codes[:5] == [400] * 5 and codes[5] == 429
 

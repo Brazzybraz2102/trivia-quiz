@@ -284,6 +284,17 @@ works. In `.env` set `NEXTBOX_PUBLIC_URL=https://nextbox.<your domain>`, then fo
 
 Then `systemctl --user restart nextbox` and `.venv/bin/nextbox doctor` shows which are on.
 
+## Standard app pages
+- **Privacy Policy** (`/app/privacy.html`), **Terms of Use** (`/app/terms.html`), **About and contact**
+  (`/app/about.html`), **Help** (`/app/guide.html`), and a friendly "page not found". Linked from the
+  sign-in page, the footer and the More menu. Plain-language drafts: have a lawyer review them before
+  you charge money.
+- Set who runs it and how to reach you in `.env`: `NEXTBOX_OPERATOR=Braznarkel` and
+  `NEXTBOX_CONTACT=mike@braznarkel.com`.
+- Joining needs "I agree to the Terms of Use and Privacy Policy" (recorded with the sign-up).
+- On phones: a bottom tab bar (My list, Print, Read back, More) like other apps; an offline notice
+  when the connection drops.
+
 ## Print on any printer
 Every ticket, sticker set and card has a **Print on paper** button. It opens a PDF laid out on US
 Letter or A4 (Settings → Printing) that people print the normal way from their phone or computer.

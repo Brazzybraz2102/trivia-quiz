@@ -152,6 +152,21 @@
   html[data-text="large"] { font-size:19px; } html[data-text="xlarge"] { font-size:22px; }
   html[data-text="large"] body { font-size:19px; } html[data-text="xlarge"] body { font-size:22px; }
   #setJump button { font-size:13px; }
+  :focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
+  #revmark a { color:var(--muted); }
+  .bottombar { display:none; }
+  @media (max-width:720px) {
+    #topnav { display:none; }
+    .bottombar { display:flex; position:fixed; left:0; right:0; bottom:0; z-index:5; background:var(--card); border-top:1px solid var(--line);
+                 padding:6px 4px calc(6px + env(safe-area-inset-bottom)); }
+    .bottombar button, .bottombar button.on { flex:1; background:none; border:0; border-radius:0; color:var(--muted); font:12px system-ui, sans-serif; display:flex; flex-direction:column; align-items:center; gap:2px; padding:4px; cursor:pointer; }
+    .bottombar button span { font-size:20px; line-height:1.1; }
+    .bottombar button.on { color:var(--accent); font-weight:700; }
+    #fb { bottom:calc(76px + env(safe-area-inset-bottom)); width:46px; height:46px; padding:0; border-radius:50%; font-size:0; }
+    #fb::before { content:"💬"; font-size:20px; }
+    #revmark { padding-bottom:110px; }
+    .printbar { bottom:calc(64px + env(safe-area-inset-bottom)); }
+  }
   .tagrow { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
   @media (max-width:520px) { .setting { flex-wrap:wrap; } }
 </style>
@@ -170,6 +185,7 @@
   </form>
   <p class="muted" style="text-align:center"><button class="linkish" id="showJoin">Have an invite code? Join</button>
     · <a href="guide.html" target="_blank" rel="noopener">New here? Quick start</a></p>
+  <p class="muted" style="text-align:center;font-size:13px"><a href="about.html">About</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a></p>
   <form class="card" id="joinForm" hidden autocomplete="on">
     <h2>Join Next Box</h2>
     <p class="muted">Someone gave you an invite code. It works once.</p>
@@ -177,6 +193,8 @@
     <label>Pick a username<input type="text" id="joinUser" autocomplete="username" autocapitalize="none" placeholder="lowercase, e.g. sam" required></label>
     <label>Email (optional, you can sign in with it too)<input type="email" id="joinEmail" autocomplete="email" autocapitalize="none"></label>
     <label>Password (8+ characters)<input type="password" id="joinPass" autocomplete="new-password" minlength="8" required></label>
+    <label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px"><input type="checkbox" id="joinAgree" required style="width:20px;height:20px;flex:none;margin-top:2px">
+      <span>I agree to the <a href="terms.html" target="_blank" rel="noopener">Terms of Use</a> and <a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.</span></label>
     <p class="err" id="joinMsg"></p>
     <div class="row"><button class="go" type="submit">Create my account</button></div>
   </form>
@@ -198,10 +216,11 @@
 <header><h1>Next Box</h1><span id="roleBadge" class="badge"></span><span id="betaBadge" class="badge hot" hidden>beta</span><span id="status">…</span>
   <button id="meBtn" class="avatar" aria-label="Your account" aria-haspopup="dialog">?</button></header>
 <div class="banner" id="updateBanner" hidden></div>
+<div class="banner" id="offlineBanner" role="status" hidden>You're offline. Next Box will work again when you're back online.</div>
 <div class="banner" id="announce" hidden></div>
 <div class="banner" id="paused" hidden>Printing is paused by an admin. Everything renders as a preview until it's turned back on.</div>
-<nav>
-  <button data-tab="mylist" class="on">My list</button>
+<nav id="topnav" aria-label="Main">
+  <button data-tab="mylist" class="on" aria-current="page">My list</button>
   <button data-tab="print">Print</button>
   <button data-tab="scan">Read back</button>
   <button data-tab="printed">Printed</button>
@@ -644,7 +663,23 @@
     </div>
   </form>
 </dialog>
-<footer id="revmark" aria-label="Version"></footer>
+<nav class="bottombar" aria-label="Main (phone)">
+  <button data-go="mylist" class="on"><span aria-hidden="true">✓</span>My list</button>
+  <button data-go="print"><span aria-hidden="true">🖨</span>Print</button>
+  <button data-go="scan"><span aria-hidden="true">📷</span>Read back</button>
+  <button id="moreBtn" aria-haspopup="dialog"><span aria-hidden="true">☰</span>More</button>
+</nav>
+<dialog id="moreDialog" aria-label="More">
+  <div class="menu" id="moreMenu"></div>
+  <div class="menu" style="margin-top:6px">
+    <a href="guide.html" target="_blank" rel="noopener">❓ Help and quick start</a>
+    <a href="about.html" target="_blank" rel="noopener">ℹ️ About and contact</a>
+    <a href="privacy.html" target="_blank" rel="noopener">🔒 Privacy Policy</a>
+    <a href="terms.html" target="_blank" rel="noopener">📄 Terms of Use</a>
+  </div>
+  <div class="row" style="justify-content:flex-end"><button class="plain" id="moreClose">Close</button></div>
+</dialog>
+<footer id="revmark" aria-label="About this app"><a href="about.html">About</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="guide.html">Help</a><br><span id="revText"></span></footer>
 <div id="toast"></div>
 <script src="app.js"></script>
 </body>
