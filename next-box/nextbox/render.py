@@ -151,7 +151,7 @@ def _dotted(d: ImageDraw.ImageDraw, y: int, x0: int, x1: int) -> None:
 def render_day(day_name: str, date_text: str, rows: list[DayRow], code: str, footer: str = "",
                subtitle: str = "", waiting: list[str] | None = None, accent: bool = False,
                waiting_head: str = "Also waiting", win: str = "",
-               schedule: list[tuple[str, str]] | None = None) -> Image.Image:
+               schedule: list[tuple[str, str]] | None = None, journal: bool = False) -> Image.Image:
     """The daily sheet: big day name, legend on top, time column, checkboxes on the right.
     Read-back matches rows top to bottom against the manifest, so row order is the contract."""
     day_f, date_f, sub_f = _font(84, True), _font(40, True), _font(28)
@@ -266,6 +266,17 @@ def render_day(day_name: str, date_text: str, rows: list[DayRow], code: str, foo
         ww = d.textlength(win, font=wait_bold_f)
         d.text(((WIDTH - ww) / 2, y), win, font=wait_bold_f, fill=0)
         y += 34
+    if journal:
+        # Journal mode: the label goes on the left page; these get filled in by hand.
+        y += 14
+        lead = "Today's win:"
+        d.text((left, y), lead, font=wait_bold_f, fill=0)
+        d.line((left + d.textlength(lead, font=wait_bold_f) + 12, y + 28, right, y + 28), fill=0, width=2)
+        y += 52
+        hint = "Notes on the right page → snap both pages"
+        hw = d.textlength(hint, font=foot_f)
+        d.text(((WIDTH - hw) / 2, y), hint, font=foot_f, fill=0)
+        y += 30
     y += 10
     d.line((left, y, right, y), fill=0, width=4)
     y += 12

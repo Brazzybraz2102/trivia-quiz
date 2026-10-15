@@ -39,7 +39,7 @@ TABLE_NOTES = {
     "tasks": "Everyone's built-in to-do list (My list). Linked apps' tasks are never stored here.",
     "tags": "Each person's tags and the label color for each.",
 }
-MASKED_COLUMNS = {"hash", "salt", "token_hash"}
+MASKED_COLUMNS = {"hash", "salt", "token_hash", "notes", "photo"}  # notes/photo: private journal pages
 
 DIAGRAM = """
   households ─┬─< users ─┬─< sessions          ( ─< means "one to many" )

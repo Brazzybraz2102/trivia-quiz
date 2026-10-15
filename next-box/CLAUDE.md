@@ -20,6 +20,8 @@ Read SPEC.md first. Its §1 rules override everything:
 - Everyone accepted the data notice (server.py `DATA_NOTICE`): the superadmin may see their tickets, scans,
   settings and activity. If you make more visible, update the notice and bump `DATA_NOTICE_VERSION`.
 - Printers: every real send goes through `printer._send_raster`. Validate addresses in `printers.validate`.
+- Journal pages (`nextbox/journal.py`) are private to their owner: no admin view, export only to the owner,
+  masked in `nextbox db sql`. `task_slides` keeps task ids and counts only, never text.
 - Feedback is anonymous: the `feedback_identities` table is the ONLY place a person is linked to feedback.
   Never log feedback to events, never put usernames in `feedback`, and audit reveals by feedback id only.
 - `nextbox db sql` stays read-only on the real database and keeps masking hashes and secrets (`dbtools.py`).

@@ -459,3 +459,27 @@ HTML, JSON otherwise. `POST /auth/signup` needs `agree: true`; the sign-up event
 `terms_version` (`TERMS_VERSION`). Phones (≤720 px) get a bottom tab bar with a More sheet holding
 the other tabs and the legal/help links; an offline banner follows the browser's online state.
 
+## 25. Journal, wins and slugs (the main app's daily routine)
+`nextbox/journal.py`. The routine: today's label on the left page of a paper journal, notes on the right,
+one photo of both pages at night.
+- **Read-back reads notes too**: `ReadBack.notes` holds handwritten text outside the label, transcribed
+  as written (`[unclear]` for unreadable words). `scan_photo` keeps the photo as a journal page when there
+  are notes, or always when the `journal_mode` pref is on (default). A photo with notes but no label is
+  saved to the journal instead of failing. A daily ticket's page is filed under the ticket's day.
+- **Journal pages** (`journal` table): id, owner, household, day, notes (editable), photo (JPEG),
+  scan_id, label_id. Strictly private: every query is scoped to the owner, no admin or superadmin
+  endpoint shows them, and `nextbox db sql` masks `notes` and `photo`. Exported (without photos) by
+  `/auth/export`; deleted with the account. Deleting a page needs `confirm=true`.
+- **Wins** (`wins_by_day` in server.py): `task_done` events + My list `done_at` + read-back "done" marks
+  (applied or confirmed). Names come only from My list and read-backs; linked-app names are never stored,
+  so those show as "+N more".
+- **Slugs**: `task_slides` counts moves to a later day per task id (no text), from read-back → marks and
+  from My list due-date changes to a later day; cleared when the task is done. A slug is moved
+  `slug_after` (default 3) times or waiting 7+ days. The daily label shows "slid N×" and the Journal tab
+  lists them with "Make it smaller" (My list steps) and "Print just this" (focus card).
+- **Journal mode** label: a "Today's win:" write-in line and "Notes on the right page → snap both pages".
+- **Paper sizes**: `a5` and `half_letter` join letter and a4 for Print on paper.
+- Endpoints: `GET /journal?until=&days=`, `GET /journal/wins?days=`, `GET /journal/slugs`,
+  `POST /journal` (typed note), `PATCH|DELETE /journal/{id}`, `GET /journal/{id}/photo`.
+- Family Mode (later) reuses all of this per person; sharing a page will be an explicit choice.
+

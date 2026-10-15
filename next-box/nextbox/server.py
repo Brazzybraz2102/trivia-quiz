@@ -35,6 +35,7 @@ from .connections import Builder, Connections, NotConnected
 from .events import Events, ServerSettings
 from .feedback import Feedback, FeedbackError
 from .jobs import Context, print_text
+from .journal import Journal, Slides, slugs as find_slugs
 from .mylist import TAG_COLORS, LocalTasks, Tags, is_local, parse_dump
 from .printer import COLORS, DRIVERS
 from .printers import REASONS, PrinterError, Printers
@@ -150,6 +151,11 @@ class PickBody(BaseModel):
     task_ids: list[str] | None = None
     query: str | None = None
     dry_run: bool | None = None
+
+
+class JournalBody(BaseModel):
+    notes: str
+    day: str | None = None
 
 
 class FocusBody(BaseModel):
@@ -380,21 +386,55 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                                    tasks_factory=factory, _tasks=None,
                                    tag_colors=Tags(accounts.db, name).colors(),
                                    events=lambda day: connections.events_for(name, day),
-                                   wins=lambda: wins_yesterday(name))
+                                   wins=lambda: wins_yesterday(name),
+                                   slides=lambda: Slides(accounts.db, name).counts(),
+                                   on_move=lambda tid: Slides(accounts.db, name).bump(tid),
+                                   on_done=lambda tid: Slides(accounts.db, name).clear(tid),
+                                   save_page=lambda **kw: Journal(accounts.db, name, household_of(caller)).add(**kw))
+
+    def wins_by_day(name: str, first: date, last: date) -> dict[str, dict]:
+        """What someone finished each day from `first` to `last`: {day: {"count", "items"}}.
+        Counts come from task_done events (My list, and linked tasks ticked in the app) plus
+        read-backs; the names come from My list and read-backs (linked apps' names aren't kept)."""
+        days = {(first + timedelta(days=i)).isoformat(): {"count": 0, "items": []}
+                for i in range((last - first).days + 1)}
+        start = time.mktime(first.timetuple())
+        end = time.mktime((last + timedelta(days=1)).timetuple())
+        for e in events.query(user=name, since=start, limit=5000):
+            if e["action"] == "task_done" and e["ts"] < end:
+                key = date.fromtimestamp(e["ts"]).isoformat()
+                if key in days:
+                    days[key]["count"] += 1
+        seen: set[str] = set()
+        from sqlalchemy import and_ as _and, select as _select
+
+        from . import db as _db
+        with accounts.db.connect() as conn:
+            for r in conn.execute(_select(_db.tasks.c.id, _db.tasks.c.content, _db.tasks.c.done_at).where(_and(
+                    _db.tasks.c.owner == name, _db.tasks.c.done_at >= int(start), _db.tasks.c.done_at < int(end)))):
+                key = date.fromtimestamp(r.done_at).isoformat()
+                if key in days:
+                    days[key]["items"].append(r.content)
+                    seen.add(f"nb:{r.id}")
+        for rec in ctx.store.list_scans(1000, by=name, since=first.isoformat()):
+            key = rec.get("created_at", "")[:10]
+            if key not in days:
+                continue
+            done = [a for a in rec.get("applied", []) if a.get("mark") == "done"]
+            done += [a for a in rec.get("needs_confirmation", []) if a.get("mark") == "done" and a.get("status") == "applied"]
+            for a in done:
+                tid = str(a.get("task_id", ""))
+                if not is_local(tid):
+                    days[key]["count"] += 1  # My list ones were already counted by their event
+                if tid not in seen:
+                    seen.add(tid)
+                    days[key]["items"].append(a.get("content", ""))
+        return days
 
     def wins_yesterday(name: str) -> int:
         """Tasks finished yesterday: ticked on My list, or marked done on a photo read-back."""
-        today = ctx.today()
-        start = time.mktime((today - timedelta(days=1)).timetuple())
-        end = time.mktime(today.timetuple())
-        done = sum(1 for e in events.query(user=name, since=start, limit=1000)
-                   if e["action"] == "task_done" and e["ts"] < end)
-        y = (today - timedelta(days=1)).isoformat()
-        for rec in ctx.store.list_scans(200, by=name, since=y):
-            if rec.get("created_at", "")[:10] == y:
-                done += sum(1 for a in rec.get("applied", [])
-                            if a.get("mark") == "done" and not is_local(str(a.get("task_id", ""))))
-        return done
+        y = ctx.today() - timedelta(days=1)
+        return wins_by_day(name, y, y)[y.isoformat()]["count"]
 
     def my_list(caller: Caller) -> LocalTasks:
         return LocalTasks(accounts.db, caller.name, caller.household, today=ctx.today)
@@ -580,6 +620,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             "calendars": [{k: c.get(k) for k in ("name", "provider", "calendars")} for c in connections.calendars(caller.name)],
             "tickets": [{k: v for k, v in t.items() if k != "png"} for t in ctx.store.list_printed(10_000, by=caller.name)],
             "read_backs": ctx.store.list_scans(10_000, by=caller.name),
+            "journal": Journal(accounts.db, caller.name).pages("0000-00-00", "9999-99-99"),  # photos: GET /journal/{id}/photo
             "devices": accounts.sessions_for(caller.name),
         }
         events.log(caller.name, "export_data", kind="auth")
@@ -601,6 +642,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         feedback_store.forget_user(caller.name)  # their posts stay, unlinked
         LocalTasks(accounts.db, caller.name).delete_for_user()
         Tags(accounts.db, caller.name).delete_for_user()
+        Journal(accounts.db, caller.name).delete_for_user()
+        Slides(accounts.db, caller.name).delete_for_user()
         ctx.store.delete_for_user(caller.name)
         events.delete_for_user(caller.name)
         events.log("?", "account_deleted", kind="audit")  # no name: they asked to be forgotten
@@ -872,12 +915,23 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         fields = body.model_dump(exclude_unset=True)
         for name in fields.get("tags") or []:
             _ensure_tag(caller, name)
-        return run(caller, "list_edit", my_list(caller).update, _local_id(task_id), fields)
+        mine = my_list(caller)
+        before = None
+        if fields.get("due_date"):
+            try:
+                before = ((mine.get_task(_local_id(task_id)).get("due") or {}).get("date") or "")[:10]
+            except Exception:
+                before = None
+        result = run(caller, "list_edit", mine.update, _local_id(task_id), fields)
+        if before and fields.get("due_date") and fields["due_date"] > before:
+            Slides(accounts.db, caller.name).bump(task_id)  # moved to a later day
+        return result
 
     @app.post("/list/{task_id}/done")
     def done_list_task(task_id: str, caller: Caller = Depends(person)):
         c = rctx(caller)
         run(caller, "list_done", c.tasks.close_task, task_id)
+        Slides(accounts.db, caller.name).clear(task_id)
         if not is_local(task_id):
             events.log(caller.name, "task_done", detail={"source": "linked"}, household=caller.household)
         return {"ok": True}
@@ -957,7 +1011,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(404)
         size = paper or caller.prefs.get("paper_size", "letter")
         if size not in paper_pdf.PAGES:
-            raise HTTPException(400, "paper is letter or a4")
+            raise HTTPException(400, "paper is letter, a4, a5 or half_letter")
         data = paper_pdf.ticket_pdf(png, ctx.store.get_parts(label_id), size)
         events.log(caller.name, "print_paper", detail={"id": label_id, "paper": size})
         return Response(data, media_type="application/pdf",
@@ -999,6 +1053,91 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def confirm_scan(scan_id: str, body: ConfirmBody, caller: Caller = Depends(auth)):
         _own_scan(scan_id, caller)
         return run(caller, "scan_confirm", scan.confirm, rctx(caller), scan_id, body.decisions)
+
+    # ----------------------------------------------------------- journal, wins, slugs
+    # Journal pages are private: only their owner can read them, not even a superadmin.
+    def _journal(caller: Caller) -> Journal:
+        return Journal(accounts.db, caller.name, caller.household)
+
+    def _page_id(page_id: str) -> str:
+        if not re.fullmatch(r"[0-9a-f]{12}", page_id):
+            raise HTTPException(404)
+        return page_id
+
+    @app.get("/journal")
+    def journal_days(until: str = "", days: int = 14, caller: Caller = Depends(person)):
+        """Days with journal pages or wins, newest first: {day, pages, wins}."""
+        try:
+            last = date.fromisoformat(until) if until else ctx.today()
+        except ValueError:
+            raise HTTPException(400, "until is YYYY-MM-DD") from None
+        days = max(1, min(days, 60))
+        first = last - timedelta(days=days - 1)
+        pages = _journal(caller).pages(first.isoformat(), last.isoformat())
+        wins = wins_by_day(caller.name, first, last)
+        out = []
+        for i in range(days):
+            day = (last - timedelta(days=i)).isoformat()
+            mine = [p for p in pages if p["day"] == day]
+            if mine or wins[day]["count"] or wins[day]["items"]:
+                out.append({"day": day, "pages": mine, "wins": wins[day]})
+        return {"days": out, "next_until": (first - timedelta(days=1)).isoformat(),
+                "total_pages": _journal(caller).count()}
+
+    @app.get("/journal/wins")
+    def journal_wins(days: int = 7, caller: Caller = Depends(person)):
+        days = max(1, min(days, 60))
+        last = ctx.today()
+        wins = wins_by_day(caller.name, last - timedelta(days=days - 1), last)
+        series = [{"day": d, "count": w["count"]} for d, w in sorted(wins.items())]
+        return {"series": series, "total": sum(x["count"] for x in series)}
+
+    @app.get("/journal/slugs")
+    def journal_slugs(caller: Caller = Depends(person)):
+        """Tasks that keep sliding to another day, gently, so they can be made smaller."""
+        c = rctx(caller)
+        try:
+            tasks = c.tasks.today()
+        except Exception as exc:
+            return {"slugs": [], "error": str(exc)[:200]}
+        moves = Slides(accounts.db, caller.name).counts()
+        return {"slugs": find_slugs(tasks, moves, ctx.today(), int(caller.prefs.get("slug_after", 3)))}
+
+    @app.post("/journal")
+    def journal_add(body: JournalBody, caller: Caller = Depends(person)):
+        try:
+            page = _journal(caller).add(body.day or ctx.today().isoformat(), body.notes)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        events.log(caller.name, "journal_add", household=caller.household)  # no text: it's private
+        return page
+
+    @app.patch("/journal/{page_id}")
+    def journal_edit(page_id: str, body: JournalBody, caller: Caller = Depends(person)):
+        try:
+            return _journal(caller).update(_page_id(page_id), body.notes)
+        except KeyError:
+            raise HTTPException(404) from None
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.delete("/journal/{page_id}")
+    def journal_delete(page_id: str, confirm: bool = False, caller: Caller = Depends(person)):
+        if not confirm:
+            raise HTTPException(400, "Deleting a journal page needs confirm=true.")
+        try:
+            _journal(caller).delete(_page_id(page_id))
+        except KeyError:
+            raise HTTPException(404) from None
+        events.log(caller.name, "journal_delete", household=caller.household)
+        return {"ok": True}
+
+    @app.get("/journal/{page_id}/photo")
+    def journal_photo(page_id: str, caller: Caller = Depends(person)):
+        data = _journal(caller).photo(_page_id(page_id))
+        if not data:
+            raise HTTPException(404)
+        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
     # ----------------------------------------------------------- printers & label colors
     @app.get("/printing-options")
@@ -1221,6 +1360,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         feedback_store.forget_user(target["username"])  # their posts stay, unlinked
         LocalTasks(accounts.db, target["username"]).delete_for_user()
         Tags(accounts.db, target["username"]).delete_for_user()
+        Journal(accounts.db, target["username"]).delete_for_user()
+        Slides(accounts.db, target["username"]).delete_for_user()
         audit(caller, "delete_user", target=target["username"])
         return {"ok": True}
 

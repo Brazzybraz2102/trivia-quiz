@@ -167,6 +167,15 @@
     #revmark { padding-bottom:110px; }
     .printbar { bottom:calc(64px + env(safe-area-inset-bottom)); }
   }
+  .wins { display:flex; align-items:flex-end; gap:6px; height:70px; margin:6px 0 2px; }
+  .wins div { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; font-size:11px; color:var(--muted); }
+  .wins div i { display:block; width:100%; max-width:34px; background:var(--ok); border-radius:4px 4px 0 0; min-height:2px; }
+  .jday h3 { margin:0 0 6px; }
+  .jpage { border-top:1px solid var(--line); padding:10px 0; }
+  .jpage img { max-width:100%; max-height:340px; border-radius:6px; border:1px solid var(--line); display:block; margin-bottom:8px; }
+  .jpage textarea { min-height:90px; }
+  .winlist { margin:4px 0 8px; padding-left:20px; }
+  .slug { display:flex; justify-content:space-between; gap:8px; align-items:center; padding:8px 0; border-top:1px solid var(--line); flex-wrap:wrap; }
   .tagrow { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
   @media (max-width:520px) { .setting { flex-wrap:wrap; } }
 </style>
@@ -222,7 +231,8 @@
 <nav id="topnav" aria-label="Main">
   <button data-tab="mylist" class="on" aria-current="page">My list</button>
   <button data-tab="print">Print</button>
-  <button data-tab="scan">Read back</button>
+  <button data-tab="scan">Snap</button>
+  <button data-tab="journal">Journal</button>
   <button data-tab="printed">Printed</button>
   <button data-tab="board">Feedback</button>
   <button data-tab="profile">Profile</button>
@@ -293,12 +303,33 @@
   </section>
 
   <section id="scan">
-    <div class="card"><h2>Photo read-back</h2>
-      <p class="muted">Mark the ticket ✓ done, → move, ✗ drop, then take a photo. Drops and anything uncertain wait for you here.</p>
+    <div class="card"><h2>Snap your page</h2>
+      <p class="muted">Mark the label ✓ done, → move, ✗ drop, then take a photo. In a journal, get both pages in the photo:
+        your handwritten notes are read too and saved to your Journal. Drops and anything uncertain wait for you here.</p>
       <input type="file" id="photo" accept="image/*" capture="environment">
       <div class="row"><input type="text" id="scanLabel" placeholder="Ticket code (optional, e.g. 260930-P9AM)"></div>
       <div class="row"><button class="go" id="scanGo">Read back</button></div></div>
     <div id="scanResult"></div>
+  </section>
+
+  <section id="journal">
+    <div class="card"><h2>Your journal</h2>
+      <p class="muted">Every page you snap is kept here with its photo, so a lost notebook is never a lost record.
+        Only you can read your journal.</p>
+      <div class="wins" id="winsChart" aria-label="Wins this week"></div>
+      <p class="muted" id="winsTotal"></p>
+      <div class="row"><button class="go" id="jWrite">Write a note</button><button class="plain" data-go-tab="scan">Snap a page</button></div>
+      <div id="jNew" hidden>
+        <textarea id="jText" placeholder="How did today go? What helped? What got in the way?"></textarea>
+        <div class="row"><button class="go" id="jSave">Save</button><button class="plain" id="jCancel">Cancel</button></div>
+      </div>
+    </div>
+    <div class="card" id="slugCard" hidden><h2>Slugs: things that keep sliding</h2>
+      <p class="muted">No judgment. A task that keeps moving is usually too big or unclear. Make it smaller, print it alone, or let it go.</p>
+      <div id="slugList"></div>
+    </div>
+    <div id="jDays"></div>
+    <div class="row"><button class="plain" id="jOlder" hidden>Older days</button></div>
   </section>
 
   <section id="printed"><div id="hist" class="hist"></div></section>
@@ -370,7 +401,7 @@
       <label class="setting"><div class="label"><b>Text size</b><span>Bigger text everywhere in the app.</span></div>
         <select data-pref="text_size" aria-label="Text size"><option value="normal">Normal</option><option value="large">Large</option><option value="xlarge">Extra large</option></select></label>
       <label class="setting"><div class="label"><b>Open to</b><span>The screen you see when Next Box opens.</span></div>
-        <select data-pref="start_tab" aria-label="Open to"><option value="mylist">My list</option><option value="print">Print</option></select></label>
+        <select data-pref="start_tab" aria-label="Open to"><option value="mylist">My list</option><option value="print">Print</option><option value="journal">Journal</option></select></label>
       <label class="setting"><div class="label"><b>24-hour times</b><span>19:00 instead of 7:00p.</span></div><input type="checkbox" data-pref="time_24h"></label>
       <label class="setting"><div class="label"><b>New tasks go to</b><span>When you have a linked to-do app.</span></div>
         <select data-pref="new_tasks_to" aria-label="New tasks go to"><option value="nextbox">My list</option><option value="linked">My linked app</option></select></label>
@@ -388,6 +419,8 @@
       <label class="setting"><div class="label"><b>Gentle words</b><span>"waiting 3d" instead of "overdue 3d", and "Not today" for the rest.</span></div><input type="checkbox" data-pref="gentle_words"></label>
       <label class="setting"><div class="label"><b>Show yesterday's wins</b><span>"Yesterday you finished 4. ✓" on the daily ticket.</span></div><input type="checkbox" data-pref="show_wins"></label>
       <label class="setting"><div class="label"><b>Print the next tiny step</b><span>Under each task that has steps.</span></div><input type="checkbox" data-pref="show_next_step"></label>
+      <label class="setting"><div class="label"><b>Journal mode</b><span>The daily label gets a "Today's win" line for your journal, and every page you snap is kept in your Journal.</span></div><input type="checkbox" data-pref="journal_mode"></label>
+      <label class="setting"><div class="label"><b>Call it a slug after</b><span>How many moves before a task shows under Slugs and prints "slid 3×". 2–10.</span></div><input type="number" min="2" max="10" data-pref="slug_after"></label>
     </div>
 
     <div class="card" id="calCard"><h2>Calendars</h2>
@@ -424,7 +457,7 @@
       <label class="setting"><div class="label"><b>Always preview only</b><span>Never send to the printer from my account. Good for testing.</span></div><input type="checkbox" data-pref="always_dry_run"></label>
       <label class="setting"><div class="label"><b>Show "Also waiting"</b><span>List the tasks that didn't fit at the bottom.</span></div><input type="checkbox" data-pref="show_waiting"></label>
       <label class="setting"><div class="label"><b>Paper size</b><span>For "Print on paper" on a regular printer.</span></div>
-        <select data-pref="paper_size" aria-label="Paper size"><option value="letter">US Letter</option><option value="a4">A4</option></select></label>
+        <select data-pref="paper_size" aria-label="Paper size"><option value="letter">US Letter</option><option value="a4">A4</option><option value="a5">A5 journal page</option><option value="half_letter">Half letter journal page (5.5 × 8.5 in)</option></select></label>
       <label class="setting"><div class="label"><b>Default list filter</b><span>Pre-fills "List from a filter".</span></div><input type="text" style="max-width:220px" data-pref="default_filter" placeholder="#Groceries"></label>
     </div>
 
@@ -666,7 +699,8 @@
 <nav class="bottombar" aria-label="Main (phone)">
   <button data-go="mylist" class="on"><span aria-hidden="true">✓</span>My list</button>
   <button data-go="print"><span aria-hidden="true">🖨</span>Print</button>
-  <button data-go="scan"><span aria-hidden="true">📷</span>Read back</button>
+  <button data-go="scan"><span aria-hidden="true">📷</span>Snap</button>
+  <button data-go="journal"><span aria-hidden="true">📓</span>Journal</button>
   <button id="moreBtn" aria-haspopup="dialog"><span aria-hidden="true">☰</span>More</button>
 </nav>
 <dialog id="moreDialog" aria-label="More">

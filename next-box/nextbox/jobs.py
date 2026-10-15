@@ -17,6 +17,7 @@ from .printer import PrinterConfig, legacy_config
 from .printers import Printers, choose, choose_color
 from .render import (DayRow, Sticker, finalize, render_day, render_focus, render_label, render_sticker,
                      render_strips, stack_with_cuts)
+from .journal import SLUG_MOVES
 from .store import Store
 from .providers import TaskProvider
 
@@ -40,6 +41,10 @@ class Context:
     tag_colors: dict = field(default_factory=dict)  # this person's tags: name -> label color
     wins: Callable[[], int] | None = None  # how many tasks they finished yesterday
     events: Callable[[date], tuple[list, list]] | None = None  # (today's calendar events, problems)
+    slides: Callable[[], dict] | None = None     # task id -> times moved to a later day
+    on_move: Callable[[str], None] | None = None  # a task was moved to a later day
+    on_done: Callable[[str], None] | None = None  # a task was finished
+    save_page: Callable[..., dict] | None = None  # keep a journal page (read-back)
     _tasks: TaskProvider | None = field(default=None, repr=False)
 
     @property
@@ -211,11 +216,16 @@ def _task_label(ctx: Context, *, kind: str, title: str, subtitle: str, tasks: li
     gentle = bool(ctx.prefs.get("gentle_words", True))
     label_id = ctx.store.new_id(today)
     rows, manifest = [], []
+    moves = ctx.slides() if ctx.slides else {}
     for n, task in enumerate(shown, start=1):
         due = task.get("due") or {}
         tag, color = _first_tag(ctx, task)
+        state = _tag(task, today, gentle)
+        slid = moves.get(str(task["id"]), 0)
+        if slid >= int(ctx.prefs.get("slug_after", SLUG_MOVES)):  # it keeps sliding: say so kindly, so it can be made smaller
+            state = f"{state} · slid {slid}×" if state else f"slid {slid}×"
         rows.append(DayRow(_clean(task["content"]), _time(task, h24), int(task.get("priority", 1)) >= 3,
-                           _tag(task, today, gentle), late=_is_late(task, today), color=color if tag else "",
+                           state, late=_is_late(task, today), color=color if tag else "",
                            note=_next_step(task) if ctx.prefs.get("show_next_step", True) else ""))
         manifest.append({
             "row": n,
@@ -237,7 +247,8 @@ def _task_label(ctx: Context, *, kind: str, title: str, subtitle: str, tasks: li
     def draw(accent: bool) -> Image.Image:
         return render_day(title, subtitle, rows, code=label_id, footer=footer, waiting=waiting_names,
                           accent=accent, waiting_head="Not today" if gentle else "Also waiting",
-                          win=footer_win, schedule=schedule)
+                          win=footer_win, schedule=schedule,
+                          journal=kind == "today" and bool(ctx.prefs.get("journal_mode", True)))
     result = _finish(ctx, reason=reason, kind=kind, title=title, draw=draw, label_id=label_id,
                      manifest=manifest, source=source, dry_run=dry_run)
     if calendar_note:

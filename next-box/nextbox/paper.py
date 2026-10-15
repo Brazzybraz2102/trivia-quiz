@@ -1,4 +1,5 @@
-"""Print on paper: lay a ticket out on a Letter or A4 page as a PDF, for any printer.
+"""Print on paper: lay a ticket out on a Letter, A4, A5 or half-letter page as a PDF, for any printer.
+A5 and half-letter are journal page sizes: trim the page and paste the list into the journal.
 
 Stickers keep their real size (the same as on a 62 mm label) in a grid with dashed cut lines, so a
 sheet of full-page sticker paper becomes a sheet of stickers. Lists and cards are printed a bit
@@ -11,7 +12,8 @@ import io
 from PIL import Image, ImageDraw
 
 DPI = 300
-PAGES = {"letter": (2550, 3300), "a4": (2480, 3508)}  # pixels at 300 dpi
+PAGES = {"letter": (2550, 3300), "a4": (2480, 3508),        # pixels at 300 dpi
+         "a5": (1748, 2480), "half_letter": (1650, 2550)}  # journal pages
 MARGIN = 150  # half an inch
 GAP = 60      # between stickers: room to cut
 SINGLE_WIDTH = 1050  # 3.5 inches: a list or card on paper
@@ -87,7 +89,7 @@ def to_pdf(pages: list[Image.Image]) -> bytes:
 
 def ticket_pdf(png: bytes, parts: list[Image.Image] | None, paper: str = "letter") -> bytes:
     if paper not in PAGES:
-        raise ValueError("paper is letter or a4")
+        raise ValueError("paper is letter, a4, a5 or half_letter")
     if parts:
         return to_pdf(sticker_sheets(parts, paper))
     return to_pdf(single_pages(Image.open(io.BytesIO(png)), paper))

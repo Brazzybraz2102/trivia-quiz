@@ -292,11 +292,11 @@ $("#logout").onclick = async () => { await api("/auth/logout", { method: "POST" 
 // ---------------------------------------------------------------- tabs
 const loaders = { mylist: () => { loadList(); loadToday(); loadGuide(); }, printed: loadHistory, profile: () => loadProfile(),
                   settings: () => { loadLabels(); loadTags(); loadCalendars(); }, admin: () => { loadAdmin(); loadPrinters(); loadInvites(); },
-                  debug: loadDebug, board: () => loadBoard(), usage: () => loadUsage() };
+                  debug: loadDebug, board: () => loadBoard(), usage: () => loadUsage(), journal: () => loadJournal() };
 $$("#topnav button").forEach((b) => b.onclick = () => {
   $$("#topnav button").forEach((x) => { x.classList.toggle("on", x === b); x.toggleAttribute("aria-current", x === b); if (x === b) x.setAttribute("aria-current", "page"); });
   $$(".bottombar [data-go]").forEach((x) => x.classList.toggle("on", x.dataset.go === b.dataset.tab));
-  $("#moreBtn").classList.toggle("on", !["mylist", "print", "scan"].includes(b.dataset.tab));
+  $("#moreBtn").classList.toggle("on", !["mylist", "print", "scan", "journal"].includes(b.dataset.tab));
   window.scrollTo(0, 0);
   $$("section").forEach((s) => s.classList.toggle("on", s.id === b.dataset.tab));
   $("#dryRow").hidden = !["mylist", "print"].includes(b.dataset.tab);  // only where things get printed
@@ -354,7 +354,10 @@ function renderScan(rec) {
       <div class="muted">row ${p.row} · confidence ${p.confidence}${p.note ? " · " + esc(p.note) : ""}</div>
       <div class="row"><button class="go ${p.mark === "drop" ? "warn" : ""}" data-row="${p.row}" data-d="confirm">Confirm</button>
       <button class="plain" data-row="${p.row}" data-d="skip">Skip</button></div></div>`);
-  if (!rec.applied.length && !rec.needs_confirmation.length && !rec.errors.length) h += `<p class="muted">No marks found.</p>`;
+  if (rec.message) h += `<p class="applied">${esc(rec.message)}</p>`;
+  if (rec.notes) h += `<h3>Your notes</h3><p style="white-space:pre-wrap">${esc(rec.notes)}</p>`;
+  if (rec.journal_id) h += `<p class="muted">Saved to your journal. <button class="linkish" data-go-tab="journal">Open Journal</button></p>`;
+  if (!rec.applied.length && !rec.needs_confirmation.length && !rec.errors.length && !rec.journal_id) h += `<p class="muted">No marks found.</p>`;
   $("#scanResult").innerHTML = h + "</div>";
   $("#scanResult").querySelectorAll("[data-row]").forEach((b) => b.onclick = async () => {
     b.disabled = true;
@@ -1304,6 +1307,103 @@ $("#guideShow").onclick = async () => {
 };
 
 
+// ---------------------------------------------------------------- journal, wins, slugs
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-go-tab]");
+  if (t) goto(t.dataset.goTab);
+});
+const dayName = (iso) => {
+  const d = new Date(iso + "T12:00:00");
+  const today = new Date(); today.setHours(12, 0, 0, 0);
+  const diff = Math.round((today - d) / 86400000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+};
+let jUntil = "";
+
+async function loadJournal(more = false) {
+  if (!more) { jUntil = ""; $("#jDays").innerHTML = `<p class="muted">Loading…</p>`; loadWins(); loadSlugs(); }
+  try {
+    const r = await api(`/journal?days=14${jUntil ? "&until=" + jUntil : ""}`);
+    const html = r.days.map(dayCard).join("");
+    if (!more) $("#jDays").innerHTML = html || `<div class="card"><p class="muted">Nothing here yet. Print today's label, paste it in your journal,
+      write on the right page tonight, then Snap both pages.</p></div>`;
+    else $("#jDays").insertAdjacentHTML("beforeend", html);
+    jUntil = r.next_until;
+    $("#jOlder").hidden = !r.total_pages && !r.days.length;
+    wireJournal();
+  } catch (e) { $("#jDays").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+$("#jOlder").onclick = () => loadJournal(true);
+
+function dayCard(d) {
+  const w = d.wins;
+  const named = w.items.filter(Boolean);
+  const extra = Math.max(0, w.count - named.length);
+  const wins = w.count || named.length
+    ? `<p><b>Wins: ${Math.max(w.count, named.length)} ✓</b></p>${named.length ? `<ul class="winlist">${named.map((t) => `<li>${esc(t)}</li>`).join("")}${extra ? `<li class="muted">+${extra} more in your linked app</li>` : ""}</ul>` : ""}`
+    : "";
+  const pages = d.pages.map((p) => `<div class="jpage" data-page="${esc(p.id)}">
+      ${p.has_photo ? `<a href="/journal/${esc(p.id)}/photo" target="_blank" rel="noopener"><img loading="lazy" src="/journal/${esc(p.id)}/photo" alt="Journal page photo"></a>` : ""}
+      <textarea aria-label="Notes" placeholder="${p.has_photo ? "No handwritten notes were found. Type some if you like." : ""}">${esc(p.notes)}</textarea>
+      <div class="row"><button class="plain small" data-jsave>Save</button><button class="plain small warn" data-jdel>Delete page</button>
+        <span class="muted">${new Date(p.created * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span></div></div>`).join("");
+  return `<div class="card jday"><h3>${esc(dayName(d.day))}</h3>${wins}${pages}</div>`;
+}
+
+function wireJournal() {
+  $$("#jDays [data-jsave]").forEach((b) => b.onclick = async () => {
+    const page = b.closest("[data-page]");
+    try { await api(`/journal/${page.dataset.page}`, { method: "PATCH", json: { notes: page.querySelector("textarea").value } }); toast("Saved"); }
+    catch (e) { toast(e.message); }
+  });
+  $$("#jDays [data-jdel]").forEach((b) => b.onclick = async () => {
+    const page = b.closest("[data-page]");
+    if (!confirm("Delete this journal page and its photo? This can't be undone.")) return;
+    try { await api(`/journal/${page.dataset.page}?confirm=true`, { method: "DELETE" }); page.remove(); toast("Deleted"); }
+    catch (e) { toast(e.message); }
+  });
+}
+
+async function loadWins() {
+  try {
+    const r = await api("/journal/wins?days=7");
+    const max = Math.max(1, ...r.series.map((x) => x.count));
+    $("#winsChart").innerHTML = r.series.map((x) => `<div title="${esc(x.day)}: ${x.count} done"><i style="height:${Math.round(x.count / max * 52)}px"></i>${x.count || ""}<br>${esc(new Date(x.day + "T12:00:00").toLocaleDateString(undefined, { weekday: "narrow" }))}</div>`).join("");
+    $("#winsTotal").textContent = r.total ? `${r.total} things done this week. That counts.` : "Your wins this week will show here.";
+  } catch { $("#winsChart").innerHTML = ""; }
+}
+
+async function loadSlugs() {
+  try {
+    const r = await api("/journal/slugs");
+    $("#slugCard").hidden = !r.slugs.length;
+    $("#slugList").innerHTML = r.slugs.map((s) => `<div class="slug" data-task="${esc(s.id)}">
+        <div><b>${esc(s.content)}</b><div class="muted">${s.moves ? `moved ${s.moves}×` : ""}${s.moves && s.waiting_days ? " · " : ""}${s.waiting_days ? `waiting ${s.waiting_days}d` : ""}</div></div>
+        <div class="row" style="margin:0">${s.id.startsWith("nb:") ? `<button class="plain small" data-slug-steps>Make it smaller</button>` : ""}
+          <button class="plain small" data-slug-focus>Print just this</button></div></div>`).join("");
+    $$("#slugList [data-slug-focus]").forEach((b) => b.onclick = async () => {
+      const id = b.closest("[data-task]").dataset.task;
+      const dry_run = $("#dry")?.checked ?? true;
+      if (!dry_run && !confirm("Send this to the printer?")) return;
+      try { const t = await api("/print/focus", { method: "POST", json: { task_id: id, dry_run } }); toast(t.status === "printed" ? "Printed" : "Preview made: see Printed"); }
+      catch (e) { toast(e.message); }
+    });
+    $$("#slugList [data-slug-steps]").forEach((b) => b.onclick = () => goto("mylist", `[data-id="${b.closest("[data-task]").dataset.task}"]`));
+  } catch { $("#slugCard").hidden = true; }
+}
+
+$("#jWrite").onclick = () => { $("#jNew").hidden = false; $("#jText").focus(); };
+$("#jCancel").onclick = () => { $("#jNew").hidden = true; };
+$("#jSave").onclick = async () => {
+  try {
+    await api("/journal", { method: "POST", json: { notes: $("#jText").value } });
+    $("#jText").value = ""; $("#jNew").hidden = true; toast("Saved to your journal"); loadJournal();
+  } catch (e) { toast(e.message); }
+};
+
+
 // ---------------------------------------------------------------- print on paper (any printer)
 function paperButton(id) {
   return `<div class="row"><a class="go small" style="text-decoration:none" href="/printed/${encodeURIComponent(id)}/pdf" target="_blank" rel="noopener">Print on paper</a>
@@ -1437,7 +1537,7 @@ $("#setJump").onclick = (e) => {
 // ---------------------------------------------------------------- phone navigation, offline
 $$(".bottombar [data-go]").forEach((b) => b.onclick = () => $(`#topnav button[data-tab=${b.dataset.go}]`).click());
 $("#moreBtn").onclick = () => {
-  const tabs = $$("#topnav button").filter((b) => !b.hidden && !["mylist", "print", "scan"].includes(b.dataset.tab));
+  const tabs = $$("#topnav button").filter((b) => !b.hidden && !["mylist", "print", "scan", "journal"].includes(b.dataset.tab));
   const icons = { printed: "🧾", board: "💬", profile: "👤", settings: "⚙️", admin: "🛠️", superusers: "👥", usage: "📊", debug: "🐞" };
   $("#moreMenu").innerHTML = tabs.map((b) => `<button data-more="${b.dataset.tab}">${icons[b.dataset.tab] || "•"} ${esc(b.textContent)}</button>`).join("");
   $("#moreDialog").showModal();

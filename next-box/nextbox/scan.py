@@ -1,7 +1,9 @@
-"""Phase 2 read-back: photo of a marked-up label -> Todoist changes.
+"""Phase 2 read-back: photo of a marked-up label -> to-do app changes, plus the journal page.
 
 Auto-applied (confidence >= 0.7): ✓ done -> close, → tomorrow -> due_date = tomorrow.
 Always held for confirmation: every ✗ drop (delete) and anything below 0.7.
+When the photo also shows handwritten notes (the facing journal page), they're transcribed, and the
+photo is kept as that day's journal page (nextbox/journal.py).
 """
 from __future__ import annotations
 
@@ -28,6 +30,7 @@ class RowMark(BaseModel):
 class ReadBack(BaseModel):
     label_code: str | None = Field(description="The #code printed bottom-right, without '#', or null if unreadable")
     rows: list[RowMark]
+    notes: str = Field(default="", description="Handwritten notes outside the label, transcribed; '' if none")
 
 
 # (image bytes, media type, manifest) -> ReadBack. Swapped for a fake in tests.
@@ -49,6 +52,12 @@ The person marked rows by hand:
 Report every numbered row you can see, with the mark and your confidence.
 Be conservative: if a mark is ambiguous, smudged, or could belong to a neighbouring row, lower the confidence.
 Also read the code printed at the bottom left after '#' (like 260930-X5C8).
+
+The label may be stuck on the left page of a paper journal with handwritten notes on the right page
+(or around the label). If there are handwritten notes that are not part of the printed label,
+transcribe them into "notes" as faithfully as you can: keep the person's own words, line breaks and
+lists, write [unclear] for a word you can't read, and don't add anything. If there are none, leave
+"notes" empty. If the photo has notes but no label at all, report no rows and a null code.
 {manifest_hint}"""
 
 
@@ -131,8 +140,12 @@ def _apply(ctx: Context, mark: str, item: dict) -> None:
     td = ctx.tasks
     if mark == "done":
         td.close_task(item["task_id"])
+        if ctx.on_done:
+            ctx.on_done(item["task_id"])
     elif mark == "tomorrow":
         td.set_due_date(item["task_id"], (ctx.today() + timedelta(days=1)).isoformat())
+        if ctx.on_move:
+            ctx.on_move(item["task_id"])
     elif mark == "drop":
         td.delete_task(item["task_id"])
     else:
@@ -152,16 +165,24 @@ def scan_photo(ctx: Context, vision: VisionFn, image: bytes, media_type: str,
         "label_code_read": result.label_code,
         "by": ctx.user,
         "household_id": ctx.household,
-        "vision": result.model_dump(),  # raw read-back, for debugging misreads
+        # Raw read-back, for debugging misreads. Not the notes: those are private to the journal.
+        "vision": result.model_dump(exclude={"notes"}),
         "applied": [],
         "needs_confirmation": [],
         "ignored": [],
         "errors": [],
     }
+    notes = (result.notes or "").strip()
     if not label:
-        record["errors"].append("Couldn't match the photo to a printed label. Pass label_id explicitly.")
+        page = _keep_page(ctx, image, notes, scan_id, None, ctx.today().isoformat())
+        if page:
+            record["journal_id"] = page["id"]
+        if not result.rows and page:
+            record["message"] = "Saved to your journal. There was no printed label in the photo."
+        else:
+            record["errors"].append("Couldn't match the photo to a printed label. Pass label_id explicitly.")
         ctx.store.save_scan(record)
-        return record
+        return {**record, "notes": notes} if page else record
 
     by_row = {m["row"]: m for m in label["manifest"]}
     seen: set[int] = set()
@@ -186,8 +207,19 @@ def scan_photo(ctx: Context, vision: VisionFn, image: bytes, media_type: str,
             record["applied"].append(entry)
         except Exception as exc:  # keep going; report per-row
             record["errors"].append(f"row {rm.row}: {exc}")
-    ctx.store.save_scan(record)
-    return record
+    day = label["created_at"][:10] if label.get("kind") == "today" and label.get("created_at") else ctx.today().isoformat()
+    page = _keep_page(ctx, image, notes, scan_id, label["id"], day)
+    if page:
+        record["journal_id"] = page["id"]
+    ctx.store.save_scan(record)  # the scan record is visible to the superadmin, so no notes in it
+    return {**record, "notes": notes} if page else record
+
+
+def _keep_page(ctx: Context, image: bytes, notes: str, scan_id: str, label_id: str | None, day: str) -> dict | None:
+    """Keep the photo as a journal page when it has notes, or always in journal mode."""
+    if ctx.save_page is None or not (notes or ctx.prefs.get("journal_mode", True)):
+        return None
+    return ctx.save_page(day=day, notes=notes, photo=image, scan_id=scan_id, label_id=label_id)
 
 
 def confirm(ctx: Context, scan_id: str, decisions: dict[int, str]) -> dict:

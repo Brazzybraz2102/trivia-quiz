@@ -174,6 +174,33 @@ tags = Table(
     Column("position", Integer, nullable=False, default=0),
 )
 
+# The journal: one page per photo or typed note, by day. Private: only its owner can read it (not
+# even a superadmin), because it holds handwritten notes. The photo is the backup of the paper page.
+journal = Table(
+    "journal", metadata,
+    Column("id", String(16), primary_key=True),
+    Column("owner", String(32), nullable=False),
+    Column("household_id", String(32), nullable=False),
+    Column("day", String(10), nullable=False),                       # YYYY-MM-DD
+    Column("created", BigInteger, nullable=False),
+    Column("updated", BigInteger, nullable=False),
+    Column("notes", Text, nullable=False, default=""),               # read from the photo, then editable
+    Column("photo", LargeBinary, nullable=True),                     # JPEG
+    Column("scan_id", String(16), nullable=True),
+    Column("label_id", String(16), nullable=True),
+    Index("ix_journal_owner_day", "owner", "day"),
+)
+
+# How many times each task was moved to a later day ("slid"). Only ids and counts, never the task
+# text, so a linked app's tasks still aren't copied here.
+task_slides = Table(
+    "task_slides", metadata,
+    Column("owner", String(32), primary_key=True),
+    Column("task_id", String(200), primary_key=True),
+    Column("moves", Integer, nullable=False, default=0),
+    Column("last_moved", BigInteger, nullable=False),
+)
+
 _engines: dict[str, Engine] = {}
 _lock = threading.Lock()
 

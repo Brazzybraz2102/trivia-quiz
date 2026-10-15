@@ -39,10 +39,12 @@ PREFS = {
     "setup_dismissed": ([], lambda v: isinstance(v, list) and len(v) <= 20
                         and all(isinstance(x, str) and len(x) <= 20 for x in v)),  # guide steps marked done/skipped
     "setup_hidden": (False, lambda v: isinstance(v, bool)),  # the Get started guide is put away
-    "paper_size": ("letter", lambda v: v in ("letter", "a4")),  # for Print on paper
+    "paper_size": ("letter", lambda v: v in ("letter", "a4", "a5", "half_letter")),  # for Print on paper
+    "journal_mode": (True, lambda v: isinstance(v, bool)),   # daily label for a journal page; keep every read-back photo
+    "slug_after": (3, lambda v: isinstance(v, int) and 2 <= v <= 10),  # moves before a task counts as a slug
     "display_name": ("", lambda v: isinstance(v, str) and len(v.strip()) <= 40),
     "text_size": ("normal", lambda v: v in ("normal", "large", "xlarge")),
-    "start_tab": ("mylist", lambda v: v in ("mylist", "print")),
+    "start_tab": ("mylist", lambda v: v in ("mylist", "print", "journal")),
     "new_tasks_to": ("nextbox", lambda v: v in ("nextbox", "linked")),  # where new tasks go
     "sticker_size": ("normal", lambda v: v in ("normal", "big")),
     "show_waiting": (True, lambda v: isinstance(v, bool)),

@@ -297,11 +297,25 @@ Then `systemctl --user restart nextbox` and `.venv/bin/nextbox doctor` shows whi
 
 ## Print on any printer
 Every ticket, sticker set and card has a **Print on paper** button. It opens a PDF laid out on US
-Letter or A4 (Settings → Printing) that people print the normal way from their phone or computer.
+Letter, A4, or a journal page size, A5 or half letter (Settings → Printing), that people print the normal way from their phone or computer.
 Stickers keep their real label size in a grid with cut lines, so full-sheet sticker paper (Avery
 5165 / L7167 or similar) becomes a sheet of stickers. Lists and cards print 3.5 inches wide and
 continue on the next page if they're long. Next Box never sends these to a printer itself: the
 person prints them.
+
+## The journal (the daily routine)
+Print today's label, stick it on the **left page** of a paper journal, work the list, and write
+notes about the day on the **right page**. Then **Snap** both pages in one photo:
+- the marks update your list, as always;
+- the handwritten notes are typed out (AI vision) and saved as that day's **journal page**, with
+  the photo, so a lost notebook is never a lost record;
+- the **Journal** tab shows each day's pages, the week's **wins**, and **slugs**: tasks that keep
+  sliding (moved 3+ times or waiting 7+ days). Slugs also print "slid 3×" on the daily label.
+
+Journal mode (Settings → Focus, on by default) adds a "Today's win" line to the daily label and keeps
+every snapped photo. Paper sizes include **A5** and **half letter** for printing the day's list on a
+regular printer and pasting it in. Journal pages are private: admins can't read them, and `nextbox db
+sql` hides their notes and photos.
 
 ## Getting new people started
 - **Quick start page:** `https://nextbox.braznarkel.com/app/guide.html` explains everything in 10 short
