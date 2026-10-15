@@ -36,6 +36,9 @@ PREFS = {
     "show_wins": (True, lambda v: isinstance(v, bool)),      # "Yesterday: 4 done" on the daily ticket
     "show_next_step": (True, lambda v: isinstance(v, bool)), # a task's first unticked tiny step under it
     "show_calendar": (True, lambda v: isinstance(v, bool)),  # today's events at the top of the daily ticket
+    "setup_dismissed": ([], lambda v: isinstance(v, list) and len(v) <= 20
+                        and all(isinstance(x, str) and len(x) <= 20 for x in v)),  # guide steps marked done/skipped
+    "setup_hidden": (False, lambda v: isinstance(v, bool)),  # the Get started guide is put away
     "new_tasks_to": ("nextbox", lambda v: v in ("nextbox", "linked")),  # where new tasks go
     "sticker_size": ("normal", lambda v: v in ("normal", "big")),
     "show_waiting": (True, lambda v: isinstance(v, bool)),

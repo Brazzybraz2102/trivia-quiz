@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Next Box</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Next Box">
+<meta name="theme-color" content="#1f5eff">
 <style>
   :root { --bg:#fafaf7; --fg:#1b1b1b; --muted:#6b6b6b; --line:#dcdcd4; --accent:#1f5eff; --warn:#b3261e; --ok:#1d7a3a; --card:#fff; --note:#fff6d6; --noteFg:#5a4300; }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#141414; --fg:#eee; --muted:#a0a0a0; --line:#333; --accent:#7ea2ff; --warn:#ff8a80; --ok:#7bd88f; --card:#1d1d1d; --note:#3a3015; --noteFg:#f3dd9b; } }
@@ -127,6 +133,15 @@
   .group { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:14px 0 2px; }
   .printbar { position:sticky; bottom:0; background:var(--bg); border-top:1px solid var(--line); padding:10px 0; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
   .hint code { background:var(--bg); padding:1px 5px; border-radius:4px; border:1px solid var(--line); font-size:13px; }
+  .guide .bar { height:8px; background:var(--line); border-radius:99px; overflow:hidden; margin:8px 0 4px; }
+  .guide .bar div { height:100%; background:var(--ok); border-radius:99px; transition:width .3s; }
+  .step { display:flex; gap:10px; padding:10px 0; border-top:1px solid var(--line); }
+  .step .mark { flex:none; width:26px; height:26px; border-radius:50%; border:2px solid var(--line); display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; }
+  .step.done .mark { background:var(--ok); border-color:var(--ok); color:#fff; }
+  .step.done .title { color:var(--muted); text-decoration:line-through; }
+  .step .title { font-weight:600; }
+  .step.next { background:var(--note); color:var(--noteFg); margin:0 -14px; padding:10px 14px; border-radius:10px; border-top:0; }
+  .step.next .muted { color:inherit; opacity:.85; }
   .tagrow { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
   @media (max-width:520px) { .setting { flex-wrap:wrap; } }
 </style>
@@ -140,7 +155,8 @@
     <label>Password<input type="password" id="pass" name="password" autocomplete="current-password" required></label>
     <div class="row"><button class="go" type="submit">Sign in</button></div>
   </form>
-  <p class="muted" style="text-align:center"><button class="linkish" id="showJoin">Have an invite code? Join</button></p>
+  <p class="muted" style="text-align:center"><button class="linkish" id="showJoin">Have an invite code? Join</button>
+    · <a href="guide.html" target="_blank" rel="noopener">New here? Quick start</a></p>
   <form class="card" id="joinForm" hidden autocomplete="on">
     <h2>Join Next Box</h2>
     <p class="muted">Someone gave you an invite code. It works once.</p>
@@ -184,6 +200,13 @@
 <main>
   <label class="dry"><input type="checkbox" id="dry" checked> Preview only (don't send to the printer)</label>
   <section id="mylist" class="on">
+    <div class="card guide" id="guideCard" hidden>
+      <div class="row" style="margin:0;justify-content:space-between"><h2 style="margin:0">Get started</h2>
+        <button class="linkish" id="guideHide">Hide</button></div>
+      <div class="bar"><div id="guideBar" style="width:0"></div></div>
+      <div class="muted" id="guideCount"></div>
+      <div id="guideSteps"></div>
+    </div>
     <div class="card now" id="nowCard">
       <div class="muted">Just one thing</div>
       <div class="big" id="nowText">…</div>
@@ -265,14 +288,14 @@
         <select id="newTagColor" aria-label="Color"></select><button class="go" id="addTag">Add tag</button></div>
     </div>
 
-    <div class="card"><h2>Focus &amp; ADHD helpers</h2>
+    <div class="card" id="focusCard"><h2>Focus &amp; ADHD helpers</h2>
       <label class="setting"><div class="label"><b>Tasks on the daily ticket</b><span>A short list is one you start. The rest are listed small at the bottom. 1–20.</span></div><input type="number" min="1" max="20" data-pref="max_rows"></label>
       <label class="setting"><div class="label"><b>Gentle words</b><span>"waiting 3d" instead of "overdue 3d", and "Not today" for the rest.</span></div><input type="checkbox" data-pref="gentle_words"></label>
       <label class="setting"><div class="label"><b>Show yesterday's wins</b><span>"Yesterday you finished 4. ✓" on the daily ticket.</span></div><input type="checkbox" data-pref="show_wins"></label>
       <label class="setting"><div class="label"><b>Print the next tiny step</b><span>Under each task that has steps.</span></div><input type="checkbox" data-pref="show_next_step"></label>
     </div>
 
-    <div class="card"><h2>Calendars</h2>
+    <div class="card" id="calCard"><h2>Calendars</h2>
       <p class="muted">Today's events show on My list and print at the top of your daily ticket. Next Box only reads them.</p>
       <div id="calList">…</div>
       <h3>Add a calendar</h3>
@@ -337,6 +360,7 @@
     </div>
 
     <div class="card"><h2>Help</h2>
+      <p class="muted"><a href="guide.html" target="_blank" rel="noopener">Quick start guide</a> · <button class="linkish" id="guideShow">Show the Get started checklist</button></p>
       <p class="muted">Something wrong, confusing or great? Feedback is shared with everyone, never with your name.</p>
       <div class="row"><button class="go" data-feedback>Send feedback</button></div>
     </div>

@@ -284,6 +284,14 @@ works. In `.env` set `NEXTBOX_PUBLIC_URL=https://nextbox.<your domain>`, then fo
 
 Then `systemctl --user restart nextbox` and `.venv/bin/nextbox doctor` shows which are on.
 
+## Getting new people started
+- **Quick start page:** `https://nextbox.braznarkel.com/app/guide.html` explains everything in 10 short
+  sections. Send it with an invite. It's also linked from the sign-in page and Settings → Help.
+- **Get started checklist:** the top of My list shows 7 steps that tick themselves off: brain dump,
+  home screen, link an app, add a calendar, printer, first stickers, and focus settings. The optional
+  ones can be skipped. Hide it with **Hide** and bring it back in Settings → Help.
+- **Home screen:** Next Box has its own icon and opens full screen when added to the home screen.
+
 ## Everyday use
 | Want | Do |
 |---|---|

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Next Box quick start</title>
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<style>
+  :root { --bg:#fafaf7; --fg:#1b1b1b; --muted:#5f5f5a; --line:#e2e2da; --card:#fff; --accent:#1f5eff; --note:#fff6d6; --noteFg:#5a4300; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141414; --fg:#eee; --muted:#a3a39c; --line:#2f2f2f; --card:#1d1d1d; --accent:#7ea2ff; --note:#3a3015; --noteFg:#f3dd9b; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.55 system-ui, -apple-system, sans-serif; }
+  main { max-width:720px; margin:0 auto; padding:28px 16px 60px; }
+  h1 { font-size:32px; margin:0 0 6px; }
+  .lead { color:var(--muted); margin:0 0 20px; }
+  nav { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:24px; }
+  nav a { font-size:14px; border:1px solid var(--line); border-radius:99px; padding:4px 10px; color:var(--fg); text-decoration:none; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:12px; }
+  h2 { font-size:20px; margin:0 0 6px; display:flex; gap:10px; align-items:center; }
+  h2 span { flex:none; width:28px; height:28px; border-radius:50%; background:var(--accent); color:#fff; font-size:15px; display:flex; align-items:center; justify-content:center; }
+  p { margin:6px 0; }
+  ul, ol { margin:6px 0; padding-left:22px; }
+  li { margin:3px 0; }
+  code { background:var(--bg); border:1px solid var(--line); border-radius:5px; padding:0 5px; font-size:15px; }
+  .tip { background:var(--note); color:var(--noteFg); border-radius:10px; padding:8px 12px; margin-top:8px; font-size:15px; }
+  table { border-collapse:collapse; width:100%; font-size:15px; }
+  td, th { text-align:left; padding:5px 6px; border-top:1px solid var(--line); vertical-align:top; }
+  .btn { display:inline-block; background:var(--accent); color:#fff; text-decoration:none; border-radius:10px; padding:10px 16px; font-weight:600; margin-top:6px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Next Box quick start</h1>
+  <p class="lead">Your to-do list, on paper you can stick where things happen. Ten minutes from here to your first sticker.</p>
+  <nav>
+    <a href="#join">Join</a><a href="#home">Home screen</a><a href="#dump">Brain dump</a><a href="#one">One thing</a>
+    <a href="#stickers">Stickers</a><a href="#ticket">Daily ticket</a><a href="#photo">Tick &amp; snap</a>
+    <a href="#apps">Apps &amp; calendars</a><a href="#printer">Printer</a><a href="#help">Help</a>
+  </nav>
+
+  <section id="join"><h2><span>1</span>Join</h2>
+    <p>You need an invite. Tap the link you were sent, or open Next Box, tap <b>Have an invite code? Join</b> and type the code.</p>
+    <p>Pick a username (lowercase, like <code>sam</code>) and a password of 8 or more characters. Each code works once.</p>
+    <p>The first time you sign in, you'll see what the admin can see about how you use Next Box. Tap <b>I understand</b>.</p>
+    <a class="btn" href="/app/">Open Next Box</a>
+  </section>
+
+  <section id="home"><h2><span>2</span>Put it on your home screen</h2>
+    <ul>
+      <li><b>iPhone:</b> in Safari tap <b>Share</b> (the square with the arrow) → <b>Add to Home Screen</b>.</li>
+      <li><b>Android:</b> in Chrome tap <b>⋮</b> → <b>Add to Home screen</b> (or <b>Install app</b>).</li>
+    </ul>
+    <p>Now it opens like an app, and it's always the newest version. There's nothing to update.</p>
+  </section>
+
+  <section id="dump"><h2><span>3</span>Empty your head</h2>
+    <p>On <b>My list</b>, type everything on your mind into <b>Brain dump</b>, one thing per line, and tap <b>Add to my list</b>. Don't sort it.</p>
+    <p>Optional shortcuts on any line:</p>
+    <table>
+      <tr><td><code>#errand</code></td><td>a tag (tags have colors)</td></tr>
+      <tr><td><code>!</code></td><td>urgent</td></tr>
+      <tr><td><code>today</code> <code>tomorrow</code> <code>fri</code></td><td>when it's due</td></tr>
+      <tr><td><code>3pm</code></td><td>a time</td></tr>
+      <tr><td><code>~15m</code></td><td>how long it'll take</td></tr>
+      <tr><td><code>every day</code></td><td>repeats (also <code>every week</code>, <code>every month</code>)</td></tr>
+    </table>
+    <div class="tip">Example: <code>Pay water bill #errand ! tomorrow ~10m</code></div>
+    <p>Tap <b>Edit</b> on a task to add <b>tiny steps</b>. Make the first one take two minutes, like "find the bill".</p>
+  </section>
+
+  <section id="one"><h2><span>4</span>Just one thing</h2>
+    <p>The top of My list shows the <b>one</b> task to do now, with its next tiny step.</p>
+    <ul><li><b>Done ✓</b>: that counts.</li><li><b>Print it big</b>: a card with just that task and its steps.</li><li><b>Not now</b>: shows the next one.</li></ul>
+  </section>
+
+  <section id="stickers"><h2><span>5</span>Stickers and tear-off strips</h2>
+    <p>Tick tasks with the boxes on the left (or tick none to use today's), then tap:</p>
+    <ul><li><b>Stickers</b>: one small label per task, to stick on the bill, the door, the car keys.</li>
+      <li><b>Tear-off strips</b>: one label you cut into strips.</li></ul>
+    <p>Each tag has a color. On plain white labels, colors print as patterns (red is solid black, yellow is dots, blue is stripes), so you can still tell them apart. Change tags in <b>Settings → Tags &amp; colors</b>.</p>
+    <div class="tip">Keep <b>Preview only</b> ticked (top of the page) to try things without printing.</div>
+  </section>
+
+  <section id="ticket"><h2><span>6</span>Your daily ticket</h2>
+    <p><b>Print → Today</b> prints today's list: your calendar at the top, then up to 5 tasks with the next tiny step under each, with the rest listed small. It ends with "Yesterday you finished 4. ✓"</p>
+    <p>Change any of it in <b>Settings → Focus &amp; ADHD helpers</b>.</p>
+  </section>
+
+  <section id="photo"><h2><span>7</span>Tick, snap, done</h2>
+    <p>Mark a printed ticket or sticker with a pen: <b>✓</b> done, <b>→</b> move to tomorrow, <b>✗</b> drop. Then open <b>Read back</b> and take a photo. Your list updates.</p>
+    <p>Anything it isn't sure about, and every delete, waits for you to tap <b>Confirm</b>.</p>
+  </section>
+
+  <section id="apps"><h2><span>8</span>Your apps and calendars (optional)</h2>
+    <p>Next Box has its own list, so you don't need anything else. If you already use an app, link it in <b>Settings</b> and its tasks show up next to yours (they stay in that app).</p>
+    <table>
+      <tr><th>Works</th><td>Todoist, Notion, Asana, Nextcloud/Fastmail task lists, and Google Tasks, Microsoft To Do and TickTick once your admin turns them on</td></tr>
+      <tr><th>Calendars</th><td>Google, Outlook, iCloud, Proton, Yahoo, or any calendar with a subscription (.ics) link</td></tr>
+      <tr><th>Can't</th><td>Apple Reminders, Things, Any.do, Google Keep. These apps don't let other apps in. Use My list instead.</td></tr>
+    </table>
+  </section>
+
+  <section id="printer"><h2><span>9</span>The printer</h2>
+    <p>Whoever runs your household adds the label printer (<b>Admin → Printers</b>). Until there's one, everything shows as a preview, and you can still use the list, stickers and focus card on screen.</p>
+  </section>
+
+  <section id="help"><h2><span>10</span>Help and feedback</h2>
+    <p>Tap <b>Feedback</b> on any page. It's shared with everyone but never with your name. Something confusing is the most useful thing you can report.</p>
+    <p>The <b>Get started</b> checklist at the top of My list walks you through all of this. Bring it back any time in <b>Settings → Help</b>.</p>
+  </section>
+</main>
+</body>
+</html>

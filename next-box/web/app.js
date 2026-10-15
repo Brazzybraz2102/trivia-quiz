@@ -67,6 +67,7 @@ async function boot() {
   loadLabels();
   loadList();
   loadToday();
+  loadGuide();
   $("#noticeText").textContent = me.data_notice;
   $("#noticeWhen").textContent = me.consented ? `You accepted this on ${when(me.consented_at)}.` : "";
   if (!me.consented) { $("#noticeBody").textContent = me.data_notice; $("#noticeDialog").showModal(); }
@@ -261,7 +262,7 @@ $("#provGo").onclick = async () => {
   try {
     await api("/connection", { method: "PUT", json: { provider: $("#provSel").value, fields } });
     $$("#provFields input").forEach((el) => el.value = "");
-    toast("Connected"); loadConnection();
+    toast("Connected"); loadConnection(); loadGuide();
   } catch (e) { $("#provMsg").textContent = e.message; }
   finally { $("#provGo").disabled = false; }
 };
@@ -286,7 +287,7 @@ $("#mustForm").onsubmit = async (e) => {
 $("#logout").onclick = async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); showLogin("Signed out."); };
 
 // ---------------------------------------------------------------- tabs
-const loaders = { mylist: () => { loadList(); loadToday(); }, printed: loadHistory, settings: () => { loadSessions(); loadLabels(); loadTags(); loadCalendars(); }, admin: () => { loadAdmin(); loadPrinters(); loadInvites(); },
+const loaders = { mylist: () => { loadList(); loadToday(); loadGuide(); }, printed: loadHistory, settings: () => { loadSessions(); loadLabels(); loadTags(); loadCalendars(); }, admin: () => { loadAdmin(); loadPrinters(); loadInvites(); },
                   debug: loadDebug, board: () => loadBoard(), usage: () => loadUsage() };
 $$("nav button").forEach((b) => b.onclick = () => {
   $$("nav button").forEach((x) => x.classList.toggle("on", x === b));
@@ -765,6 +766,7 @@ async function loadList() {
   const ids = new Set([...listData.tasks, ...(listData.linked || [])].map((t) => t.id));
   picked = new Set([...picked].filter((id) => ids.has(id)));
   renderList();
+  if (guide && !guide.steps.find((x) => x.key === "tasks")?.done && listData.tasks.length) loadGuide();
 }
 
 $("#listBody").addEventListener("change", (e) => {
@@ -809,6 +811,7 @@ async function printFrom(path, body, button) {
       ${t.printer ? ` · ${esc(t.printer.name)}` : ""}</p>${t.note ? `<p class="muted">${esc(t.note)}</p>` : ""}<img src="${png(t.id)}" alt="label preview">`;
     box.innerHTML = [r, ...(r.also || [])].map(one).join("<hr>");
     box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    loadGuide();
   } catch (e) { box.hidden = false; box.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
   finally { button.disabled = false; }
 }
@@ -1183,7 +1186,7 @@ $("#calGo").onclick = async () => {
   try {
     await api("/calendars", { method: "POST", json: { kind: k.key, fields } });
     $$("#calFields input").forEach((el) => el.value = "");
-    $("#calMsg").textContent = ""; toast("Calendar added"); loadCalendars(); loadToday();
+    $("#calMsg").textContent = ""; toast("Calendar added"); loadCalendars(); loadToday(); loadGuide();
   } catch (e) { $("#calMsg").textContent = e.message; }
   finally { $("#calGo").disabled = false; }
 };
@@ -1212,3 +1215,81 @@ async function loadToday() {
     setTimeout(() => { toast(msg); $("nav button[data-tab=settings]")?.click(); }, 600);
   }
 }
+
+
+// ---------------------------------------------------------------- Get started guide
+const isApp = () => window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+function goto(tab, selector) {
+  $(`nav button[data-tab=${tab}]`)?.click();
+  setTimeout(() => { const el = selector && $(selector); if (el) { el.scrollIntoView({ behavior: "smooth", block: "start" }); el.querySelector?.("textarea,input,select")?.focus?.(); } }, 150);
+}
+let guide = null;
+const STEPS = {
+  tasks: { title: "Empty your head", text: "Type everything on your mind into Brain dump, one thing per line. Don't sort it.",
+           go: ["Go to Brain dump", () => { $("#dumpText").scrollIntoView({ behavior: "smooth", block: "center" }); $("#dumpText").focus(); }] },
+  home: { title: "Put Next Box on your home screen",
+          text: () => isIOS() ? "In Safari tap Share (the square with the arrow) → Add to Home Screen. Then open Next Box from that icon."
+                              : "In Chrome tap ⋮ → Add to Home screen (or Install app). Then open Next Box from that icon.",
+          mark: "I did it" },
+  app: { title: "Link your to-do app (optional)", text: "Already use Todoist, Google Tasks, Microsoft To Do, TickTick, Notion or Asana? Its tasks show up here too.",
+         go: ["Link an app", () => goto("settings", "#appCard")], skip: true },
+  calendar: { title: "Add your calendar (optional)", text: "Today's events show here and print at the top of your daily ticket. Google, Outlook and iCloud all work.",
+              go: ["Add a calendar", () => goto("settings", "#calCard")], skip: true },
+  printer: { title: () => guide?.can_add_printer ? "Add your label printer" : "Your printer",
+             text: () => guide?.can_add_printer ? "Admin → Printers. Not ready yet? Everything still works as previews."
+                                                : "Whoever runs your household adds the printer. Until then you'll see previews of everything.",
+             go: () => guide?.can_add_printer ? ["Add printer", () => goto("admin", "#printerList")] : null, skip: true },
+  preview: { title: "Make your first stickers", text: "Tick a task or two and tap Stickers. With “Preview only” on, nothing prints: you just see how it looks.",
+             go: ["Show me", () => $(".printbar").scrollIntoView({ behavior: "smooth", block: "center" })] },
+  focus: { title: "Make it fit your brain", text: "How many tasks per day, gentle wording, yesterday's wins, tiny steps: it's all in Focus & ADHD helpers.",
+           go: ["Open", () => goto("settings", "#focusCard")], mark: "Looks good" },
+};
+const val = (v) => (typeof v === "function" ? v() : v);
+
+async function loadGuide() {
+  try { guide = await api("/setup"); } catch { return; }
+  const home = guide.steps.find((s) => s.key === "home");
+  if (home && !home.done && isApp()) { await api("/setup/home/done", { method: "POST" }).catch(() => {}); home.done = true; }
+  renderGuide();
+}
+function renderGuide() {
+  if (!guide) return;
+  $("#guideCard").hidden = guide.hidden;
+  const done = guide.steps.filter((s) => s.done).length, total = guide.steps.length;
+  $("#guideBar").style.width = `${Math.round(100 * done / total)}%`;
+  $("#guideCount").textContent = done === total ? "You're all set. 🎉 You can hide this now." : `${done} of ${total} done`;
+  const next = guide.steps.find((s) => !s.done);
+  $("#guideSteps").innerHTML = guide.steps.map((s, i) => {
+    const d = STEPS[s.key], go = val(d.go);
+    const isNext = next && s.key === next.key;
+    const skipped = s.skipped && d.skip;  // "I did it" steps are done, not skipped
+    return `<div class="step${s.done ? " done" : ""}${isNext ? " next" : ""}" data-step="${s.key}">
+      <div class="mark">${s.done ? "✓" : i + 1}</div>
+      <div style="flex:1;min-width:0"><div class="title">${esc(val(d.title))}${skipped ? " <span class='muted'>(skipped)</span>" : ""}</div>
+        ${isNext ? `<div class="muted">${esc(val(d.text))}</div>
+          <div class="row">${go ? `<button class="go small" data-go>${esc(go[0])}</button>` : ""}
+            ${d.mark ? `<button class="plain small" data-done>${esc(d.mark)}</button>` : ""}
+            ${d.skip ? `<button class="plain small" data-done>${s.key === "printer" && !guide.can_add_printer ? "OK" : "Skip for now"}</button>` : ""}</div>` : ""}
+        ${skipped ? `<button class="linkish" data-undo>undo skip</button>` : ""}</div></div>`;
+  }).join("");
+}
+$("#guideSteps").addEventListener("click", async (e) => {
+  const row = e.target.closest("[data-step]");
+  if (!row) return;
+  const key = row.dataset.step;
+  if (e.target.matches("[data-go]")) return val(STEPS[key].go)[1]();
+  const action = e.target.matches("[data-done]") ? "done" : e.target.matches("[data-undo]") ? "undo" : null;
+  if (!action) return;
+  try { await api(`/setup/${key}/${action}`, { method: "POST" }); loadGuide(); } catch (err) { toast(err.message); }
+});
+$("#guideHide").onclick = async () => {
+  await api("/setup/guide/hide", { method: "POST" }).catch(() => {});
+  $("#guideCard").hidden = true;
+  toast("Hidden. Bring it back any time: Settings → Help.");
+};
+$("#guideShow").onclick = async () => {
+  await api("/setup/guide/show", { method: "POST" }).catch(() => {});
+  goto("mylist", "#guideCard");
+  loadGuide();
+};

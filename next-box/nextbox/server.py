@@ -667,6 +667,53 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         except Exception:  # a linked app that's down shouldn't hide what's on your own list
             return jobs.one_thing(dataclasses.replace(c, tasks_factory=lambda: my_list(caller), _tasks=None))
 
+    # ----------------------------------------------------------- Get started guide
+    SETUP_STEPS = ("tasks", "home", "app", "calendar", "printer", "preview", "focus")
+    _reach_cache: dict[str, tuple[float, bool]] = {}
+
+    @app.get("/setup")
+    def setup_guide(caller: Caller = Depends(person)):
+        """The Get started checklist. Steps tick themselves off from what the person has done;
+        optional ones can be skipped (remembered in prefs.setup_dismissed)."""
+        dismissed = set(caller.prefs.get("setup_dismissed") or [])
+        done: dict[str, bool] = {}
+        done["tasks"] = bool(my_list(caller).all_open()) or bool(ctx.store.list_printed(1, by=caller.name))
+        done["app"] = bool(connections.status(caller.name).get("connected"))
+        done["calendar"] = bool(connections.calendars(caller.name))
+        done["preview"] = bool(ctx.store.list_printed(1, by=caller.name))
+        if "printer" not in dismissed:
+            hit = _reach_cache.get(caller.household)
+            if not hit or hit[0] < time.time() - 60:  # don't knock on the printer every page load
+                mine = registry.all(caller.household)[:3]
+                hit = (time.time(), any(printer.is_reachable(p, timeout=1.0) for p in mine))
+                _reach_cache[caller.household] = hit
+            done["printer"] = hit[1]
+        steps = [{"key": k, "done": bool(done.get(k)) or k in dismissed, "skipped": k in dismissed and not done.get(k)}
+                 for k in SETUP_STEPS]
+        return {"steps": steps, "hidden": bool(caller.prefs.get("setup_hidden")),
+                "can_add_printer": rank(caller.role) >= rank("admin"),
+                "all_done": all(s["done"] for s in steps)}
+
+    @app.post("/setup/{step}/{action}")
+    def setup_mark(step: str, action: str, caller: Caller = Depends(person)):
+        if step not in SETUP_STEPS and step != "guide":
+            raise HTTPException(404, "no such step")
+        prefs = caller.prefs
+        if step == "guide":
+            if action not in ("hide", "show"):
+                raise HTTPException(400, "hide or show")
+            accounts.set_prefs(caller.name, {"setup_hidden": action == "hide"})
+            return {"ok": True}
+        dismissed = [x for x in (prefs.get("setup_dismissed") or []) if x in SETUP_STEPS]
+        if action == "done":
+            dismissed = sorted(set(dismissed) | {step})
+        elif action == "undo":
+            dismissed = [x for x in dismissed if x != step]
+        else:
+            raise HTTPException(400, "done or undo")
+        accounts.set_prefs(caller.name, {"setup_dismissed": dismissed})
+        return {"ok": True}
+
     @app.post("/list")
     def add_list_task(body: TaskIn, caller: Caller = Depends(person)):
         fields = body.model_dump(exclude_none=True)
