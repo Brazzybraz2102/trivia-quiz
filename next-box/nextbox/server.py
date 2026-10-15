@@ -258,6 +258,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     async def security_headers(request: Request, call_next):
         response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        if request.url.path.startswith("/app"):
+            # Always check for a newer copy, so an update shows up right away on phones and through
+            # Cloudflare (which otherwise keeps .js files for hours).
+            response.headers["Cache-Control"] = "no-cache"
         if request.url.scheme == "https":  # reached through the Cloudflare address: https only from now on
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
@@ -496,6 +500,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         consent = user.get("consent") or {}
         return {"username": name, "role": user["role"], "beta": user["beta"], "debug": user["debug"],
                 "household_id": user["household_id"], "email": user.get("email"), "version": _version(),
+                "household": (accounts.household(user["household_id"]) or {}).get("name", ""),
+                "created": user.get("created"), "last_login": user.get("last_login"),
                 "protected": accounts.protected() == name,
                 "must_change": user["must_change"], "prefs": user["prefs"],
                 "announcement": s["announcement"], "printing_paused": s["printing_paused"],
@@ -1608,6 +1614,14 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             "Content-Disposition": f'attachment; filename="nextbox-debug-{name}-{time.strftime("%Y%m%d-%H%M")}.json"'})
 
     if Path(WEB_DIR).is_dir():
+        @app.get("/app/", include_in_schema=False)
+        @app.get("/app/index.html", include_in_schema=False)
+        def app_page():
+            # The version in the script's address means a new version is never served from an old copy.
+            html = (Path(WEB_DIR) / "index.html").read_text()
+            return Response(html.replace('src="app.js"', f'src="app.js?v={_version()}-{build}"'),
+                            media_type="text/html")
+
         app.mount("/app", StaticFiles(directory=WEB_DIR, html=True), name="app")
 
         @app.get("/")

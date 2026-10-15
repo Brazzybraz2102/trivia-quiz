@@ -48,7 +48,8 @@ async function boot() {
   if (me.must_change) { showOnly("mustChange"); $("#mcCur").focus(); return; }
   showOnly("appShell");
   $("#who").textContent = me.username;
-  $("#meBtn").textContent = me.username.slice(0, 1).toUpperCase();
+  applyLook();
+  if (!boot.started) { boot.started = true; if ((me.prefs.start_tab || "mylist") !== "mylist") goto(me.prefs.start_tab); }
   if (me.role === "superadmin") checkUpdate();
   for (const el of [$("#roleBadge"), $("#whoRole")]) {
     el.textContent = me.role;
@@ -289,11 +290,13 @@ $("#mustForm").onsubmit = async (e) => {
 $("#logout").onclick = async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); showLogin("Signed out."); };
 
 // ---------------------------------------------------------------- tabs
-const loaders = { mylist: () => { loadList(); loadToday(); loadGuide(); }, printed: loadHistory, settings: () => { loadSessions(); loadLabels(); loadTags(); loadCalendars(); }, admin: () => { loadAdmin(); loadPrinters(); loadInvites(); },
+const loaders = { mylist: () => { loadList(); loadToday(); loadGuide(); }, printed: loadHistory, profile: () => loadProfile(),
+                  settings: () => { loadLabels(); loadTags(); loadCalendars(); }, admin: () => { loadAdmin(); loadPrinters(); loadInvites(); },
                   debug: loadDebug, board: () => loadBoard(), usage: () => loadUsage() };
 $$("nav button").forEach((b) => b.onclick = () => {
   $$("nav button").forEach((x) => x.classList.toggle("on", x === b));
   $$("section").forEach((s) => s.classList.toggle("on", s.id === b.dataset.tab));
+  $("#dryRow").hidden = !["mylist", "print"].includes(b.dataset.tab);  // only where things get printed
   loaders[b.dataset.tab]?.();
 });
 
@@ -403,6 +406,7 @@ $$("[data-pref]").forEach((el) => el.onchange = async () => {
   if (el.type === "range") v = parseFloat(v);
   try {
     const prefs = await api("/settings", { method: "PATCH", json: { [k]: v } });
+    if (me) { me.prefs = prefs; applyLook(); }
     me.prefs = prefs;
     loadPrefs(prefs);
     toast("Saved");
@@ -1318,8 +1322,8 @@ async function checkUpdate() {
     ? `Next Box ${update.latest} is available (you have ${update.current}). ${update.how}` : "";
 }
 function openMe() {
-  $("#meAvatar").textContent = me.username.slice(0, 1).toUpperCase();
-  $("#meName").textContent = me.username;
+  $("#meAvatar").textContent = displayName().slice(0, 1).toUpperCase();
+  $("#meName").textContent = displayName();
   $("#meSub").textContent = [me.role === "user" ? "" : me.role, me.email || "no email yet", me.protected ? "protected admin" : ""].filter(Boolean).join(" · ");
   $("#meUpdate").textContent = `Next Box ${me.version}` + (update ? (update.update_available ? ` · update available: ${update.latest}` : update.latest ? " · up to date ✓" : "") : "");
   $("#mePanel").innerHTML = "";
@@ -1332,6 +1336,7 @@ $("#meDialog").addEventListener("click", async (e) => {
   if (!b) return;
   const what = b.dataset.me, panel = $("#mePanel");
   if (what === "settings") { $("#meDialog").close(); return goto("settings"); }
+  if (what === "profile") { $("#meDialog").close(); return goto("profile"); }
   if (what === "feedback") { $("#meDialog").close(); return document.querySelector("[data-feedback]")?.click(); }
   if (what === "refresh") return location.reload();
   if (what === "export") { location.href = "/auth/export"; return; }
@@ -1375,3 +1380,52 @@ $("#meDialog").addEventListener("click", async (e) => {
   }
   panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 });
+
+
+// ---------------------------------------------------------------- profile page and look
+const displayName = () => (me?.prefs?.display_name || "").trim() || me?.username || "";
+function applyLook() {
+  if (!me) return;
+  const initial = displayName().slice(0, 1).toUpperCase();
+  $("#meBtn").textContent = initial;
+  const size = me.prefs.text_size || "normal";
+  if (size === "normal") delete document.documentElement.dataset.text; else document.documentElement.dataset.text = size;
+}
+function loadProfile() {
+  if (!me) return;
+  $("#pAvatar").textContent = displayName().slice(0, 1).toUpperCase();
+  $("#pName").textContent = displayName();
+  $("#pDisplay").value = me.prefs.display_name || "";
+  $("#pEmail").value = me.email || "";
+  const facts = [["Email", me.email || "not set"], ["Household", me.household || me.household_id],
+                 ["Member since", me.created ? new Date(me.created * 1000).toLocaleDateString() : ""],
+                 ["Last sign-in", when(me.last_login)], ["App version", `Next Box ${me.version}`]];
+  if (me.protected) facts.push(["Account", "protected admin (always a superadmin)"]);
+  $("#pFacts").innerHTML = facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+  $("#pDeletePanel").innerHTML = "";
+  loadSessions();
+}
+$("#pSave").onclick = async () => {
+  $("#pMsg").textContent = "";
+  try {
+    const prefs = await api("/settings", { method: "PATCH", json: { display_name: $("#pDisplay").value.trim() } });
+    const r = await api("/auth/profile", { method: "PATCH", json: { email: $("#pEmail").value } });
+    me.prefs = prefs; me.email = r.email;
+    applyLook(); loadProfile(); toast("Saved");
+  } catch (e) { $("#pMsg").textContent = e.message; }
+};
+$("#pDelete").onclick = () => {
+  $("#pDeletePanel").innerHTML = `<p class="err">This deletes your account, your list, tags, tickets and history from Next Box. It can't be undone. Apps you linked (like Todoist) aren't touched.</p>
+    <div class="field"><label for="pDelPw">Your password</label><input type="password" id="pDelPw" autocomplete="current-password"></div>
+    <div class="field"><label for="pDelName">Type your username (${esc(me.username)})</label><input type="text" id="pDelName" autocapitalize="none"></div>
+    <div class="row"><button class="go warn" id="pDelGo">Delete my account forever</button><span class="err" id="pDelMsg"></span></div>`;
+  $("#pDelGo").onclick = async () => {
+    try { await api("/auth/delete-account", { method: "POST", json: { password: $("#pDelPw").value, confirm: $("#pDelName").value } });
+          showLogin("Your account was deleted."); }
+    catch (err) { $("#pDelMsg").textContent = err.message; }
+  };
+};
+$("#setJump").onclick = (e) => {
+  const b = e.target.closest("[data-jump]");
+  if (b) document.getElementById(b.dataset.jump)?.scrollIntoView({ behavior: "smooth", block: "start" });
+};

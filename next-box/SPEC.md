@@ -443,3 +443,11 @@ can't). The login page has show-password and "Forgot your password?" (an admin g
 password). Superadmins see a banner when a newer version is published (`GET /super/update-check`,
 reads the published pyproject.toml at most every 6 hours).
 
+## 23. Profile page and settings
+**Profile** tab (also from the account menu): name to show (`display_name` pref), email, password,
+signed-in devices, what the admin can see, download my data, delete my account. **Settings** has a
+jump bar (General, Focus, Tags, Calendars, Linked app, Printing, Read-back, Help); General holds
+theme, text size (`text_size`), the screen it opens to (`start_tab`), 24-hour times and where new
+tasks go. `/app/` is served with `app.js?v=<version>-<build>` and every `/app` response says
+`Cache-Control: no-cache`, so phones and Cloudflare never keep showing an old version.
+

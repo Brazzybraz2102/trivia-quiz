@@ -40,6 +40,9 @@ PREFS = {
                         and all(isinstance(x, str) and len(x) <= 20 for x in v)),  # guide steps marked done/skipped
     "setup_hidden": (False, lambda v: isinstance(v, bool)),  # the Get started guide is put away
     "paper_size": ("letter", lambda v: v in ("letter", "a4")),  # for Print on paper
+    "display_name": ("", lambda v: isinstance(v, str) and len(v.strip()) <= 40),
+    "text_size": ("normal", lambda v: v in ("normal", "large", "xlarge")),
+    "start_tab": ("mylist", lambda v: v in ("mylist", "print")),
     "new_tasks_to": ("nextbox", lambda v: v in ("nextbox", "linked")),  # where new tasks go
     "sticker_size": ("normal", lambda v: v in ("normal", "big")),
     "show_waiting": (True, lambda v: isinstance(v, bool)),

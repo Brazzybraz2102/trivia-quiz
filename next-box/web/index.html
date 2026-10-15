@@ -31,7 +31,7 @@
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
   .card h2 { font-size:16px; margin:0 0 8px; }
   .card h3 { font-size:14px; margin:14px 0 6px; }
-  input[type=text], input[type=password], input[type=number], textarea, select { width:100%; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  input[type=text], input[type=password], input[type=email], input[type=number], textarea, select { width:100%; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
   input[type=number] { width:90px; }
   select { width:auto; }
   textarea { min-height:80px; }
@@ -149,6 +149,9 @@
   .menu .warn { color:var(--warn); }
   .pwrow { position:relative; }
   .pwrow button { position:absolute; right:6px; top:50%; transform:translateY(-50%); background:none; border:0; color:var(--accent); font:inherit; font-size:14px; cursor:pointer; padding:6px; }
+  html[data-text="large"] { font-size:19px; } html[data-text="xlarge"] { font-size:22px; }
+  html[data-text="large"] body { font-size:19px; } html[data-text="xlarge"] body { font-size:22px; }
+  #setJump button { font-size:13px; }
   .tagrow { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
   @media (max-width:520px) { .setting { flex-wrap:wrap; } }
 </style>
@@ -203,6 +206,7 @@
   <button data-tab="scan">Read back</button>
   <button data-tab="printed">Printed</button>
   <button data-tab="board">Feedback</button>
+  <button data-tab="profile">Profile</button>
   <button data-tab="settings">Settings</button>
   <button data-tab="admin" data-min="admin" hidden>Admin</button>
   <button data-tab="superusers" data-min="superadmin" hidden>Users</button>
@@ -210,7 +214,7 @@
   <button data-tab="debug" data-min="superadmin" hidden>Debug</button>
 </nav>
 <main>
-  <label class="dry"><input type="checkbox" id="dry" checked> Preview only (don't send to the printer)</label>
+  <label class="dry" id="dryRow"><input type="checkbox" id="dry" checked> Preview only (don't send to the printer)</label>
   <section id="mylist" class="on">
     <div class="card guide" id="guideCard" hidden>
       <div class="row" style="margin:0;justify-content:space-between"><h2 style="margin:0">Get started</h2>
@@ -292,8 +296,68 @@
     <div id="boardList"></div>
   </section>
 
+  <section id="profile">
+    <div class="card" id="profileHead">
+      <div style="display:flex;gap:14px;align-items:center">
+        <div class="avatar" id="pAvatar" style="width:64px;height:64px;font-size:26px;display:flex;align-items:center;justify-content:center"></div>
+        <div style="min-width:0"><h2 id="pName" style="margin:0;font-size:22px"></h2>
+          <div class="muted">@<span id="who"></span> <span id="whoRole" class="badge"></span></div></div>
+      </div>
+      <dl class="kv" style="margin-top:12px" id="pFacts"></dl>
+    </div>
+
+    <div class="card"><h2>Your details</h2>
+      <div class="field"><label for="pDisplay">Name to show</label><input type="text" id="pDisplay" maxlength="40" placeholder="e.g. Mike"></div>
+      <div class="field"><label for="pEmail">Email</label><input type="email" id="pEmail" autocapitalize="none" placeholder="you@example.com">
+        <div class="muted">Optional. You can sign in with it instead of your username.</div></div>
+      <div class="row"><button class="go" id="pSave">Save</button><span id="pMsg" class="muted"></span></div>
+    </div>
+
+    <div class="card"><h2>Password</h2>
+      <form id="pwForm" autocomplete="on">
+        <div class="row"><input type="password" id="pwCur" placeholder="Current password" autocomplete="current-password" required></div>
+        <div class="row"><input type="password" id="pwNew" placeholder="New password (8+ characters)" autocomplete="new-password" minlength="8" required></div>
+        <div class="row"><button class="go" type="submit">Change password</button><span id="pwMsg" class="muted"></span></div>
+      </form>
+    </div>
+
+    <div class="card"><h2>Signed-in devices</h2>
+      <div id="sessions" class="muted">…</div>
+      <div class="row"><button class="plain" id="signoutOthers">Sign out other devices</button>
+        <button class="plain" id="logout">Sign out</button></div>
+    </div>
+
+    <div class="card"><h2>Privacy and your data</h2>
+      <h3>What the admin can see</h3>
+      <p class="muted" id="noticeText"></p>
+      <p class="muted" id="noticeWhen"></p>
+      <div class="row"><a class="plain" href="/auth/export" style="text-decoration:none;color:inherit;border:1px solid var(--line);border-radius:8px;padding:9px 13px">Download my data</a>
+        <button class="go warn" id="pDelete">Delete my account</button></div>
+      <div id="pDeletePanel"></div>
+    </div>
+  </section>
+
   <section id="settings">
-    <div class="card"><h2>Tags &amp; colors</h2>
+    <div class="chips" id="setJump" style="margin-bottom:12px">
+      <button data-jump="setGeneral">General</button><button data-jump="focusCard">Focus</button>
+      <button data-jump="tagCard">Tags</button><button data-jump="calCard">Calendars</button>
+      <button data-jump="appCard">Linked app</button><button data-jump="printCard">Printing</button>
+      <button data-jump="readCard">Read-back</button><button data-jump="helpCard">Help</button>
+    </div>
+
+    <div class="card" id="setGeneral"><h2>General</h2>
+      <div class="setting"><div class="label"><b>Theme</b><span>This device only.</span></div>
+        <select id="theme" aria-label="Theme"><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+      <label class="setting"><div class="label"><b>Text size</b><span>Bigger text everywhere in the app.</span></div>
+        <select data-pref="text_size" aria-label="Text size"><option value="normal">Normal</option><option value="large">Large</option><option value="xlarge">Extra large</option></select></label>
+      <label class="setting"><div class="label"><b>Open to</b><span>The screen you see when Next Box opens.</span></div>
+        <select data-pref="start_tab" aria-label="Open to"><option value="mylist">My list</option><option value="print">Print</option></select></label>
+      <label class="setting"><div class="label"><b>24-hour times</b><span>19:00 instead of 7:00p.</span></div><input type="checkbox" data-pref="time_24h"></label>
+      <label class="setting"><div class="label"><b>New tasks go to</b><span>When you have a linked to-do app.</span></div>
+        <select data-pref="new_tasks_to" aria-label="New tasks go to"><option value="nextbox">My list</option><option value="linked">My linked app</option></select></label>
+    </div>
+
+    <div class="card" id="tagCard"><h2>Tags &amp; colors</h2>
       <p class="muted">Each tag has a color. Stickers print on the roll loaded with that color, or with the tag's pattern on plain white labels.</p>
       <div id="tagList">…</div>
       <div class="row"><input type="text" id="newTag" placeholder="New tag, e.g. errand" style="max-width:200px">
@@ -337,43 +401,20 @@
       <label class="setting"><div class="label"><b>Overdue tasks on their own ticket</b><span>Today's list prints in two parts, so overdue (expired) tasks come out on their color.</span></div><input type="checkbox" data-pref="split_overdue"></label>
     </div>
 
-    <div class="card"><h2>Account</h2>
-      <p>Signed in as <b id="who"></b> <span id="whoRole" class="badge"></span></p>
-      <h3>Change password</h3>
-      <form id="pwForm">
-        <div class="row"><input type="password" id="pwCur" placeholder="Current password" autocomplete="current-password" required></div>
-        <div class="row"><input type="password" id="pwNew" placeholder="New password (8+ characters)" autocomplete="new-password" minlength="8" required></div>
-        <div class="row"><button class="go" type="submit">Change password</button><span id="pwMsg" class="muted"></span></div>
-      </form>
-      <h3>What the admin can see</h3>
-      <p class="muted" id="noticeText"></p>
-      <p class="muted" id="noticeWhen"></p>
-      <h3>Signed-in devices</h3>
-      <div id="sessions" class="muted">…</div>
-      <div class="row"><button class="plain" id="signoutOthers">Sign out other devices</button>
-        <button class="plain" id="logout">Sign out</button></div>
-    </div>
-
-    <div class="card"><h2>Printing</h2>
+    <div class="card" id="printCard"><h2>Printing</h2>
       <label class="setting"><div class="label"><b>Always preview only</b><span>Never send to the printer from my account. Good for testing.</span></div><input type="checkbox" data-pref="always_dry_run"></label>
       <label class="setting"><div class="label"><b>Show "Also waiting"</b><span>List the tasks that didn't fit at the bottom.</span></div><input type="checkbox" data-pref="show_waiting"></label>
       <label class="setting"><div class="label"><b>Paper size</b><span>For "Print on paper" on a regular printer.</span></div>
         <select data-pref="paper_size" aria-label="Paper size"><option value="letter">US Letter</option><option value="a4">A4</option></select></label>
-      <label class="setting"><div class="label"><b>24-hour times</b><span>19:00 instead of 7:00p.</span></div><input type="checkbox" data-pref="time_24h"></label>
       <label class="setting"><div class="label"><b>Default list filter</b><span>Pre-fills "List from a filter".</span></div><input type="text" style="max-width:220px" data-pref="default_filter" placeholder="#Groceries"></label>
     </div>
 
-    <div class="card"><h2>Read-back</h2>
+    <div class="card" id="readCard"><h2>Read-back</h2>
       <label class="setting"><div class="label"><b>Apply confident marks automatically</b><span>Off: every mark waits for Confirm. Deletes always wait, either way.</span></div><input type="checkbox" data-pref="auto_apply"></label>
       <label class="setting"><div class="label"><b>Confidence needed</b><span id="confLabel">Marks below this wait for you.</span></div><input type="range" min="0.5" max="0.95" step="0.05" data-pref="confidence" style="width:160px"></label>
     </div>
 
-    <div class="card"><h2>Appearance</h2>
-      <div class="setting"><div class="label"><b>Theme</b><span>This device only.</span></div>
-        <select id="theme" aria-label="Theme"><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
-    </div>
-
-    <div class="card"><h2>Help</h2>
+    <div class="card" id="helpCard"><h2>Help</h2>
       <p class="muted"><a href="guide.html" target="_blank" rel="noopener">Quick start guide</a> · <button class="linkish" id="guideShow">Show the Get started checklist</button></p>
       <p class="muted">Something wrong, confusing or great? Feedback is shared with everyone, never with your name.</p>
       <div class="row"><button class="go" data-feedback>Send feedback</button></div>
@@ -534,9 +575,7 @@
   </div>
   <div id="meUpdate" class="muted" style="margin-top:8px"></div>
   <div class="menu" style="margin-top:10px">
-    <button data-me="profile">👤 Profile and email</button>
-    <button data-me="password">🔑 Change password</button>
-    <button data-me="devices">📱 Signed-in devices</button>
+    <button data-me="profile">👤 My profile</button>
     <button data-me="settings">⚙️ Settings</button>
     <a href="guide.html" target="_blank" rel="noopener">❓ Help and quick start</a>
     <button data-me="feedback">💬 Send feedback</button>

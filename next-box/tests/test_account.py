@@ -77,3 +77,16 @@ def test_update_check_is_superadmin_only(ctx, monkeypatch):
     assert login("sam", "sam password").get("/super/update-check").status_code == 403
     r = login("boss", "boss password").get("/super/update-check").json()
     assert r["latest"] == "99.0.0" and r["update_available"] and "update.sh" in r["how"]
+
+
+def test_profile_settings_and_fresh_copies(ctx):
+    ctx, a, login = site(ctx)
+    sam = login("sam", "sam password")
+    prefs = sam.patch("/settings", json={"display_name": "Sammy", "text_size": "large", "start_tab": "print"}).json()
+    assert (prefs["display_name"], prefs["text_size"], prefs["start_tab"]) == ("Sammy", "large", "print")
+    assert sam.patch("/settings", json={"text_size": "huge"}).status_code == 400
+    me = sam.get("/auth/me").json()
+    assert me["household"] and me["created"]
+    page = sam.get("/app/")
+    assert page.headers["cache-control"] == "no-cache" and 'src="app.js?v=' in page.text
+    assert sam.get("/app/app.js").headers["cache-control"] == "no-cache"
