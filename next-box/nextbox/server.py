@@ -44,6 +44,8 @@ from .store import normalize_id
 from .vault import Vault
 
 WEB_DIR = PROJECT_DIR / "web"
+UPDATE_URL = ("https://raw.githubusercontent.com/brazzybraz2102/trivia-quiz/"
+              "claude/ticket-todoist-printer-nldz8a/next-box/pyproject.toml")
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
 COOKIE = "nextbox_session"
 STARTED = time.time()
@@ -58,6 +60,15 @@ class LoginBody(BaseModel):
 class PasswordBody(BaseModel):
     current: str
     new: str
+
+
+class ProfileBody(BaseModel):
+    email: str | None = None
+
+
+class DeleteMeBody(BaseModel):
+    password: str
+    confirm: str  # must be the username
 
 
 class FeedbackBody(BaseModel):
@@ -414,7 +425,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.post("/auth/login")
     def login(body: LoginBody, request: Request, response: Response):
         client = request.client.host if request.client else "?"
-        username = body.username.strip().lower()
+        username = accounts.find_login(body.username) or body.username.strip().lower()  # username or email
         if accounts.too_many_failures(client):
             raise HTTPException(429, "too many attempts; wait 5 minutes")
         if not accounts.verify(username, body.password):
@@ -484,7 +495,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         s = server_settings.get()
         consent = user.get("consent") or {}
         return {"username": name, "role": user["role"], "beta": user["beta"], "debug": user["debug"],
-                "household_id": user["household_id"],
+                "household_id": user["household_id"], "email": user.get("email"), "version": _version(),
+                "protected": accounts.protected() == name,
                 "must_change": user["must_change"], "prefs": user["prefs"],
                 "announcement": s["announcement"], "printing_paused": s["printing_paused"],
                 "data_notice": DATA_NOTICE,
@@ -517,6 +529,90 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         _set_cookie(response, request, token)               # ...except this one
         events.log(caller.name, "password_changed", kind="auth")
         return {"ok": True, **({"token": token} if _bearer(request) else {})}
+
+    # ---------------------------------------------------------- your own account
+    @app.patch("/auth/profile")
+    def edit_profile(body: ProfileBody, caller: Caller = Depends(person)):
+        try:
+            user = accounts.update(caller.name, email=(body.email or "").strip() or None)
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        events.log(caller.name, "profile_changed", kind="auth")
+        return {"email": user.get("email")}
+
+    @app.get("/auth/export")
+    def export_my_data(caller: Caller = Depends(person)):
+        """Everything Next Box keeps about you, as a file. Never includes passwords or tokens."""
+        from sqlalchemy import select as _select
+
+        from . import db as _db
+        user = accounts.get(caller.name)
+        mine = my_list(caller)
+        with accounts.db.connect() as conn:
+            tasks = [mine._task(r) for r in conn.execute(
+                _select(_db.tasks).where(_db.tasks.c.owner == caller.name)).mappings()]
+        data = {
+            "exported_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "account": {k: user.get(k) for k in ("username", "email", "role", "household_id", "created", "last_login")},
+            "settings": user["prefs"], "tags": Tags(accounts.db, caller.name).all(), "tasks": tasks,
+            "linked_app": {k: v for k, v in connections.status(caller.name).items() if k not in ("config",)},
+            "calendars": [{k: c.get(k) for k in ("name", "provider", "calendars")} for c in connections.calendars(caller.name)],
+            "tickets": [{k: v for k, v in t.items() if k != "png"} for t in ctx.store.list_printed(10_000, by=caller.name)],
+            "read_backs": ctx.store.list_scans(10_000, by=caller.name),
+            "devices": accounts.sessions_for(caller.name),
+        }
+        events.log(caller.name, "export_data", kind="auth")
+        return Response(json.dumps(data, indent=2, default=str), media_type="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="next-box-{caller.name}.json"'})
+
+    @app.post("/auth/delete-account")
+    def delete_my_account(body: DeleteMeBody, request: Request, response: Response,
+                          caller: Caller = Depends(person)):
+        """Delete yourself and everything Next Box keeps about you. Your linked apps aren't touched."""
+        if body.confirm.strip().lower() != caller.name:
+            raise HTTPException(400, "type your username to confirm")
+        if not accounts.verify(caller.name, body.password):
+            raise HTTPException(403, "wrong password")
+        try:
+            accounts.remove_user(caller.name)
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        feedback_store.forget_user(caller.name)  # their posts stay, unlinked
+        LocalTasks(accounts.db, caller.name).delete_for_user()
+        Tags(accounts.db, caller.name).delete_for_user()
+        ctx.store.delete_for_user(caller.name)
+        events.delete_for_user(caller.name)
+        events.log("?", "account_deleted", kind="audit")  # no name: they asked to be forgotten
+        response.delete_cookie(COOKIE, path="/")
+        return {"ok": True}
+
+    _update_cache: dict = {}
+
+    @app.get("/super/update-check")
+    def update_check(caller: Caller = Depends(super_only)):
+        """Is there a newer Next Box? Looks at the published version at most every 6 hours."""
+        current = _version()
+        hit = _update_cache.get("latest")
+        if not hit or hit[0] < time.time() - 6 * 3600:
+            latest = None
+            try:
+                import tomllib
+
+                import httpx
+                r = httpx.get(UPDATE_URL, timeout=5.0)
+                if r.status_code == 200:
+                    latest = tomllib.loads(r.text)["project"]["version"]
+            except Exception:
+                latest = None
+            hit = (time.time(), latest)
+            _update_cache["latest"] = hit
+        latest = hit[1]
+
+        def as_tuple(v):
+            return tuple(int(x) for x in re.findall(r"\d+", v or "0")[:3])
+        return {"current": current, "latest": latest,
+                "update_available": bool(latest) and as_tuple(latest) > as_tuple(current),
+                "how": "On the Next Box computer: cd ~/next-box && scripts/update.sh"}
 
     @app.get("/auth/sessions")
     def my_sessions(caller: Caller = Depends(person)):

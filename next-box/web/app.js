@@ -48,6 +48,8 @@ async function boot() {
   if (me.must_change) { showOnly("mustChange"); $("#mcCur").focus(); return; }
   showOnly("appShell");
   $("#who").textContent = me.username;
+  $("#meBtn").textContent = me.username.slice(0, 1).toUpperCase();
+  if (me.role === "superadmin") checkUpdate();
   for (const el of [$("#roleBadge"), $("#whoRole")]) {
     el.textContent = me.role;
     el.classList.toggle("hot", me.role !== "user");
@@ -1300,3 +1302,76 @@ function paperButton(id) {
   return `<div class="row"><a class="go small" style="text-decoration:none" href="/printed/${encodeURIComponent(id)}/pdf" target="_blank" rel="noopener">Print on paper</a>
     <span class="muted">Any printer: opens a page, then use your phone's or computer's Print.</span></div>`;
 }
+
+
+// ---------------------------------------------------------------- your account (top right)
+$$("[data-show]").forEach((b) => b.onclick = () => {
+  const input = $("#" + b.dataset.show);
+  input.type = input.type === "password" ? "text" : "password";
+  b.textContent = input.type === "password" ? "Show" : "Hide";
+});
+let update = null;
+async function checkUpdate() {
+  try { update = await api("/super/update-check"); } catch { return; }
+  $("#updateBanner").hidden = !update.update_available;
+  $("#updateBanner").textContent = update.update_available
+    ? `Next Box ${update.latest} is available (you have ${update.current}). ${update.how}` : "";
+}
+function openMe() {
+  $("#meAvatar").textContent = me.username.slice(0, 1).toUpperCase();
+  $("#meName").textContent = me.username;
+  $("#meSub").textContent = [me.role === "user" ? "" : me.role, me.email || "no email yet", me.protected ? "protected admin" : ""].filter(Boolean).join(" · ");
+  $("#meUpdate").textContent = `Next Box ${me.version}` + (update ? (update.update_available ? ` · update available: ${update.latest}` : update.latest ? " · up to date ✓" : "") : "");
+  $("#mePanel").innerHTML = "";
+  $("#meDialog").showModal();
+}
+$("#meBtn").onclick = openMe;
+$("#meClose").onclick = () => $("#meDialog").close();
+$("#meDialog").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-me]");
+  if (!b) return;
+  const what = b.dataset.me, panel = $("#mePanel");
+  if (what === "settings") { $("#meDialog").close(); return goto("settings"); }
+  if (what === "feedback") { $("#meDialog").close(); return document.querySelector("[data-feedback]")?.click(); }
+  if (what === "refresh") return location.reload();
+  if (what === "export") { location.href = "/auth/export"; return; }
+  if (what === "signout") { await api("/auth/logout", { method: "POST" }).catch(() => {}); $("#meDialog").close(); return showLogin("Signed out."); }
+  if (what === "profile") {
+    panel.innerHTML = `<div class="field"><label for="meEmail">Email</label><input type="email" id="meEmail" autocapitalize="none" value="${esc(me.email || "")}">
+      <div class="muted">You can sign in with it instead of your username.</div></div>
+      <div class="row"><button class="go small" id="meSaveEmail">Save</button><span class="err" id="meMsg"></span></div>`;
+    $("#meSaveEmail").onclick = async () => {
+      try { const r = await api("/auth/profile", { method: "PATCH", json: { email: $("#meEmail").value } }); me.email = r.email; toast("Saved"); openMe(); }
+      catch (err) { $("#meMsg").textContent = err.message; }
+    };
+  }
+  if (what === "password") {
+    panel.innerHTML = `<div class="field"><label for="meCur">Current password</label><input type="password" id="meCur" autocomplete="current-password"></div>
+      <div class="field"><label for="meNew">New password (8+ characters)</label><input type="password" id="meNew" autocomplete="new-password" minlength="8"></div>
+      <div class="row"><button class="go small" id="meSavePw">Change password</button><span class="err" id="meMsg"></span></div>`;
+    $("#meSavePw").onclick = async () => {
+      try { await api("/auth/password", { method: "POST", json: { current: $("#meCur").value, new: $("#meNew").value } });
+            toast("Password changed. Other devices were signed out."); openMe(); }
+      catch (err) { $("#meMsg").textContent = err.message; }
+    };
+  }
+  if (what === "devices") {
+    let list = [];
+    try { list = await api("/auth/sessions"); } catch (err) { panel.textContent = err.message; return; }
+    panel.innerHTML = list.map((d) => `<div class="mini">${esc(d.agent ? d.agent.replace(/\(.*?\)/g, "").slice(0, 60) : "Unknown device")}${d.current ? " <b>(this one)</b>" : ""}<div class="muted">since ${when(d.created)}</div></div>`).join("")
+      + `<div class="row"><button class="plain small" id="meOthers">Sign out all other devices</button></div>`;
+    $("#meOthers").onclick = async () => { const r = await api("/auth/signout-others", { method: "POST" }); toast(`Signed out ${r.signed_out ?? ""} other device(s)`); openMe(); };
+  }
+  if (what === "delete") {
+    panel.innerHTML = `<p class="err">This deletes your account, your list, tags, tickets and history from Next Box. It can't be undone. Apps you linked (like Todoist) aren't touched. Tip: Download my data first.</p>
+      <div class="field"><label for="meDelPw">Your password</label><input type="password" id="meDelPw" autocomplete="current-password"></div>
+      <div class="field"><label for="meDelName">Type your username (${esc(me.username)})</label><input type="text" id="meDelName" autocapitalize="none"></div>
+      <div class="row"><button class="go warn small" id="meDelGo">Delete my account forever</button><span class="err" id="meMsg"></span></div>`;
+    $("#meDelGo").onclick = async () => {
+      try { await api("/auth/delete-account", { method: "POST", json: { password: $("#meDelPw").value, confirm: $("#meDelName").value } });
+            $("#meDialog").close(); showLogin("Your account was deleted."); }
+      catch (err) { $("#meMsg").textContent = err.message; }
+    };
+  }
+  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+});

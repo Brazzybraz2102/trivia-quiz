@@ -432,3 +432,14 @@ lines, as many pages as needed; any other ticket 3.5 in wide, split across pages
 images are kept per ticket in `tickets.parts` (a small zip of PNGs). Next Box never sends the PDF to
 a printer; the person prints it from their device.
 
+## 22. Your account (the round button, top right)
+Profile and email (`PATCH /auth/profile`; sign in with username or email), change password, signed-in
+devices (sign out the others), settings, help, feedback, refresh, **download my data**
+(`GET /auth/export`: account, settings, tags, tasks, linked app and calendar names, tickets without
+images, read-backs, devices; never passwords, hashes or tokens), sign out, and **delete my account**
+(`POST /auth/delete-account`: password + typed username; removes the account, tasks, tags,
+tickets, scans and activity; feedback stays, unlinked; the protected admin and the last superadmin
+can't). The login page has show-password and "Forgot your password?" (an admin gives a one-time
+password). Superadmins see a banner when a newer version is published (`GET /super/update-check`,
+reads the published pyproject.toml at most every 6 hours).
+

@@ -142,6 +142,13 @@
   .step .title { font-weight:600; }
   .step.next { background:var(--note); color:var(--noteFg); margin:0 -14px; padding:10px 14px; border-radius:10px; border-top:0; }
   .step.next .muted { color:inherit; opacity:.85; }
+  .avatar { flex:none; width:38px; height:38px; border-radius:50%; border:0; background:var(--accent); color:#fff; font:700 16px system-ui, sans-serif; cursor:pointer; }
+  #meDialog { max-width:420px; }
+  .menu button, .menu a { display:flex; width:100%; align-items:center; gap:10px; background:none; border:0; border-top:1px solid var(--line); padding:12px 4px; font:inherit; color:var(--fg); text-align:left; cursor:pointer; text-decoration:none; }
+  .menu button:first-child { border-top:0; }
+  .menu .warn { color:var(--warn); }
+  .pwrow { position:relative; }
+  .pwrow button { position:absolute; right:6px; top:50%; transform:translateY(-50%); background:none; border:0; color:var(--accent); font:inherit; font-size:14px; cursor:pointer; padding:6px; }
   .tagrow { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
   @media (max-width:520px) { .setting { flex-wrap:wrap; } }
 </style>
@@ -151,9 +158,12 @@
   <form class="card" id="loginForm" autocomplete="on">
     <h2>Sign in</h2>
     <p class="muted" id="loginMsg"></p>
-    <label>Username<input type="text" id="user" name="username" autocomplete="username" autocapitalize="none" required></label>
-    <label>Password<input type="password" id="pass" name="password" autocomplete="current-password" required></label>
+    <label>Username or email<input type="text" id="user" name="username" autocomplete="username" autocapitalize="none" required></label>
+    <label>Password<span class="pwrow" style="display:block"><input type="password" id="pass" name="password" autocomplete="current-password" required>
+      <button type="button" data-show="pass">Show</button></span></label>
     <div class="row"><button class="go" type="submit">Sign in</button></div>
+    <details class="muted" style="margin-top:10px"><summary>Forgot your password?</summary>
+      <p>Ask whoever invited you (your Next Box admin). They can give you a one-time password from <b>Users</b> or <b>Admin</b>, and you'll pick a new one when you sign in.</p></details>
   </form>
   <p class="muted" style="text-align:center"><button class="linkish" id="showJoin">Have an invite code? Join</button>
     · <a href="guide.html" target="_blank" rel="noopener">New here? Quick start</a></p>
@@ -182,7 +192,9 @@
 </div>
 
 <div id="appShell" hidden>
-<header><h1>Next Box</h1><span id="roleBadge" class="badge"></span><span id="betaBadge" class="badge hot" hidden>beta</span><span id="status">…</span></header>
+<header><h1>Next Box</h1><span id="roleBadge" class="badge"></span><span id="betaBadge" class="badge hot" hidden>beta</span><span id="status">…</span>
+  <button id="meBtn" class="avatar" aria-label="Your account" aria-haspopup="dialog">?</button></header>
+<div class="banner" id="updateBanner" hidden></div>
 <div class="banner" id="announce" hidden></div>
 <div class="banner" id="paused" hidden>Printing is paused by an admin. Everything renders as a preview until it's turned back on.</div>
 <nav>
@@ -514,6 +526,27 @@
     <div id="fbDone" hidden></div>
     <div class="row"><button class="go" type="button" id="fbSend">Post anonymously</button><button class="plain" type="button" id="fbClose">Close</button></div>
   </form>
+</dialog>
+<dialog id="meDialog">
+  <div style="display:flex;gap:12px;align-items:center">
+    <div class="avatar" id="meAvatar" style="width:52px;height:52px;font-size:22px;display:flex;align-items:center;justify-content:center"></div>
+    <div><h2 id="meName" style="margin:0"></h2><div class="muted" id="meSub"></div></div>
+  </div>
+  <div id="meUpdate" class="muted" style="margin-top:8px"></div>
+  <div class="menu" style="margin-top:10px">
+    <button data-me="profile">👤 Profile and email</button>
+    <button data-me="password">🔑 Change password</button>
+    <button data-me="devices">📱 Signed-in devices</button>
+    <button data-me="settings">⚙️ Settings</button>
+    <a href="guide.html" target="_blank" rel="noopener">❓ Help and quick start</a>
+    <button data-me="feedback">💬 Send feedback</button>
+    <button data-me="refresh">🔄 Refresh the app</button>
+    <button data-me="export">⬇️ Download my data</button>
+    <button data-me="signout">🚪 Sign out</button>
+    <button data-me="delete" class="warn">🗑️ Delete my account</button>
+  </div>
+  <div id="mePanel"></div>
+  <div class="row" style="justify-content:flex-end"><button class="plain" id="meClose">Close</button></div>
 </dialog>
 <dialog id="userDialog">
   <h2 id="udName">…</h2>
