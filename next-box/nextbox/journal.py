@@ -12,6 +12,7 @@ handwritten notes, and keeps the photo here, so a lost journal is never a lost r
 """
 from __future__ import annotations
 
+import re
 import secrets
 import time
 from datetime import date
@@ -49,7 +50,9 @@ class Journal:
 
     def add(self, day: str, notes: str = "", photo: bytes | None = None, scan_id: str | None = None,
             label_id: str | None = None) -> dict:
-        date.fromisoformat(day)  # ValueError if it isn't a date
+        if not isinstance(day, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+            raise ValueError("day looks like 2026-10-16")
+        date.fromisoformat(day)  # ValueError if it isn't a real date
         notes = (notes or "").strip()
         if len(notes) > MAX_NOTES:
             raise ValueError(f"notes can be up to {MAX_NOTES} characters")

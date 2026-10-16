@@ -9,10 +9,11 @@ from collections.abc import Callable
 
 from .auth import Accounts
 from .calendars import KINDS as CALENDAR_KINDS
-from .calendars import CalendarSource, build_calendar, sort_events
+from .calendars import CalendarSource, build_calendar, forget_feed, sort_events
 from .config import Settings
 from .mylist import LocalTasks, Merged
 from .providers import READY, ProviderError, TaskProvider, build_provider, display_name, oauth, secret_fields
+from .providers.base import NotConnected  # noqa: F401  (re-exported: server.py imports it from here)
 from .vault import Vault
 
 NOT_CONNECTED = "Connect your to-do app in Settings first."
@@ -20,10 +21,6 @@ MAX_CALENDARS = 8
 
 Builder = Callable[[str, dict, dict], TaskProvider]
 CalendarBuilder = Callable[[str, dict, dict], CalendarSource]
-
-
-class NotConnected(ProviderError):
-    pass
 
 
 def _split(kind_fields: list[dict], fields: dict) -> tuple[dict, dict]:
@@ -107,8 +104,8 @@ class Connections:
         self.accounts.set_connection(username, None)
 
     # --- sign in with Google / Microsoft / TickTick --------------------------------------------
-    def finish_signin(self, username: str, app: str, state: str, code: str, client=None) -> dict:
-        purpose, tokens = oauth.finish(app, state, code, username, client=client)
+    def finish_signin(self, username: str, app: str, state: str, code: str, client=None, *, nonce: str) -> dict:
+        purpose, tokens = oauth.finish(app, state, code, username, client=client, nonce=nonce)
         if purpose == "tasks":
             return {"kind": "tasks", **self._save_connection(username, oauth.TASK_KEYS[(app, purpose)], {}, tokens)}
         return {"kind": "calendar", **self._add_calendar(username, oauth.CAL_KEYS[(app, purpose)], {}, tokens)}
@@ -148,8 +145,14 @@ class Connections:
         return self._add_calendar(username, kind, config, secrets)
 
     def remove_calendar(self, username: str, cal_id: str) -> None:
-        keep = [c for c in self.accounts.calendars(username) if c.get("id") != cal_id]
+        mine = self.accounts.calendars(username)
+        keep = [c for c in mine if c.get("id") != cal_id]
         self.accounts.set_calendars(username, keep)
+        for gone in (c for c in mine if c.get("id") == cal_id and c.get("provider") == "ics"):
+            try:  # don't keep a removed calendar's feed in memory
+                forget_feed(self.vault.open(gone["secret"]).get("url", "") if gone.get("secret") else "")
+            except Exception:  # noqa: BLE001 - a damaged secret just means there's nothing to forget
+                pass
 
     def events_for(self, username: str, day: dt.date) -> tuple[list[dict], list[str]]:
         """Today's events from every calendar. A calendar that fails is reported, not fatal."""

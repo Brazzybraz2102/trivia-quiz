@@ -97,16 +97,21 @@ def test_withdraw_respond_hide_and_reveal(ctx):
     other = sam.post("/feedback", json={"mode": "open", "message": "my neighbour Pat Lee at 12 Elm St"}).json()["id"]
 
     assert jo.delete(f"/feedback/{fid}").status_code == 403
-    r = helper.patch(f"/admin/feedback/{fid}", json={"status": "planned", "reply": "Thanks sam, fixing it"})
+    r = mike.patch(f"/admin/feedback/{fid}", json={"status": "planned", "reply": "Thanks sam, fixing it"})
     assert r.json()["status"] == "planned" and "sam" not in r.json()["reply"]
     replied = {i["id"]: i for i in jo.get("/feedback").json()}[fid]
     assert replied["reply"].startswith("Thanks [someone]")
     assert [i["id"] for i in jo.get("/feedback").json()] == [other, fid]  # newest first, stable
-    helper.patch(f"/admin/feedback/{other}", json={"status": "hidden"})  # personal details slipped through
+    mike.patch(f"/admin/feedback/{other}", json={"status": "hidden"})  # personal details slipped through
     assert other not in [i["id"] for i in jo.get("/feedback").json()]
+    assert other not in [i["id"] for i in helper.get("/feedback").json()]  # a household admin isn't staff
     assert other in [i["id"] for i in sam.get("/feedback").json()]       # author still sees it
-    assert other in [i["id"] for i in helper.get("/admin/feedback").json()]
+    assert other in [i["id"] for i in mike.get("/admin/feedback").json()]
     assert jo.patch(f"/admin/feedback/{fid}", json={"status": "fixed"}).status_code == 403
+    # Moderation is staff-only: a household admin can't read hidden posts, un-hide, reply or remove.
+    assert helper.get("/admin/feedback").status_code == 403
+    assert helper.patch(f"/admin/feedback/{other}", json={"status": "fixed"}).status_code == 403
+    assert helper.delete(f"/feedback/{other}").status_code == 403
 
     assert helper.get(f"/super/feedback/{fid}/identity").status_code == 403
     who = mike.get(f"/super/feedback/{fid}/identity").json()

@@ -20,6 +20,14 @@ class ProviderError(RuntimeError):
     """A problem worth showing to the person as-is (bad token, server down, unsupported action)."""
 
 
+class TaskNotFound(ProviderError):
+    """The task isn't there (any more), or isn't this person's. Not a server fault."""
+
+
+class NotConnected(ProviderError):
+    """The task lives in a linked app that isn't connected (any more)."""
+
+
 class TaskProvider(ABC):
     key: str = ""
 

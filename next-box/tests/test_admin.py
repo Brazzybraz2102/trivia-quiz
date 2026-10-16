@@ -182,7 +182,8 @@ def test_errors_are_logged_with_trace_for_superadmin_only(ctx, todo):
         raise RuntimeError("todoist said 404")
     todo.get_task = boom
     tester = login(ctx, "tester", "tester pass")
-    assert tester.post("/print/task", json={"task_id": "zzz"}).status_code == 502
+    r = tester.post("/print/task", json={"task_id": "zzz"})
+    assert r.status_code == 500 and "todoist" not in r.json()["detail"]  # the details go to the log only
     errs = login(ctx, "mike", "super secret").get("/super/events", params={"errors_only": True}).json()
     assert errs[0]["user"] == "tester" and "todoist said 404" in errs[0]["error"]
     assert "Traceback" in errs[0]["trace"]
@@ -196,7 +197,9 @@ def test_debug_mode_records_details(ctx):
     assert mike.patch("/admin/users/tester", json={"debug": True}).json()["debug"]
     login(ctx, "tester", "tester pass").post("/print/text", json={"text": "hello there"})
     ev = mike.get("/super/events", params={"user": "tester", "kind": "activity"}).json()[0]
-    assert ev["detail"]["args"]["arg1"] == "hello there" and "result" in ev["detail"]
+    # Shapes and ids only: the text itself never goes in the log admins read.
+    assert ev["detail"]["args"]["arg1"] == "str(11)" and ev["detail"]["result"]["kind"] == "text"
+    assert "hello there" not in json.dumps(ev)
 
 
 def test_pause_printing_and_auto_switch(ctx, monkeypatch):

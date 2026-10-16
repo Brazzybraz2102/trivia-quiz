@@ -16,19 +16,20 @@ import re
 import secrets
 import shutil
 import sys
+import threading
 import time
 import traceback
 from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import jobs, printer, scan
+from . import jobs, printer, scan, upkeep
 from .auth import ROLES, Accounts, AuthError, default_prefs, rank
 from .config import PROJECT_DIR
 from .connections import Builder, Connections, NotConnected
@@ -39,8 +40,10 @@ from .journal import Journal, Slides, slugs as find_slugs
 from .mylist import TAG_COLORS, LocalTasks, Tags, is_local, parse_dump
 from .printer import COLORS, DRIVERS
 from .printers import REASONS, PrinterError, Printers
+from .printers import validate as validate_printer
 from .providers import ProviderError, display_name, oauth
 from .providers import providers as provider_list
+from .providers.base import TaskNotFound
 from .store import normalize_id
 from .vault import Vault
 
@@ -48,7 +51,11 @@ WEB_DIR = PROJECT_DIR / "web"
 UPDATE_URL = ("https://raw.githubusercontent.com/brazzybraz2102/trivia-quiz/"
               "claude/ticket-todoist-printer-nldz8a/next-box/pyproject.toml")
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
+MAX_UPLOAD_BYTES = 16 * 1024 * 1024  # a whole /scan request (the photo plus the form around it)
+MAX_BODY_BYTES = 256 * 1024          # every other request: the longest is a 20,000-character journal page
 COOKIE = "nextbox_session"
+OAUTH_COOKIE = "nb_oauth"            # proves the browser finishing "Sign in with Google" is the one that started
+RESET_HOLD = 72 * 3600               # after an admin sets a one-time password: no data download or account delete
 STARTED = time.time()
 
 
@@ -122,6 +129,11 @@ class NewUserBody(BaseModel):
     beta: bool = False
 
 
+class StepIn(BaseModel):
+    text: str
+    done: bool = False
+
+
 class TaskIn(BaseModel):
     content: str | None = None
     description: str | None = None
@@ -130,7 +142,7 @@ class TaskIn(BaseModel):
     due_time: str | None = None
     repeat: str | None = None
     tags: list[str] | None = None
-    steps: list | None = None
+    steps: list[str | StepIn] | None = None
     minutes: int | None = None
 
 
@@ -263,6 +275,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     # No allow_credentials: cookies only work same-origin; other clients use headers.
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                        allow_headers=["*"])
+    app.add_middleware(_BodyLimit)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -290,6 +303,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     registry = ctx.printers or Printers(data_dir, ctx.settings)
     build = _build_id()
     _migrate_feedback(events, feedback_store, accounts)
+    upkeep.run_startup_fixes(accounts.db, ctx.store)
+    # In memory, per person: photo read-backs cost money; calendar and app checks reach other servers.
+    scan_window, calendar_window, connect_window = _Window(30, 3600), _Window(20, 3600), _Window(20, 3600)
     connections = Connections(ctx.settings, accounts, vault, **({"builder": builder} if builder else {}),
                               **({"calendar_builder": calendar_builder} if calendar_builder else {}))
 
@@ -326,7 +342,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             if origin and urlparse(origin).netloc != request.headers.get("host"):
                 raise HTTPException(403, "cross-site request refused")
         user = accounts.get(name)
-        if user["must_change"] and not request.url.path.startswith("/auth/"):
+        # On a one-time password only choosing your own works: not your data download, account
+        # deletion, profile or devices, which would let whoever set it act as you.
+        if user["must_change"] and request.url.path != "/auth/password":
             raise HTTPException(403, "Choose your own password first (Settings → Account).")
         return Caller(name, role=user["role"], debug=user["debug"], token=token, prefs=user["prefs"],
                       household=user["household_id"])
@@ -362,7 +380,15 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return None if caller.role == "superadmin" else caller.household
 
     def audit(caller: Caller, action: str, **detail) -> None:
-        events.log(caller.name, action, kind="audit", detail=detail, household=caller.household)
+        events.log(caller.name, action, kind="audit", detail=detail, household=caller.household,
+                   target=detail.get("target"))
+
+    def _guard_protected(caller: Caller, target_name: str) -> None:
+        """The protected admin is changed only from the Next Box computer (`nextbox user ...`),
+        so another superadmin can't reset, sign out, move or lock out the owner."""
+        if target_name == accounts.protected() and caller.name != target_name:
+            raise HTTPException(400, "That's the protected admin. Only the Next Box computer can change it "
+                                     "(nextbox user …).")
 
     # -------------------------------------------------------------- running
     def acting_as(caller: Caller) -> str:
@@ -451,23 +477,28 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             result = fn(*args, **kwargs)
         except HTTPException:
             raise
+        except TaskNotFound as exc:  # ticked or changed on another device, or not theirs
+            raise HTTPException(404, str(exc)) from exc
         except NotConnected as exc:
             raise HTTPException(409, str(exc)) from exc
         except scan.PhotoError as exc:
             raise HTTPException(415, str(exc)) from exc
         except ValueError as exc:  # something the person can fix: an empty list, a bad date
             raise HTTPException(400, str(exc)) from exc
+        except ProviderError as exc:  # their app or server said no: worth showing, not a Next Box fault
+            events.log(caller.name, action, ok=False, error=str(exc), detail={"args": _safe_args(args, kwargs)})
+            raise HTTPException(502, str(exc)) from exc
         except Exception as exc:
             events.log(caller.name, action, ok=False, kind="error", error=str(exc),
                        trace=traceback.format_exc(), detail={"args": _safe_args(args, kwargs)})
-            raise HTTPException(502, str(exc)) from exc
+            raise HTTPException(500, "Something went wrong. It's been logged so it can be fixed.") from exc
         detail = {"ms": int((time.time() - start) * 1000)}
         if isinstance(result, dict):
             detail.update({k: result[k] for k in ("id", "status", "kind", "reason") if k in result})
         if caller.debug:
+            # Ids, counts and kinds only: never task text, notes or titles (admins read events).
             detail["args"] = _safe_args(args, kwargs)
-            if isinstance(result, dict):
-                detail["result"] = {k: v for k, v in result.items() if k not in {"png", "vision"}}
+            detail["result"] = _debug_result(result)
         events.log(caller.name, action, detail=detail)
         return result
 
@@ -586,7 +617,25 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 "terms_ok": consent.get("terms") == TERMS_VERSION, "terms_version": TERMS_VERSION,
                 # They agreed to an older notice or older terms: say what's new.
                 "notice_changed": consent.get("version") not in (None, DATA_NOTICE_VERSION)
-                                  or consent.get("terms") not in (None, TERMS_VERSION)}
+                                  or consent.get("terms") not in (None, TERMS_VERSION),
+                "password_reset": _reset_notice(user)}
+
+    def _reset_notice(user: dict) -> dict | None:
+        """Once they've chosen their own password: which admin last set a one-time one, and when
+        (for 30 days), so nobody can quietly use an account they reset."""
+        at = user.get("reset_at")
+        if not at or user["must_change"] or at < time.time() - 30 * 86400:
+            return None
+        return {"by": user.get("reset_by"), "at": at}
+
+    def _reset_hold(caller: Caller) -> None:
+        """For 3 days after an admin set a one-time password, the data download and account delete
+        wait: whoever knew that password can't take the journal or remove the account."""
+        at = (accounts.get(caller.name) or {}).get("reset_at") or 0
+        if at > time.time() - RESET_HOLD:
+            until = date.fromtimestamp(at + RESET_HOLD).strftime("%b %-d")
+            raise HTTPException(403, f"An admin reset your password recently, so downloading your data and "
+                                     f"deleting your account are paused until {until}. This keeps your journal private.")
 
     @app.post("/auth/consent")
     def consent(request: Request):
@@ -656,6 +705,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         from sqlalchemy import select as _select
 
         from . import db as _db
+        _reset_hold(caller)
         user = accounts.get(caller.name)
         mine = my_list(caller)
         with accounts.db.connect() as conn:
@@ -684,17 +734,11 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(400, "type your username to confirm")
         if not _own_password_ok(caller.name, body.password):
             raise HTTPException(403, "wrong password")
+        _reset_hold(caller)
         try:
-            accounts.remove_user(caller.name)
+            upkeep.purge_user(accounts, ctx.store, events, feedback_store, caller.name)  # feedback stays, unlinked
         except AuthError as exc:
             raise HTTPException(400, str(exc)) from exc
-        feedback_store.forget_user(caller.name)  # their posts stay, unlinked
-        LocalTasks(accounts.db, caller.name).delete_for_user()
-        Tags(accounts.db, caller.name).delete_for_user()
-        Journal(accounts.db, caller.name).delete_for_user()
-        Slides(accounts.db, caller.name).delete_for_user()
-        ctx.store.delete_for_user(caller.name)
-        events.delete_for_user(caller.name)
         events.log("?", "account_deleted", kind="audit")  # no name: they asked to be forgotten
         response.delete_cookie(COOKIE, path="/")
         return {"ok": True}
@@ -773,7 +817,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 fields={"trying": body.trying, "happened": body.happened, "expected": body.expected},
                 message=body.message, who=caller.name if caller else None,
                 ip=request.client.host if request.client else "", agent=request.headers.get("user-agent", ""),
-                names=accounts.list_users(), debug=debug)
+                names=_scrub_names(accounts), debug=debug)
         except FeedbackError as exc:
             raise HTTPException(400, str(exc)) from exc
         # Deliberately not written to the events log: that would link the person to the post.
@@ -782,19 +826,21 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.get("/feedback")
     def feedback_board(type: str | None = None, status: str | None = None,
                        caller: Caller = Depends(person)):
-        return feedback_store.board(caller.name, include_hidden=rank(caller.role) >= rank("admin"),
+        # Moderation is for Next Box staff: the board spans every household.
+        return feedback_store.board(caller.name, include_hidden=caller.role == "superadmin",
                                     kind=type or None, status=status or None)
 
     @app.delete("/feedback/{fid}")
     def withdraw_feedback(fid: str, caller: Caller = Depends(person)):
-        is_admin = rank(caller.role) >= rank("admin")
-        if not (feedback_store.is_author(fid, caller.name) or is_admin):
+        is_staff = caller.role == "superadmin"
+        own = feedback_store.is_author(fid, caller.name)  # before withdraw() forgets who sent it
+        if not (own or is_staff):
             raise HTTPException(403, "you can only withdraw your own feedback")
         try:
             feedback_store.withdraw(fid)
         except KeyError:
             raise HTTPException(404) from None
-        if is_admin and not feedback_store.is_author(fid, caller.name):
+        if is_staff and not own:  # withdrawing your own post isn't moderation, and mustn't name you
             audit(caller, "remove_feedback", feedback=fid)
         return {"ok": True}
 
@@ -1057,7 +1103,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return run(caller, "print_focus", jobs.print_focus, rctx(caller), body.task_id, dry_run=body.dry_run)
 
     @app.get("/printed")
-    def printed(limit: int = 50, caller: Caller = Depends(auth)):
+    def printed(limit: int = Query(50, ge=1, le=500), caller: Caller = Depends(auth)):
         return ctx.store.list_printed(limit, by=acting_as(caller))
 
     @app.get("/printed/{label_id}/png")
@@ -1096,9 +1142,15 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.post("/scan")
     async def do_scan(photo: UploadFile = File(...), label_id: str | None = Form(default=None),
                       caller: Caller = Depends(auth)):
-        data = await photo.read()
-        if len(data) > MAX_PHOTO_BYTES:
-            raise HTTPException(413, "photo too large")
+        if not scan_window.allow(caller.name):  # each read-back is a paid call to the vision service
+            raise HTTPException(429, "That's a lot of photos this hour. Try again in a bit.")
+        chunks, size = [], 0
+        while chunk := await photo.read(1 << 20):
+            size += len(chunk)
+            if size > MAX_PHOTO_BYTES:
+                raise HTTPException(413, "photo too large")
+            chunks.append(chunk)
+        data = b"".join(chunks)
         media_type = photo.content_type or "image/jpeg"
         if media_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
             raise HTTPException(415, f"unsupported image type {media_type}")
@@ -1109,10 +1161,14 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         except ValueError as exc:  # something the person can fix: an empty list, a bad date
             raise HTTPException(400, str(exc)) from exc
         fn = vision or scan.claude_vision(ctx.settings)
-        return run(caller, "scan", scan.scan_photo, rctx(caller), fn, data, media_type, label_id or None)
+        rec = run(caller, "scan", scan.scan_photo, rctx(caller), fn, data, media_type, label_id or None)
+        if rec.get("journal_id"):  # the notes live only in the private journal page: show them back to its owner
+            page = Journal(accounts.db, acting_as(caller)).get(rec["journal_id"])
+            rec = {**rec, "notes": page["notes"] if page else ""}
+        return rec
 
     @app.get("/scans")
-    def scans(limit: int = 20, caller: Caller = Depends(auth)):
+    def scans(limit: int = Query(20, ge=1, le=500), caller: Caller = Depends(auth)):
         return ctx.store.list_scans(limit, by=acting_as(caller))
 
     def _own_scan(scan_id: str, caller: Caller) -> dict:
@@ -1147,6 +1203,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             last = date.fromisoformat(until) if until else ctx.today()
         except ValueError:
             raise HTTPException(400, "until is YYYY-MM-DD") from None
+        if not date(2000, 1, 1) <= last <= ctx.today() + timedelta(days=366):
+            raise HTTPException(400, "until is a day between 2000 and next year")
         days = max(1, min(days, 60))
         first = last - timedelta(days=days - 1)
         pages = _journal(caller).pages(first.isoformat(), last.isoformat())
@@ -1181,6 +1239,13 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.post("/journal")
     def journal_add(body: JournalBody, caller: Caller = Depends(person)):
+        if body.day:  # a page for a day the Journal tab shows: up to a year back, or tomorrow
+            try:
+                day = date.fromisoformat(body.day)
+            except ValueError:
+                raise HTTPException(400, "day looks like 2026-10-16") from None
+            if not ctx.today() - timedelta(days=366) <= day <= ctx.today() + timedelta(days=1):
+                raise HTTPException(400, "Pick a day in the last year (or tomorrow).")
         try:
             page = _journal(caller).add(body.day or ctx.today().isoformat(), body.notes)
         except ValueError as exc:
@@ -1222,33 +1287,60 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return {"printers": [p.public(admin) for p in registry.all(caller.household)], "colors": COLORS,
                 "reasons": REASONS, "drivers": DRIVERS}
 
+    def _restricted(caller: Caller) -> bool:
+        """Households other than Home (the server owner's), unless it's staff: network printers on
+        printer ports only, so nobody can point this computer at its own services or odd ports."""
+        return caller.role != "superadmin" and caller.household != "home"
+
+    def _usable(caller: Caller, cfg) -> bool:
+        if not _restricted(caller):
+            return True
+        try:
+            validate_printer(dataclasses.asdict(cfg), restricted=True)
+            return True
+        except PrinterError:
+            return False  # saved before addresses were checked: never knocked on
+
+    _status_cache: dict[str, tuple[float, dict]] = {}
+
     @app.get("/admin/printers/status")
     def printers_status(caller: Caller = Depends(admin_only)):
-        return {p.id: printer.is_reachable(p) for p in registry.all(caller.household)}
+        hit = _status_cache.get(caller.household)
+        if hit and hit[0] > time.time() - 60:  # at most one round of knocking a minute
+            return hit[1]
+        mine = registry.all(caller.household)
+        result = {p.id: _usable(caller, p) and printer.is_reachable(p) for p in mine}
+        _status_cache[caller.household] = (time.time(), result)
+        audit(caller, "printer_check", printers=len(mine))
+        return result
 
     @app.post("/admin/printers")
     def add_printer(body: PrinterBody, caller: Caller = Depends(admin_only)):
         try:
-            cfg = registry.add(body.model_dump(exclude_none=True), caller.household)
+            cfg = registry.add(body.model_dump(exclude_none=True), caller.household, restricted=_restricted(caller))
         except PrinterError as exc:
             raise HTTPException(400, str(exc)) from exc
+        _status_cache.pop(caller.household, None)
         audit(caller, "add_printer", printer=cfg.id, name=cfg.name, driver=cfg.driver)
         return cfg.public(True)
 
     @app.patch("/admin/printers/{pid}")
     def edit_printer(pid: str, body: PrinterBody, caller: Caller = Depends(admin_only)):
+        changes = body.model_dump(exclude_none=True)
         try:
-            cfg = registry.update(pid, body.model_dump(exclude_none=True), caller.household)
+            cfg = registry.update(pid, changes, caller.household, restricted=_restricted(caller))
         except KeyError:
             raise HTTPException(404) from None
         except PrinterError as exc:
             raise HTTPException(400, str(exc)) from exc
-        audit(caller, "edit_printer", printer=pid)
+        _status_cache.pop(caller.household, None)
+        audit(caller, "edit_printer", printer=pid, changed=sorted(changes))
         return cfg.public(True)
 
     @app.delete("/admin/printers/{pid}")
     def delete_printer(pid: str, caller: Caller = Depends(admin_only)):
         registry.remove(pid, caller.household)
+        _status_cache.pop(caller.household, None)
         audit(caller, "remove_printer", printer=pid)
         return {"ok": True}
 
@@ -1257,6 +1349,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         cfg = registry.get(pid, caller.household)
         if not cfg:
             raise HTTPException(404)
+        if not _usable(caller, cfg):
+            raise HTTPException(400, "This printer's address isn't one Next Box can use. Edit it first.")
         c = dataclasses.replace(rctx(caller), printers=_OnlyPrinter(cfg),
                                 prefs={**caller.prefs, "default_printer": cfg.id, "color_rules": {"note": "any"}})
         text = f"{cfg.name}\n{DRIVERS[cfg.driver]['name']}\n{cfg.stock_color} labels · {cfg.width_px} dots"
@@ -1274,6 +1368,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.post("/calendars")
     def add_calendar(body: CalendarBody, caller: Caller = Depends(person)):
+        if not calendar_window.allow(caller.name):  # each try fetches from another server
+            raise HTTPException(429, "That's a lot of tries this hour. Try again in a bit.")
         try:
             entry = connections.add_calendar(caller.name, body.kind, body.fields)
         except ProviderError as exc:
@@ -1299,30 +1395,41 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     # ------------------------------------------------- sign in with Google / Microsoft / TickTick
     @app.get("/connect/{app_name}/{purpose}/start")
-    def signin_start(app_name: str, purpose: str, caller: Caller = Depends(person)):
+    def signin_start(app_name: str, purpose: str, request: Request, caller: Caller = Depends(person)):
         try:
-            return RedirectResponse(oauth.start(app_name, purpose, caller.name), status_code=303)
+            url, nonce = oauth.start(app_name, purpose, caller.name)
         except ProviderError as exc:
             raise HTTPException(400, str(exc)) from exc
+        response = RedirectResponse(url, status_code=303)
+        # Only this browser can finish it: a consent link sent to someone else fails at the callback.
+        response.set_cookie(OAUTH_COOKIE, nonce, max_age=600, httponly=True, samesite="lax",
+                            secure=request.url.scheme == "https", path="/connect/")
+        return response
 
     @app.get("/connect/{app_name}/callback")
-    def signin_callback(app_name: str, state: str = "", code: str = "", error: str = ""):
+    def signin_callback(app_name: str, request: Request, state: str = "", code: str = "", error: str = ""):
         """Where Google/Microsoft/TickTick send the person back. Who it's for comes from the
-        one-time state, not a cookie, so it works whatever the browser does with cookies."""
+        one-time state, and it must be the same browser that started it (the nb_oauth cookie, and
+        the signed-in account when there is one)."""
+        def back(msg: str) -> RedirectResponse:
+            response = RedirectResponse(f"/app/#settings&signin={quote(msg)}", status_code=303)
+            response.delete_cookie(OAUTH_COOKIE, path="/connect/")
+            return response
         who = oauth.who_started(state)
         if error or not code or not who:
-            msg = "Sign-in was cancelled." if error else "That sign-in expired. Try again."
-            return RedirectResponse(f"/app/#settings&signin={quote(msg)}", status_code=303)
+            return back("Sign-in was cancelled." if error else "That sign-in expired. Try again.")
+        session = request.cookies.get(COOKIE)
+        if session and accounts.session_user(session) != who:
+            return back(oauth.ELSEWHERE)
         try:
-            result = connections.finish_signin(who, app_name, state, code)
+            result = connections.finish_signin(who, app_name, state, code,
+                                               nonce=request.cookies.get(OAUTH_COOKIE, ""))
         except ProviderError as exc:
             events.log(who, "signin", ok=False, detail={"app": app_name}, error=str(exc))
             # The details stay in their activity; the page only shows messages it knows (app.js SIGNIN_MSGS).
-            msg = "That sign-in didn't work. Try again."
-            return RedirectResponse(f"/app/#settings&signin={quote(msg)}", status_code=303)
+            return back(oauth.ELSEWHERE if str(exc) == oauth.ELSEWHERE else "That sign-in didn't work. Try again.")
         events.log(who, "signin", detail={"app": app_name, "kind": result["kind"]})
-        return RedirectResponse(f"/app/#settings&signin={quote('Connected ' + oauth.APPS[app_name]['name'])}",
-                                status_code=303)
+        return back("Connected " + oauth.APPS[app_name]["name"])
 
     @app.get("/super/signin-setup")
     def signin_setup(caller: Caller = Depends(super_only)):
@@ -1334,6 +1441,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.put("/connection")
     def put_connection(body: ConnectBody, caller: Caller = Depends(person)):
+        if not connect_window.allow(caller.name):  # each try signs in to another server
+            raise HTTPException(429, "That's a lot of tries this hour. Try again in a bit.")
         try:
             status = connections.connect(caller.name, body.provider, body.fields)
         except ProviderError as exc:
@@ -1367,7 +1476,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         out = []
         for u in accounts.all_users(scope(caller)):
             out.append({**{k: u[k] for k in ("username", "role", "disabled", "beta", "debug",
-                                             "must_change", "created", "last_login")},
+                                             "must_change", "created", "last_login", "last_seen")},
                         "sessions": len(accounts.sessions_for(u["username"])),
                         "app": connections.status(u["username"]).get("name"),
                         "prints": prints.get(u["username"], 0),
@@ -1395,8 +1504,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         target = _target(username)
         if not can_manage(caller, target):
             raise HTTPException(403, "you can't reset this account")
+        _guard_protected(caller, target["username"])
         temp = accounts.temp_password()
         accounts.set_password(target["username"], temp, must_change=True)
+        accounts.mark_reset(target["username"], caller.name)  # they're told, and data download/delete wait
         audit(caller, "reset_password", target=target["username"])
         return {"username": target["username"], "temp_password": temp}
 
@@ -1422,6 +1533,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         target = _target(username)
         if not can_manage(caller, target):
             raise HTTPException(403, "you can't sign out this account")
+        _guard_protected(caller, target["username"])
         n = accounts.revoke_user_sessions(target["username"])
         audit(caller, "signout_user", target=target["username"], sessions=n)
         return {"signed_out": n}
@@ -1431,26 +1543,25 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         target = _target(username)
         if target["username"] == caller.name:
             raise HTTPException(400, "you can't delete yourself")
-        try:
-            accounts.remove_user(target["username"])
+        try:  # everything they had goes too, so a new account with the same name starts empty
+            upkeep.purge_user(accounts, ctx.store, events, feedback_store, target["username"])
         except AuthError as exc:
             raise HTTPException(400, str(exc))
-        feedback_store.forget_user(target["username"])  # their posts stay, unlinked
-        LocalTasks(accounts.db, target["username"]).delete_for_user()
-        Tags(accounts.db, target["username"]).delete_for_user()
-        Journal(accounts.db, target["username"]).delete_for_user()
-        Slides(accounts.db, target["username"]).delete_for_user()
-        audit(caller, "delete_user", target=target["username"])
+        audit(caller, "delete_user", target=target["username"])  # after the purge, so it stays
         return {"ok": True}
 
     @app.get("/admin/users/{username}/activity")
-    def admin_activity(username: str, limit: int = 100, caller: Caller = Depends(admin_only)):
+    def admin_activity(username: str, limit: int = Query(100, ge=1, le=500), caller: Caller = Depends(admin_only)):
         target = _target(username)
         if target["username"] != caller.name and not can_manage(caller, target):
             raise HTTPException(403, "you can't see this account's activity")
-        evs = events.query(user=username.lower(), limit=min(limit, 500))
-        if caller.role != "superadmin":
-            evs = [{k: v for k, v in e.items() if k != "trace"} for e in evs]
+        if caller.role == "superadmin":  # staff also see what admins did to the account
+            evs = events.query(involving=target["username"], limit=limit)
+        else:
+            evs = [{k: v for k, v in e.items() if k != "trace"}
+                   for e in events.query(user=target["username"], limit=limit)]
+        if target["username"] != caller.name:
+            audit(caller, "view_user", target=target["username"], what="activity")
         return evs
 
     # ------------------------------------------------------------- invites
@@ -1477,22 +1588,24 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.delete("/admin/invites/{code}")
     def revoke_invite(code: str, caller: Caller = Depends(admin_only)):
-        mine = {i["code"] for i in accounts.invites(scope(caller))}
+        mine = {i["code"]: i for i in accounts.invites(scope(caller))}
         if code.strip().upper() not in mine:
             raise HTTPException(404, "no such invite")
         accounts.revoke_invite(code)
-        audit(caller, "revoke_invite")
+        audit(caller, "revoke_invite", code=code.strip().upper(),
+              household_id=mine[code.strip().upper()]["household_id"])
         return {"ok": True}
 
+    # Feedback moderation is staff-only: the board is shared by every household.
     @app.get("/admin/feedback")
-    def admin_feedback(caller: Caller = Depends(admin_only)):
+    def admin_feedback(caller: Caller = Depends(super_only)):
         return feedback_store.board(caller.name, include_hidden=True)
 
     @app.patch("/admin/feedback/{fid}")
-    def respond_feedback(fid: str, body: FeedbackResponse, caller: Caller = Depends(admin_only)):
+    def respond_feedback(fid: str, body: FeedbackResponse, caller: Caller = Depends(super_only)):
         try:
             item = feedback_store.respond(fid, status=body.status, reply=body.reply,
-                                          names=accounts.list_users())
+                                          names=_scrub_names(accounts))
         except KeyError:
             raise HTTPException(404) from None
         except FeedbackError as exc:
@@ -1530,13 +1643,15 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 "username": u["username"], "email": u.get("email"), "role": u["role"],
                 "household_id": u["household_id"], "household": homes.get(u["household_id"], u["household_id"]),
                 "disabled": u["disabled"], "beta": u["beta"], "debug": u["debug"], "must_change": u["must_change"],
-                "created": u["created"], "last_login": u["last_login"], "sessions": live.get(u["username"], 0),
+                "created": u["created"], "last_login": u["last_login"], "last_seen": u.get("last_seen"),
+                "sessions": live.get(u["username"], 0),
                 "app": display_name(conn_.get("provider")) if conn_ else None,
                 "open_tasks": open_tasks.get(u["username"], 0), "prints_30d": prints.get(u["username"], 0),
                 "errors_7d": errors.get(u["username"], 0),
                 "consented": consent.get("version") == DATA_NOTICE_VERSION,
                 "protected": u["username"] == protected_name,
-                "active_7d": bool(u["last_login"] and u["last_login"] > week),
+                # Phones stay signed in for weeks: using the app counts, not just signing in.
+                "active_7d": max(u["last_login"] or 0, u.get("last_seen") or 0) > week,
             })
         return rows
 
@@ -1599,6 +1714,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         target = _target(username)
         name = target["username"]
         row = next(r for r in _user_rows() if r["username"] == name)
+        if name != caller.name:
+            audit(caller, "view_user", target=name, what="details")
         return {**row, "prefs": target["prefs"], "connection": connections.status(name),
                 "devices": accounts.sessions_for(name), "tags": Tags(accounts.db, name).all(),
                 "recent": events.query(user=name, limit=15),
@@ -1631,6 +1748,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         if not changes:
             raise HTTPException(400, "nothing to change")
         _guard_self(caller, target["username"], changes)
+        if {"must_change", "household_id", "email"} & set(changes):
+            _guard_protected(caller, target["username"])
         try:
             updated = accounts.update(target["username"], **changes)
         except AuthError as exc:
@@ -1643,6 +1762,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.post("/super/users/{username}/reset-settings")
     def super_reset_settings(username: str, caller: Caller = Depends(super_only)):
         target = _target(username)
+        _guard_protected(caller, target["username"])
         with accounts.db.begin() as conn:
             from . import db as _db
             conn.execute(_db.users.update().where(_db.users.c.username == target["username"]).values(prefs=default_prefs()))
@@ -1653,6 +1773,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def super_unlink(username: str, caller: Caller = Depends(super_only)):
         """Forget their linked to-do app (their built-in list stays). For a broken or stuck connection."""
         target = _target(username)
+        _guard_protected(caller, target["username"])
         connections.disconnect(target["username"])
         audit(caller, "unlink_app", target=target["username"])
         return {"ok": True}
@@ -1666,6 +1787,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         if not body.usernames or len(body.usernames) > 500:
             raise HTTPException(400, "pick 1 to 500 people")
         results = {}
+        protected_name = accounts.protected()
         for raw in dict.fromkeys(u.strip().lower() for u in body.usernames):
             if raw == caller.name and body.action in ("disable", "signout"):
                 results[raw] = "skipped: that's you"
@@ -1673,15 +1795,18 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             if not accounts.get(raw):
                 results[raw] = "no such user"
                 continue
-            try:
-                if body.action == "signout":
-                    results[raw] = f"signed out {accounts.revoke_user_sessions(raw)} device(s)"
-                else:
-                    accounts.update(raw, **actions[body.action])
-                    results[raw] = "done"
-            except AuthError as exc:
-                results[raw] = str(exc)
-        audit(caller, "bulk_users", op=body.action, count=len(results))
+            if raw == protected_name and raw != caller.name:
+                results[raw] = "skipped: protected admin"
+            else:
+                try:
+                    if body.action == "signout":
+                        results[raw] = f"signed out {accounts.revoke_user_sessions(raw)} device(s)"
+                    else:
+                        accounts.update(raw, **actions[body.action])
+                        results[raw] = "done"
+                except AuthError as exc:
+                    results[raw] = str(exc)
+            audit(caller, "bulk_users", op=body.action, target=raw, result=results[raw])  # one per person
         return {"results": results}
 
     @app.get("/super/households")
@@ -1734,7 +1859,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 "username": name, "role": u["role"], "beta": u["beta"],
                 "app": connections.status(name).get("name"),
                 "consented_at": (u.get("consent") or {}).get("at"),
-                "last_active": max([u.get("last_login") or 0] + [int(e["ts"]) for e in my_acts]) or None,
+                "last_active": max([u.get("last_login") or 0, u.get("last_seen") or 0]
+                                   + [int(e["ts"]) for e in my_acts]) or None,
                 "tickets": len(mine), "printed": sum(1 for r in mine if not r["dry_run"]),
                 "by_reason": by_reason, "scans": len(my_scans),
                 "marks_applied": sum(len(r["applied"]) for r in my_scans),
@@ -1750,10 +1876,12 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 "people": sorted(people, key=lambda p: -(p["last_active"] or 0))}
 
     @app.get("/super/users/{username}/tickets")
-    def user_tickets(username: str, limit: int = 30, caller: Caller = Depends(super_only)):
-        _target(username)
-        return {"tickets": ctx.store.list_printed(min(limit, 200), by=username.lower()),
-                "scans": ctx.store.list_scans(min(limit, 200), by=username.lower())}
+    def user_tickets(username: str, limit: int = Query(30, ge=1, le=200), caller: Caller = Depends(super_only)):
+        name = _target(username)["username"]
+        if name != caller.name:
+            audit(caller, "view_user", target=name, what="tickets")
+        return {"tickets": ctx.store.list_printed(limit, by=name),
+                "scans": ctx.store.list_scans(limit, by=name)}
 
     # ----------------------------------------------------------- superadmin (debug)
     @app.get("/super/diagnostics")
@@ -1810,9 +1938,11 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.get("/super/events")
     def super_events(user: str | None = None, kind: str | None = None, errors_only: bool = False,
-                     limit: int = 200, caller: Caller = Depends(super_only)):
-        return events.query(user=user or None, kind=kind or None,
-                            ok=False if errors_only else None, limit=min(limit, 1000))
+                     target: str | None = None, limit: int = Query(200, ge=1, le=1000),
+                     caller: Caller = Depends(super_only)):
+        """`user`: what they did and what admins did to their account. `target`: only the latter."""
+        return events.query(involving=(user or "").strip().lower() or None, target=target or None,
+                            kind=kind or None, ok=False if errors_only else None, limit=limit)
 
     @app.get("/super/settings")
     def get_server_settings(caller: Caller = Depends(super_only)):
@@ -1875,6 +2005,19 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     return app
 
 
+def _scrub_names(accounts: Accounts) -> list[str]:
+    """Names to take out of feedback: usernames, and the names people show (often their real
+    ones), whole and word by word (3+ letters)."""
+    names: list[str] = []
+    for u in accounts.all_users():
+        names.append(u["username"])
+        shown = str((u.get("prefs") or {}).get("display_name") or "").strip()
+        if shown:
+            names.append(shown)
+            names += [w for w in re.findall(r"[^\W\d_][\w'’-]*", shown) if len(w) >= 3]
+    return names
+
+
 def _migrate_feedback(events: Events, store: Feedback, accounts: Accounts) -> None:
     """Older versions logged feedback (with names) in events.jsonl. Move it to the anonymous
     board and the identity file, and remove it from the log."""
@@ -1883,7 +2026,7 @@ def _migrate_feedback(events: Events, store: Feedback, accounts: Accounts) -> No
         try:
             store.submit(mode="open", kind="other", page=d.get("page", ""), rating=None, fields={},
                          message=d.get("message", ""), who=ev.get("user"), ip="", agent=d.get("agent", ""),
-                         names=accounts.list_users(),
+                         names=_scrub_names(accounts),
                          debug={"recent_errors": d["recent_errors"]} if d.get("recent_errors") else None,
                          today=date.fromtimestamp(ev.get("ts", time.time())), ts=ev.get("ts"),
                          enforce_limit=False)
@@ -1911,16 +2054,98 @@ def _build_id() -> str:
         return ""
 
 
+# Debug details are read by admins, so they hold shapes, not words: task text, journal notes, titles
+# and filters never get into events. Strings are kept only when they look like an id.
+_ID_LIKE = re.compile(r"nb:\d{1,15}|\d{6}-[A-Z0-9]{4}|\d{1,20}|[0-9a-f]{8,16}")
+
+
+def _shape(v):
+    if v is None or isinstance(v, (bool, int, float)):
+        return v
+    if isinstance(v, str):
+        return v if _ID_LIKE.fullmatch(v) else f"str({len(v)})"
+    if isinstance(v, (list, tuple, set, dict)):
+        return f"{type(v).__name__}({len(v)})"
+    return type(v).__name__
+
+
 def _safe_args(args: tuple, kwargs: dict) -> dict:
-    """Arguments worth seeing when debugging; contexts, images and functions are skipped."""
+    """Arguments worth seeing when debugging: ids, numbers and switches as they are, everything
+    else as its type and length. Contexts, images and functions are skipped."""
     out = {}
     for i, a in enumerate(args):
         if isinstance(a, (str, int, float, bool)) or a is None:
-            out[f"arg{i}"] = a if not isinstance(a, str) else a[:300]
+            out[f"arg{i}"] = _shape(a)
         elif isinstance(a, dict):
-            out[f"arg{i}"] = {str(k): v for k, v in list(a.items())[:20]}
-    out.update({k: v for k, v in kwargs.items() if isinstance(v, (str, int, float, bool)) or v is None})
+            out[f"arg{i}"] = {str(k)[:40]: _shape(v) for k, v in list(a.items())[:20]}
+    out.update({k: _shape(v) for k, v in kwargs.items() if isinstance(v, (str, int, float, bool)) or v is None})
     return out
+
+
+_RESULT_KEEP = ("id", "status", "kind", "reason", "label_id", "label_code_read", "journal_id", "message")
+_RESULT_COUNT = ("applied", "needs_confirmation", "ignored", "errors", "manifest", "also", "missing")
+
+
+def _debug_result(result) -> dict:
+    """What an action returned, for debug mode: ids, statuses and counts. Never notes, content,
+    description, steps, text or titles."""
+    if isinstance(result, list):
+        return {"count": len(result)}
+    if not isinstance(result, dict):
+        return {"type": type(result).__name__}
+    out = {k: result[k] for k in _RESULT_KEEP
+           if k in result and (result[k] is None or isinstance(result[k], (str, int, float, bool)))}
+    out.update({f"{k}_count": len(result[k]) for k in _RESULT_COUNT if isinstance(result.get(k), list)})
+    return out
+
+
+class _Window:
+    """At most `limit` tries per `seconds` for each person (in memory; resets on restart)."""
+
+    def __init__(self, limit: int, seconds: int):
+        self.limit, self.seconds = limit, seconds
+        self._hits: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, key: str) -> bool:
+        now = time.time()
+        with self._lock:
+            recent = [t for t in self._hits.get(key, []) if now - t < self.seconds]
+            if len(recent) >= self.limit:
+                self._hits[key] = recent
+                return False
+            self._hits[key] = recent + [now]
+            return True
+
+
+class _BodyLimit:
+    """Refuse oversized requests before reading them: 16 MB for a photo read-back, 256 KB for
+    everything else. Bodies sent without a Content-Length are counted as they arrive."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        big = scope.get("path") == "/scan"
+        limit = MAX_UPLOAD_BYTES if big else MAX_BODY_BYTES
+        msg = "photo too large" if big else "That's more than Next Box takes in one go."
+        length = dict(scope.get("headers") or []).get(b"content-length", b"")
+        if length.isdigit() and int(length) > limit:
+            response = JSONResponse({"detail": msg}, status_code=413, headers={"Connection": "close"})
+            return await response(scope, receive, send)
+        seen = 0
+
+        async def counted():
+            nonlocal seen
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > limit:
+                    raise HTTPException(413, msg)  # FastAPI turns this into the usual JSON answer
+            return message
+        return await self.app(scope, counted, send)
 
 
 def _version() -> str:

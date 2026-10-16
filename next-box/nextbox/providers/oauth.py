@@ -96,10 +96,14 @@ def setup_status() -> dict:
 # --- the sign-in round trip ---------------------------------------------------------------------
 _pending: dict[str, dict] = {}  # state -> who started it; lives a few minutes, in memory only
 _pending_lock = threading.Lock()
+ELSEWHERE = "That sign-in was started somewhere else. Start it again from Settings."
 
 
-def start(app: str, purpose: str, username: str) -> str:
-    """The address to send the person to. PKCE + a one-time state tied to who started it."""
+def start(app: str, purpose: str, username: str) -> tuple[str, str]:
+    """(The address to send the person to, a one-time nonce for this browser's cookie.)
+    PKCE + a one-time state tied to who started it. The nonce proves the browser that comes back
+    is the one that started, so a consent link forwarded to someone else can't land their account
+    on the starter's (see finish)."""
     if app not in APPS or purpose not in APPS[app]["scopes"]:
         raise ProviderError("That sign-in isn't available.")
     if not ready(app):
@@ -107,17 +111,18 @@ def start(app: str, purpose: str, username: str) -> str:
     spec = APPS[app]
     state = secrets.token_urlsafe(24)
     verifier = secrets.token_urlsafe(48)
+    nonce = secrets.token_urlsafe(16)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
     with _pending_lock:
         now = time.time()
         for k in [k for k, v in _pending.items() if v["expires"] < now]:
             del _pending[k]
         _pending[state] = {"user": username, "app": app, "purpose": purpose, "verifier": verifier,
-                           "expires": now + 600}
+                           "nonce": nonce, "expires": now + 600}
     params = {"client_id": credentials(app)[0], "redirect_uri": redirect_uri(app), "response_type": "code",
               "scope": " ".join(x for x in (spec["base_scopes"], spec["scopes"][purpose]) if x),
               "state": state, "code_challenge": challenge, "code_challenge_method": "S256", **spec["extra"]}
-    return f"{spec['auth']}?{urlencode(params)}"
+    return f"{spec['auth']}?{urlencode(params)}", nonce
 
 
 def who_started(state: str) -> str | None:
@@ -126,13 +131,17 @@ def who_started(state: str) -> str | None:
     return p["user"] if p and p["expires"] >= time.time() else None
 
 
-def finish(app: str, state: str, code: str, username: str, client: httpx.Client | None = None) -> tuple[str, dict]:
+def finish(app: str, state: str, code: str, username: str, client: httpx.Client | None = None, *,
+           nonce: str) -> tuple[str, dict]:
     """Swap the code for tokens. Returns (purpose, secrets to seal). The state is single-use and
-    names who started the sign-in, so the result can only land on that person's account."""
+    names who started the sign-in, and `nonce` (from the starter's browser cookie) must match, so
+    the result can only land on that person's account, from the browser they started in."""
     with _pending_lock:
         pending = _pending.pop(state, None)
     if not pending or pending["app"] != app or pending["expires"] < time.time():
         raise ProviderError("That sign-in took too long or was already used. Try connecting again.")
+    if not secrets.compare_digest(str(nonce or "").encode(), pending["nonce"].encode()):
+        raise ProviderError(ELSEWHERE)
     if pending["user"] != username:
         raise ProviderError("That sign-in was started by a different Next Box account.")
     cid, secret = credentials(app)

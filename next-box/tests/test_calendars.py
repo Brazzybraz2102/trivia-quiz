@@ -164,9 +164,14 @@ def test_signin_through_the_server(ctx, monkeypatch):
     state = parse_qs(urlparse(r.headers["location"]).query)["state"][0]
     monkeypatch.setattr(oauth, "_token_request", lambda app, data, client=None: {
         "access_token": "A", "refresh_token": "R", "expires_in": 3600})
-    # The browser comes back without our cookie (it's another site's redirect): the state is enough.
-    back = TestClient(app, base_url="http://testserver", follow_redirects=False).get(
+    # Another browser (say, a consent link forwarded to someone else) can't finish it...
+    elsewhere = TestClient(app, base_url="http://testserver", follow_redirects=False).get(
         f"/connect/google/callback?state={state}&code=abc")
+    assert "somewhere%20else" in elsewhere.headers["location"] and added == []
+    # ...the browser that started it can (its nb_oauth cookie matches), once.
+    r = c.get("/connect/google/calendar/start")
+    state = parse_qs(urlparse(r.headers["location"]).query)["state"][0]
+    back = c.get(f"/connect/google/callback?state={state}&code=abc")
     assert back.status_code == 303 and "Connected%20Google" in back.headers["location"]
     assert added == [("google_calendar", "R")]
     assert c.get("/calendars").json()["calendars"][0]["provider"] == "google_calendar"

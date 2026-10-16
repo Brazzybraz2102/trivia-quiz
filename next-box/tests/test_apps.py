@@ -153,9 +153,10 @@ def test_needs_setup_until_the_owner_switches_it_on(monkeypatch, signin_on):
 
 
 def test_signin_round_trip_with_pkce_and_one_time_state(signin_on):
-    url = oauth.start("google", "calendar", "sam")
+    url, nonce = oauth.start("google", "calendar", "sam")
     q = {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
     assert url.startswith("https://accounts.google.com/") and q["code_challenge_method"] == "S256"
+    assert nonce not in url  # the nonce only goes in the starter's cookie
     assert q["redirect_uri"] == "https://nextbox.example.com/connect/google/callback"
     assert "calendar.readonly" in q["scope"] and q["access_type"] == "offline"
     assert oauth.who_started(q["state"]) == "sam"
@@ -166,14 +167,18 @@ def test_signin_round_trip_with_pkce_and_one_time_state(signin_on):
         return httpx.Response(200, json={"access_token": "A", "refresh_token": "R", "expires_in": 3600})
     client = httpx.Client(transport=httpx.MockTransport(token))
     with pytest.raises(ProviderError, match="different"):
-        oauth.finish("google", q["state"], "code", "kim", client=client)  # wrong person: state is now spent
-    url = oauth.start("google", "calendar", "sam")
+        oauth.finish("google", q["state"], "code", "kim", client=client, nonce=nonce)  # wrong person: state spent
+    url, nonce = oauth.start("google", "calendar", "sam")
     state = parse_qs(urlparse(url).query)["state"][0]
-    purpose, tokens = oauth.finish("google", state, "the-code", "sam", client=client)
+    with pytest.raises(ProviderError, match="somewhere else"):  # another browser: no matching cookie
+        oauth.finish("google", state, "the-code", "sam", client=client, nonce="")
+    url, nonce = oauth.start("google", "calendar", "sam")
+    state = parse_qs(urlparse(url).query)["state"][0]
+    purpose, tokens = oauth.finish("google", state, "the-code", "sam", client=client, nonce=nonce)
     assert purpose == "calendar" and tokens["refresh_token"] == "R"
     assert seen[-1]["code_verifier"] and seen[-1]["client_secret"] == ["google-secret"]
     with pytest.raises(ProviderError, match="already used"):
-        oauth.finish("google", state, "the-code", "sam", client=client)
+        oauth.finish("google", state, "the-code", "sam", client=client, nonce=nonce)
 
 
 def test_expired_tokens_refresh_and_are_saved(signin_on):

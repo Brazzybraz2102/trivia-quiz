@@ -246,6 +246,8 @@
 <div class="banner" id="offlineBanner" role="status" hidden>You're offline. Next Box will work again when you're back online.</div>
 <div class="banner" id="announce" hidden></div>
 <div class="banner" id="paused" hidden>Printing is paused by an admin. Everything renders as a preview until it's turned back on.</div>
+<div class="banner" id="debugOn" hidden>Debug mode is on for your account, so the admin sees a bit more about what goes wrong. Never what your tasks or journal say.</div>
+<div class="banner" id="resetNote" role="status" hidden><span id="resetText"></span> <button type="button" class="plain small" id="resetOk">OK</button></div>
 <nav id="topnav" aria-label="Main">
   <button data-tab="mylist" class="on" aria-current="page">My list</button>
   <button data-tab="print">Print</button>
@@ -598,7 +600,7 @@
       <div class="row"><button class="go" id="announceGo">Save banner</button></div>
     </div>
     <div class="card"><h2>Event log</h2>
-      <div class="row"><input type="text" id="evUser" placeholder="user" style="max-width:160px" autocapitalize="none">
+      <div class="row"><input type="text" id="evUser" placeholder="person" title="What they did, and what admins did to their account" aria-label="Person" style="max-width:160px" autocapitalize="none">
         <select id="evKind"><option value="">all kinds</option><option>activity</option><option>error</option><option>audit</option><option>auth</option></select>
         <label class="muted"><input type="checkbox" id="evErr"> failures only</label>
         <button class="plain" id="evGo">Load</button></div>

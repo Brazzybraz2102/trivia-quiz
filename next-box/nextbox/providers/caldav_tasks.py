@@ -63,6 +63,15 @@ def _categories(component) -> list[str]:
     return [c for c in out if c]
 
 
+def caldav_problem(exc: Exception) -> ProviderError:
+    """A short, fixed sentence: never the server's own reply, which could come from anywhere."""
+    if isinstance(exc, ProviderError):
+        return exc  # ours, e.g. "points inside a private network"
+    if type(exc).__name__ == "AuthorizationError":
+        return ProviderError("The CalDAV server said no. Check the username and app password.")
+    return ProviderError("Couldn't reach the CalDAV server. Check the address and try again.")
+
+
 class CalDAVTasks(TaskProvider):
     key = "caldav"
 
@@ -71,11 +80,13 @@ class CalDAVTasks(TaskProvider):
             raise ProviderError("CalDAV needs a server address, username and app password.")
         import caldav
 
-        from .http import check_public_url
+        from .http import check_public_url, guard_session
         if client is None:
             url = check_public_url(url, "The server address")
-        self._client = client or caldav.DAVClient(url=url, username=username, password=password,
-                                                  timeout=20)
+            client = caldav.DAVClient(url=url, username=username, password=password, timeout=20,
+                                      enable_rfc6764=False)
+            guard_session(client.session)  # redirects and links the server sends are checked too
+        self._client = client
         self._list_name = list_name.strip()
         self._username = username
         self._calendars = None
@@ -86,7 +97,7 @@ class CalDAVTasks(TaskProvider):
             try:
                 cals = self._client.principal().calendars()
             except Exception as exc:  # caldav raises many types (auth, DAV, connection)
-                raise ProviderError(f"Couldn't reach the CalDAV server: {exc}") from exc
+                raise caldav_problem(exc) from exc
             lists = []
             for c in cals:
                 try:

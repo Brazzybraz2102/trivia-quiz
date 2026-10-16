@@ -98,11 +98,11 @@ def is_reachable(target: str | PrinterConfig, timeout: float = 2.0) -> bool:
         address = target
     if not address:
         return False
-    host, port = _host_port(address)
     try:
+        host, port = _host_port(address)
         with socket.create_connection((host, port), timeout=timeout):
             return True
-    except OSError:
+    except (OSError, ValueError, OverflowError):  # a bad address saved before it was checked: just "not reachable"
         return False
 
 

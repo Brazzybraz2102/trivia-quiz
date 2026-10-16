@@ -23,25 +23,46 @@ def allow_private() -> bool:
 
 def check_public_url(url: str, what: str = "That address") -> str:
     """https only (http allowed for private servers when permitted), and never the local network."""
+    return resolve_public(url, what)[0]
+
+
+def resolve_public(url: str, what: str = "That address") -> tuple[str, str | None]:
+    """check_public_url, plus the checked IP address to connect to, so the name can't point
+    somewhere else a moment later (DNS rebinding). The IP is None when private servers are allowed."""
     url = url.strip()
     if url.startswith("webcal://"):
         url = "https://" + url[len("webcal://"):]
     p = urlparse(url)
     private_ok = allow_private()
-    if p.scheme not in ("https", "http") or not p.hostname or (p.scheme == "http" and not private_ok):
+    try:
+        port = p.port
+    except ValueError:
+        port = -1
+    if p.scheme not in ("https", "http") or not p.hostname or port == -1 or (p.scheme == "http" and not private_ok):
         raise ProviderError(f"{what} must start with https://")
     if private_ok:
-        return url
+        return url, None
     try:
-        infos = socket.getaddrinfo(p.hostname, p.port or (443 if p.scheme == "https" else 80))
-    except socket.gaierror as exc:
+        infos = socket.getaddrinfo(p.hostname, port or (443 if p.scheme == "https" else 80))
+    except (socket.gaierror, UnicodeError) as exc:
         raise ProviderError(f"{what}: can't find {p.hostname}") from exc
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
         if not ip.is_global:
             raise ProviderError(f"{what} points inside a private network, which Next Box doesn't allow. "
                                 "If it's on your home network, ask your Next Box owner.")
-    return url
+    # IPv4 first when there is one: not every home connection reaches IPv6 addresses.
+    return url, next((i[4][0] for i in infos if i[0] == socket.AF_INET), infos[0][4][0])
+
+
+def guard_session(session, what: str = "The server address") -> None:
+    """Check every request a requests/niquests session sends (CalDAV): redirects, links the server
+    hands back and discovery all go through here, not just the address the person typed."""
+    for adapter in set(session.adapters.values()):
+        def send(request, *args, _send=adapter.send, **kwargs):
+            check_public_url(str(request.url), what)
+            return _send(request, *args, **kwargs)
+        adapter.send = send
 
 
 class Api:

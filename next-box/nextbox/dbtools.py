@@ -40,6 +40,16 @@ TABLE_NOTES = {
     "tags": "Each person's tags and the label color for each.",
 }
 MASKED_COLUMNS = {"hash", "salt", "token_hash", "notes", "photo"}  # notes/photo: private journal pages
+# The same columns by table. On SQLite they read as NULL whatever the query calls them
+# (`SELECT notes AS n`, `hash || ''`, `length(notes)`), so an alias can't get past the masking.
+UNREADABLE = {("journal", "notes"), ("journal", "photo"), ("users", "hash"), ("users", "salt"),
+              ("sessions", "token_hash")}
+
+
+def _authorizer(action, table, column, _db, _source):
+    if action == sqlite3.SQLITE_READ and (table, column) in UNREADABLE:
+        return sqlite3.SQLITE_IGNORE  # the value reads as NULL
+    return sqlite3.SQLITE_OK
 
 DIAGRAM = """
   households ─┬─< users ─┬─< sessions          ( ─< means "one to many" )
@@ -102,7 +112,7 @@ def describe_location(data_dir: Path) -> str:
 def _mask(columns: list[str], row: tuple) -> list:
     out = []
     for col, val in zip(columns, row, strict=False):
-        if col in MASKED_COLUMNS and val:
+        if col in MASKED_COLUMNS and (val or val is None):  # None: the authorizer hid it
             val = "•••• (hidden)"
         elif col == "connection" and val:
             data = json.loads(val) if isinstance(val, str) else dict(val)
@@ -125,11 +135,16 @@ def run_sql(data_dir: Path, sql: str, practice: bool = False, write: bool = Fals
                               "The real one is changed through the app, so nothing breaks.")
     engine = db.database(practice_url(data_dir) if practice else data_dir)
     with engine.connect() as conn:
+        raw = conn.connection.driver_connection if engine.dialect.name == "sqlite" and not practice else None
         if not write:
             if engine.dialect.name == "sqlite":
                 conn.exec_driver_sql("PRAGMA query_only = ON")
             else:
+                # PostgreSQL: masking here is by column name only; for a hard guarantee, run `db sql`
+                # as a read-only role without SELECT on users.hash/salt, sessions.token_hash, journal.notes/photo.
                 conn.exec_driver_sql("SET TRANSACTION READ ONLY")
+        if raw is not None:
+            raw.set_authorizer(_authorizer)
         try:
             result = conn.execute(text(sql))
             if result.returns_rows:
@@ -142,6 +157,8 @@ def run_sql(data_dir: Path, sql: str, practice: bool = False, write: bool = Fals
                 conn.commit()
             return cols, rows, note
         finally:
+            if raw is not None:
+                raw.set_authorizer(None)  # the connection goes back to the pool
             if not write and engine.dialect.name == "sqlite":
                 conn.exec_driver_sql("PRAGMA query_only = OFF")
 

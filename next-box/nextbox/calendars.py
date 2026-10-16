@@ -10,20 +10,51 @@ from __future__ import annotations
 import datetime as dt
 import threading
 import time
+from collections import OrderedDict
 
 import httpx
 
 from .providers.base import ProviderError
+from .providers.caldav_tasks import caldav_problem
 from .providers.calendar_base import CalendarSource, event_from_component, sort_events
-from .providers.http import check_public_url
+from .providers.http import check_public_url, guard_session, resolve_public
 
 MAX_FEED_BYTES = 5_000_000
 FEED_CACHE_SECONDS = 300
+MAX_CACHED_FEEDS = 50  # in memory: up to 5 MB each, so keep only the recently used ones
 
 
 # --- a subscription link (.ics) -----------------------------------------------------------------
-_cache: dict[str, tuple[float, bytes]] = {}
+_cache: OrderedDict[str, tuple[float, bytes]] = OrderedDict()
 _cache_lock = threading.Lock()
+
+
+def _remember(url: str, data: bytes) -> None:
+    now = time.time()
+    with _cache_lock:
+        for key in [k for k, (ts, _) in _cache.items() if now - ts >= FEED_CACHE_SECONDS]:
+            del _cache[key]
+        _cache[url] = (now, data)
+        _cache.move_to_end(url)
+        while len(_cache) > MAX_CACHED_FEEDS:
+            _cache.popitem(last=False)
+
+
+def forget_feed(url: str) -> None:
+    """A calendar was removed: drop its cached feed."""
+    url = (url or "").strip()
+    with _cache_lock:
+        for key in (url, "https://" + url[len("webcal://"):] if url.startswith("webcal://") else url):
+            _cache.pop(key, None)
+
+
+def _pinned(url: str, ip: str | None) -> tuple[str, dict, dict]:
+    """Connect to the IP address that was checked, still asking for (and verifying TLS as) the name."""
+    if ip is None:
+        return url, {}, {}
+    u = httpx.URL(url)
+    headers = {"Host": u.netloc.decode("ascii")}
+    return str(u.copy_with(host=ip)), headers, ({"sni_hostname": u.host} if u.scheme == "https" else {})
 
 
 class IcsFeed(CalendarSource):
@@ -40,13 +71,17 @@ class IcsFeed(CalendarSource):
         with _cache_lock:
             hit = _cache.get(self.url)
             if hit and time.time() - hit[0] < FEED_CACHE_SECONDS:
+                _cache.move_to_end(self.url)
                 return hit[1]
         url = self.url
         for _ in range(4):  # follow a few redirects, checking each hop
+            url, ip = resolve_public(url, "The calendar link")
+            target, host, sni = _pinned(url, ip)
             try:
-                with self.http.stream("GET", url, headers={"Accept": "text/calendar"}) as r:
+                with self.http.stream("GET", target, headers={"Accept": "text/calendar", **host},
+                                      extensions=sni) as r:
                     if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
-                        url = check_public_url(httpx.URL(url).join(r.headers["location"]).__str__(), "The calendar link")
+                        url = httpx.URL(url).join(r.headers["location"]).__str__()  # checked at the top
                         continue
                     if r.status_code in (401, 403, 404):
                         raise ProviderError("The calendar link doesn't work any more. Copy a fresh one and add it again.")
@@ -64,8 +99,7 @@ class IcsFeed(CalendarSource):
             raise ProviderError("The calendar link redirects too many times.")
         if b"BEGIN:VCALENDAR" not in data[:2000]:
             raise ProviderError("That link isn't a calendar. Look for the one ending in .ics (the 'secret' or 'ICS' address).")
-        with _cache_lock:
-            _cache[self.url] = (time.time(), data)
+        _remember(self.url, data)
         return data
 
     def _calendar(self):
@@ -102,7 +136,10 @@ class CalDAVCalendars(CalendarSource):
         import caldav
         if client is None:
             url = check_public_url(url, "The server address")
-        self.client = client or caldav.DAVClient(url=url, username=username, password=password, timeout=20)
+            client = caldav.DAVClient(url=url, username=username, password=password, timeout=20,
+                                      enable_rfc6764=False)
+            guard_session(client.session)  # redirects and links the server sends are checked too
+        self.client = client
         self.username = username
         self.only = only.strip()
 
@@ -110,7 +147,7 @@ class CalDAVCalendars(CalendarSource):
         try:
             cals = self.client.principal().calendars()
         except Exception as exc:
-            raise ProviderError(f"Couldn't reach the CalDAV server: {exc}") from exc
+            raise caldav_problem(exc) from exc
         out = []
         for c in cals:
             try:
@@ -135,8 +172,10 @@ class CalDAVCalendars(CalendarSource):
         for name, cal in self._calendars():
             try:
                 found = cal.search(start=start, end=end, event=True, expand=True)
+            except ProviderError:
+                raise
             except Exception as exc:
-                raise ProviderError(f"Couldn't read {name}: {exc}") from exc
+                raise ProviderError(f"Couldn't read {name}. Try again in a minute.") from exc
             for item in found:
                 for comp in item.icalendar_instance.walk("VEVENT"):
                     e = event_from_component(comp, day, name)
