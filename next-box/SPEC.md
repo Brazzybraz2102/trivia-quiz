@@ -74,7 +74,8 @@ Auth: `POST /auth/login {username,password}` sets an HttpOnly, SameSite=Strict `
 cookie that lasts 30 days. With `want_token: true` it returns a bearer token instead, for the
 native app (`Authorization: Bearer ...`). `POST /auth/logout` ends the session and `GET /auth/me`
 says who's signed in. Home Assistant and scripts send `X-NextBox-Key`. Keys are never accepted in
-URLs.
+URLs. The key can send a photo (`POST /scan`) and list read-backs, but never sees journal notes or which
+page a photo made; confirming, relabelling, retrying and undoing a read-back need a signed-in person.
 
 Security details:
 - Passwords are hashed with scrypt, and the `sessions` table only holds SHA-256 hashes of tokens.
@@ -436,7 +437,8 @@ a printer; the person prints it from their device.
 Profile and email (`PATCH /auth/profile`; sign in with username or email), change password, signed-in
 devices (sign out the others), settings, help, feedback, refresh, **download my data**
 (`GET /auth/export`: account, settings, tags, tasks, linked app and calendar names, tickets without
-images, read-backs, devices; never passwords, hashes or tokens), sign out, and **delete my account**
+images, read-backs, devices; never passwords, hashes or tokens; `format=zip` adds journal photos and
+ticket images, 5 an hour; both `no-store`), sign out, and **delete my account**
 (`POST /auth/delete-account`: password + typed username; removes the account, tasks, tags,
 tickets, scans and activity; feedback stays, unlinked; the protected admin and the last superadmin
 can't). The login page has show-password and "Forgot your password?" (an admin gives a one-time
@@ -498,8 +500,8 @@ Everything here is the owner's own journal: owner-scoped, never in events, admin
   "Moved a page to … Undo".
 - **Search**: `GET /journal/search?q=` (2+ letters): pages whose notes or win hold every word, ignoring case
   and accents, newest first (the newest 5,000 pages are searched; 50 shown, with the total). Each result has
-  a short snippet as `parts` `[{t, m}]` with the matches marked. Opening one shows that day and older, with
-  "Back to today".
+  a short snippet as `parts` `[{t, m}]` with the matches marked. 60 searches a minute (new typed pages: 300
+  an hour). Opening one shows that day and older, with "Back to today".
 - **Each day** in `GET /journal` also has `ticket` ({id, kind, title, dry_run}: the ticket a page that day
   was read back from, else that day's daily ticket, a real print before a preview) shown as a thumbnail with
   Print on paper, and `changes` ({moved, dropped}: task names read-back moved or dropped that day, undone ones
@@ -509,12 +511,14 @@ Everything here is the owner's own journal: owner-scoped, never in events, admin
   page with when it was snapped or written), photo-N.jpg and wins.txt. pdf: a page per day (more if long:
   "(continued)", "2 of 3") with the win, each photo, the typed notes and the wins, drawn with Pillow at 200 dpi
   on the `paper_size` paper (`paper.journal_pdf`; `paper.JpegPdf` writes one page at a time, so a long
-  journal never sits in memory). `GET /journal/export/summary` says days, pages, photos, wins, the date range,
-  about how big, and whether a download is allowed now. 10 downloads an hour; like Download my data, they wait
+  journal never sits in memory; it's sent as it's drawn, so a long journal starts downloading at once, and a
+  day stops after 20 sheets, noting the rest is in the .zip). `GET /journal/export/summary` says days, pages,
+  photos, wins, the date range, about how big, and whether a download is allowed now. 10 downloads an hour; like Download my data, they wait
   3 days after an admin set a one-time password. Linked from the Journal tab, Profile and the delete-account
   panel ("Download your journal first").
 - **Print my journal page**: `GET /journal/export?format=pdf&day=YYYY-MM-DD` opens that day's PDF (inline, 60
-  an hour, no reset wait: it shows nothing the Journal tab doesn't).
+  an hour, no reset wait: it shows nothing the Journal tab doesn't). Only that: a day as a .zip (with its
+  photos) waits out a reset like any download.
 - `Store.list_printed(until=)` bounds tickets by day, like `list_scans`.
 
 ## 27. FD: gentle AI helpers and monday.com
@@ -531,7 +535,8 @@ plain message. Events record only that a helper ran (`ai_breakdown {ms, steps}`,
 the kind of failure: never what was sent or what came back. `create_app(coach=...)` takes a fake in tests.
 - **Break it down**: `POST /list/{id}/breakdown {hint?}` (My list or linked task, the caller's own) sends
   only the task's name, minutes, due day, steps and the optional "what makes it hard" (300 characters),
-  never its description, and returns 3-6 tidied steps plus `task {id, content, local, steps, due_date,
+  never its description. Crisis words in the name, its steps or the hint (or the model's `concern`) get only
+  `support`, no steps. Otherwise it returns 3-6 tidied steps plus `task {id, content, local, steps, due_date,
   app}`. Nothing is saved: the sheet (Just one thing, Edit dialog, each slug) shows them ticked and
   editable. My list: Save sets the steps with `PATCH /list/{id}` (use instead or add after its steps;
   Undo puts the old ones back; new steps clear the slug count as before); from the Edit dialog they go
@@ -543,9 +548,9 @@ the kind of failure: never what was sent or what came back. `create_app(coach=..
   `include_notes`, and returns `{week, note {went_well, slug, suggestion}, text}`: 2-3 sentences on what
   went well, one gentle sentence about a slug (empty when nothing slid) and one tiny suggestion. Coaching
   inspired by proven techniques, not therapy: no diagnosing, no medical advice. A quiet week answers
-  `empty` without asking the AI. When the notes (or a task name) hold crisis words (`coach.CRISIS`), or the
-  model sets `concern`, the only answer is `support`: a kind nudge to reach out to someone they trust or a
-  local crisis line (988 in the US); crisis words are never sent or logged. "Save to my journal" saves
+  `empty` without asking the AI. When the ticked notes, or a task name in the wins or slugs, hold crisis words
+  (`coach.CRISIS`), or the model sets `concern`, the only answer is `support`: a kind nudge to reach out to
+  someone they trust or a local crisis line (988 in the US); crisis words are never sent or logged. "Save to my journal" saves
   `text` with `POST /journal` (today's page); otherwise nothing is kept.
 
 **monday.com** (`nextbox/providers/monday.py`, a `TaskProvider`): personal API token (+ optional board

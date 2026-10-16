@@ -133,7 +133,7 @@ def ticket_pdf(png: bytes, parts: list[Image.Image] | None, paper: str = "letter
 # handwriting), and written one page at a time, so a year of journal never has to fit in memory.
 JOURNAL_DPI = 200
 MAX_DAY_SHEETS = 20  # one day on paper; anything longer stays in the .zip download, so a PDF can't run away
-POINTS ={"letter": (612.0, 792.0), "a4": (595.28, 841.89), "a5": (419.53, 595.28), "half_letter": (396.0, 612.0)}
+POINTS = {"letter": (612.0, 792.0), "a4": (595.28, 841.89), "a5": (419.53, 595.28), "half_letter": (396.0, 612.0)}
 INK, SOFT, RULE, SHADE = (27, 27, 27), (98, 98, 98), (205, 205, 198), (247, 243, 226)
 
 
@@ -341,7 +341,10 @@ def journal_day_sheets(day: dict, paper: str, photo) -> list[Image.Image]:
         out.room(out.line * 2)
         out.text(("Snapped at " if image else "Written at ") + clock(p["created"]), font=out.small, fill=SOFT)
         if image:
-            out.photo(image, notes_follow=bool(notes))
+            try:
+                out.photo(image, notes_follow=bool(notes))
+            except (OSError, ValueError):  # a photo Pillow can't open: the PDF is already on its way, so carry on
+                out.text("(This photo couldn't be drawn here. It's in the .zip download.)", font=out.small, fill=SOFT)
         if notes:
             out.text(notes)
     wins = day.get("wins") or {}
