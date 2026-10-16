@@ -1502,8 +1502,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.get("/printed")
     def printed(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0, le=100_000),
+                since: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$"),
                 caller: Caller = Depends(auth)):
-        return ctx.store.list_printed(limit, by=acting_as(caller), offset=offset)
+        # `since`: made at or after this local time (the routine card asks for its day's tickets)
+        return ctx.store.list_printed(limit, by=acting_as(caller), offset=offset, since=since)
 
     @app.get("/printed/{label_id}/png")
     def printed_png(label_id: str, caller: Caller = Depends(auth)):
@@ -2846,8 +2848,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         if not photo:
             try:
                 form = await request.form()
-            except Exception:
-                form = None
+            except Exception as e:  # over 256 KB with no Content-Length (a photo, as a phone may send it), or not a form
+                form, photo = None, getattr(e, "status_code", 0) == 413
             if form is not None:
                 photo = any(not isinstance(v, str) and (getattr(v, "filename", "") or getattr(v, "size", 0))
                             for _, v in form.multi_items())
@@ -2995,7 +2997,8 @@ class _Window:
 
 class _BodyLimit:
     """Refuse oversized requests before reading them: 16 MB for a photo read-back, 256 KB for
-    everything else. Bodies sent without a Content-Length are counted as they arrive."""
+    everything else. Bodies sent without a Content-Length are counted as they arrive. A share
+    (/app/share, no sign-in) is held to 256 KB too, but answers a bigger one itself: Snap, to pick it again."""
 
     def __init__(self, app):
         self.app = app
@@ -3003,11 +3006,11 @@ class _BodyLimit:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
-        big = scope.get("path") in ("/scan", "/app/share")  # a shared photo is answered without reading it
+        big = scope.get("path") == "/scan"
         limit = MAX_UPLOAD_BYTES if big else MAX_BODY_BYTES
         msg = "photo too large" if big else "That's more than Next Box takes in one go."
         length = dict(scope.get("headers") or []).get(b"content-length", b"")
-        if length.isdigit() and int(length) > limit:
+        if length.isdigit() and int(length) > limit and scope.get("path") != "/app/share":  # a share's photo: answered unread
             response = JSONResponse({"detail": msg}, status_code=413, headers={"Connection": "close"})
             return await response(scope, receive, send)
         seen = 0
