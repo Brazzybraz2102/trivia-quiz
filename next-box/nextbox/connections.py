@@ -31,6 +31,12 @@ def _split(kind_fields: list[dict], fields: dict) -> tuple[dict, dict]:
     hidden = {f["name"] for f in kind_fields if f.get("secret")}
     config = {k: str(v).strip() for k, v in fields.items() if k in names and k not in hidden}
     secret = {k: str(v).strip() for k, v in fields.items() if k in hidden}
+    for f in kind_fields:
+        if any(not ch.isprintable() for ch in secret.get(f["name"], "")):
+            # A line break or control character pasted in the middle. Sent as a header it would
+            # fail, and the error would quote the token.
+            label = f["label"] if f["label"].split()[0].isupper() else f["label"][:1].lower() + f["label"][1:]
+            raise ProviderError(f"That {label} has a hidden character in it. Copy it again.")
     return config, secret
 
 

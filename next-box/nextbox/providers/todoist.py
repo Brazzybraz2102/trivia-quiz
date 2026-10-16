@@ -50,7 +50,7 @@ class Todoist(TaskProvider):
                 resp = self._http.request(method, path, headers=headers, **kwargs)
             except httpx.TransportError as exc:
                 if attempt == self._retries:
-                    raise ProviderError(f"Todoist didn't answer: {exc}") from exc
+                    raise ProviderError(f"Todoist didn't answer ({type(exc).__name__}). Try again in a minute.") from exc
                 time.sleep(self._backoff * 2 ** attempt)
                 continue
             if resp.status_code in RETRY_STATUS and attempt < self._retries:

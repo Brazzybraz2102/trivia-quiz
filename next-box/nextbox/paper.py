@@ -132,7 +132,8 @@ def ticket_pdf(png: bytes, parts: list[Image.Image] | None, paper: str = "letter
 # typed notes and wins. Drawn with Pillow like the tickets above, at 200 dpi (plenty for a photo of
 # handwriting), and written one page at a time, so a year of journal never has to fit in memory.
 JOURNAL_DPI = 200
-POINTS = {"letter": (612.0, 792.0), "a4": (595.28, 841.89), "a5": (419.53, 595.28), "half_letter": (396.0, 612.0)}
+MAX_DAY_SHEETS = 20  # one day on paper; anything longer stays in the .zip download, so a PDF can't run away
+POINTS ={"letter": (612.0, 792.0), "a4": (595.28, 841.89), "a5": (419.53, 595.28), "half_letter": (396.0, 612.0)}
 INK, SOFT, RULE, SHADE = (27, 27, 27), (98, 98, 98), (205, 205, 198), (247, 243, 226)
 
 
@@ -217,6 +218,7 @@ class _JournalLayout:
         self.line = round(pt(10.5) * 1.42)
         self.title = day_title(day)
         self.sheets: list[Image.Image] = []
+        self.cut = False  # the day ran past MAX_DAY_SHEETS: nothing more is drawn
         self._sheet()
 
     @property
@@ -240,16 +242,31 @@ class _JournalLayout:
         self.y = y + round(self.line * 0.7)
         self.sheets.append(self.page)
 
-    def room(self, height: int) -> None:
-        """Start a new sheet unless `height` more pixels fit (a nearly empty sheet always takes it)."""
+    def _next_sheet(self) -> bool:
+        """A new sheet, unless the day already has MAX_DAY_SHEETS: then it stops here (False)."""
+        if len(self.sheets) >= MAX_DAY_SHEETS:
+            self.cut = True
+            return False
+        self._sheet()
+        return True
+
+    def room(self, height: int) -> bool:
+        """Start a new sheet unless `height` more pixels fit (a nearly empty sheet always takes it).
+        False when there's no more room for this day at all."""
+        if self.cut:
+            return False
         if self.y + height > self.bottom and self.y > self.margin + self.line * 3:
-            self._sheet()
+            return self._next_sheet()
+        return True
 
     def text(self, text: str, font=None, fill=INK, indent: int = 0) -> None:
         from .render import _wrap
+        if self.cut:
+            return
         font = font or self.body
         for line in _wrap(self.d, text, font, self.width - indent):
-            self.room(self.line)
+            if not self.room(self.line):
+                return
             self.d.text((self.margin + indent, self.y), line, fill=fill, font=font)
             self.y += self.line
 
@@ -260,7 +277,8 @@ class _JournalLayout:
         from .render import _wrap
         pad = self.line // 2
         lines = _wrap(self.d, f"Your win: {text}", self.body, self.width - 2 * pad)
-        self.room(min(len(lines), 3) * self.line + pad)
+        if not self.room(min(len(lines), 3) * self.line + pad):
+            return
         top = self.y
         height = min(len(lines) * self.line + pad, self.bottom - top)
         self.d.rounded_rectangle((self.margin, top, self.w - self.margin, top + height), radius=self.line // 3, fill=SHADE)
@@ -273,6 +291,8 @@ class _JournalLayout:
         self.y = top + height + pad
 
     def photo(self, jpeg: bytes, notes_follow: bool) -> None:
+        if self.cut:
+            return
         img = Image.open(io.BytesIO(jpeg))
         usable = self.bottom - (self.margin + self.line * 3)
         cap = round(usable * (0.62 if notes_follow else 0.9))
@@ -281,8 +301,8 @@ class _JournalLayout:
             left = self.bottom - self.y
             if left >= cap * 0.55:  # a little smaller still fits on this sheet
                 scale = min(scale, left / img.height)
-            else:
-                self._sheet()
+            elif not self._next_sheet():
+                return
         size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
         img.draft("RGB", size)  # decode a big JPEG at about the size it's drawn: much quicker
         img = img.convert("RGB").resize(size, Image.LANCZOS)
@@ -297,7 +317,8 @@ class _JournalLayout:
         for i, sheet in enumerate(self.sheets, start=1):
             d = _Draw(sheet)
             y = self.h - self.margin - self.line // 2
-            d.text((self.margin, y), "Next Box journal · private", fill=SOFT, font=self.small)
+            more = " · the rest of this day is in the .zip download" if self.cut and i == n else ""
+            d.text((self.margin, y), "Next Box journal · private" + more, fill=SOFT, font=self.small)
             if n > 1:
                 label = f"{i} of {n}"
                 d.text((self.w - self.margin - d.textlength(label, font=self.small), y), label, fill=SOFT, font=self.small)
@@ -346,3 +367,32 @@ def journal_pdf(days: list[dict], paper: str, out, photo, title: str = "Next Box
         for sheet in journal_day_sheets(day, paper, photo):
             pdf.add(sheet, POINTS[paper])
     return pdf.finish()
+
+
+class _Pending:
+    """A file that only collects what's written, until it's taken: lets a PDF go out as it's drawn."""
+
+    def __init__(self):
+        self.parts: list[bytes] = []
+
+    def write(self, data: bytes) -> int:
+        self.parts.append(bytes(data))
+        return len(data)
+
+    def take(self) -> bytes:
+        data, self.parts = b"".join(self.parts), []
+        return data
+
+
+def journal_pdf_chunks(days: list[dict], paper: str, photo, title: str = "Next Box journal"):
+    """The same PDF as journal_pdf, as pieces to send while it's drawn: the first right away, then
+    one for each sheet. Nothing waits for the whole journal, in time or memory."""
+    out = _Pending()
+    pdf = JpegPdf(out, title)
+    yield out.take()
+    for day in days:
+        for sheet in journal_day_sheets(day, paper, photo):
+            pdf.add(sheet, POINTS[paper])
+            yield out.take()
+    pdf.finish()
+    yield out.take()
