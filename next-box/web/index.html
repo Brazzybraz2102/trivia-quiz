@@ -337,6 +337,37 @@
   :root[data-theme="dark"] input[type=date] { color-scheme:dark; }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) input[type=date] { color-scheme:dark; } }
   .tagrow { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
+  /* FD: the AI helpers ("Break it down" and "Look back on my week") */
+  #nowCard:not([data-id]) #nowBreak, #nowCard[data-id=""] #nowBreak { display:none; }
+  #journal.searching #lookCard { display:none; }
+  #breakDialog { max-width:560px; }
+  .btask { font-weight:700; font-size:1.05em; margin:0 0 6px; overflow-wrap:anywhere; }
+  .bsteps { list-style:none; margin:8px 0 0; padding:0; max-height:52vh; overflow:auto; }
+  .bsteps li { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
+  .bsteps li:first-child { border-top:0; }
+  .bsteps input[type=checkbox] { width:22px; height:22px; flex:none; }
+  .bsteps textarea { min-height:0; padding:7px 9px; resize:none; overflow:hidden; line-height:1.35; }
+  .bsteps li.off textarea { color:var(--muted); text-decoration:line-through; }
+  #breakBody img { display:block; max-width:100%; max-height:50vh; margin-top:8px; border:1px solid var(--line); border-radius:6px; background:#fff; }
+  .bnum { flex:none; min-width:1.4em; color:var(--muted); font-size:.875em; text-align:right; }
+  fieldset.bhow { border:0; padding:0; margin:10px 0 0; }
+  fieldset.bhow label { display:flex; gap:8px; align-items:center; padding:4px 0; }
+  fieldset.bhow input { width:20px; height:20px; flex:none; margin:0; }
+  .bhint { margin-top:10px; }
+  .bhint summary { cursor:pointer; color:var(--accent); }
+  .bnote, .coachnote { background:var(--note); color:var(--noteFg); border-radius:10px; padding:10px 12px; margin:8px 0; overflow-wrap:anywhere; }
+  .coachnote p { margin:0 0 8px; } .coachnote p:last-child { margin:0; }
+  .coachnote h3 { margin:0 0 6px; font-size:1em; }
+  .coachnote h3:focus { outline:none; }
+  .care { background:var(--card); color:var(--fg); border:2px solid var(--accent); }
+  .lookopt { display:flex; gap:8px; align-items:center; margin-top:6px; }
+  .lookopt input { width:22px; height:22px; flex:none; margin:0; }
+  .lookprivacy { font-size:13px; margin:6px 0 0; }
+  #breakMsg:empty { display:none; }
+  @media (max-width:720px) {
+    #breakActs button, #breakBody .linkish, #breakBody button, #lookOut button, #lookGo, .bsteps textarea, .lookopt { min-height:44px; }
+    .bsteps input[type=checkbox], .lookopt input { width:26px; height:26px; }
+  }
   /* Phones: checkboxes and small number boxes stay in one column on the right; wide controls
      (lists, sliders, text) always sit on their own line under the label. */
   @media (max-width:520px) {
@@ -473,6 +504,7 @@
         <button class="plain" id="nowSkip">Not now</button>
         <button class="plain" id="nowAgain" hidden>Show them again</button>
         <button class="go" id="nowStart" hidden>Go to Brain dump ↓</button>
+        <button class="plain" id="nowBreak" data-ai hidden>Break it down</button>
       </div>
     </div>
     <div class="card guide" id="guideCard" hidden>
@@ -578,6 +610,16 @@
         <input type="search" id="jQuery" placeholder="Search your journal" autocomplete="off" enterkeyhint="search" maxlength="200">
       </div>
       <p class="sr-only" id="jSearchStatus" role="status" aria-live="polite"></p>
+    </div>
+    <div class="card" id="lookCard" data-ai hidden><h2>Look back on my week</h2>
+      <p class="muted">A short, kind note about your last 7 days: what went well, something that kept sliding, and one tiny idea for next week.</p>
+      <p class="muted" id="lookNoKey" hidden>Ask your Next Box owner to add an AI key.</p>
+      <div id="lookAsk">
+        <label class="lookopt"><input type="checkbox" id="lookNotes"> Include my journal notes</label>
+        <p class="muted lookprivacy" id="lookPrivacy">This sends your week's task names to Anthropic's AI to write the note. Nothing is kept by Next Box unless you save it.</p>
+        <div class="row"><button class="go" id="lookGo">Look back on my week</button></div>
+      </div>
+      <div id="lookOut"></div>
     </div>
     <div class="card" id="jFound" hidden>
       <div class="jfoundhead"><p id="jFoundHead"></p><button class="plain small" id="jFoundClear">Clear search</button></div>
@@ -697,6 +739,7 @@
       <label class="setting"><div class="label"><b>Print the next tiny step</b><span>Under each task that has steps.</span></div><input type="checkbox" data-pref="show_next_step"></label>
       <label class="setting"><div class="label"><b>Journal mode</b><span>The daily label gets a "Today's win" line for your journal, and every page you snap is kept in your Journal.</span></div><input type="checkbox" data-pref="journal_mode"></label>
       <label class="setting"><div class="label"><b>Call it a slug after</b><span>How many moves before a task shows under Slugs and prints "slid 3×". 2–10.</span></div><input type="number" min="2" max="10" data-pref="slug_after"></label>
+      <label class="setting"><div class="label"><b>AI helpers</b><span>"Break it down" (tiny first steps) and "Look back on my week". They only run when you tap them, and send only what that one needs to Anthropic's AI.</span></div><input type="checkbox" data-pref="ai_helpers"></label>
     </div>
 
     <div class="card" id="calCard"><h2>Calendars</h2>
@@ -711,7 +754,7 @@
     </div>
 
     <div class="card" id="appCard"><h2>Linked to-do app (optional)</h2>
-      <p class="muted">Your list works on its own. Link Todoist, Notion, Asana or a CalDAV app to see its tasks here too; they stay in that app.</p>
+      <p class="muted">Your list works on its own. Link Todoist, Notion, Asana, monday.com or a CalDAV app to see its tasks here too; they stay in that app.</p>
       <div id="appStatus" class="muted">…</div>
       <div id="appConnect" hidden>
         <div class="row"><select id="provSel" aria-label="To-do app"></select></div>
@@ -920,6 +963,13 @@
   <p id="jxSummary" class="muted" role="status" aria-live="polite"></p>
   <div class="row"><a class="go btnlink" id="jxGo" download aria-disabled="true">Download .zip</a><button class="plain" id="jxClose">Close</button></div>
 </dialog>
+<dialog id="breakDialog" aria-labelledby="breakTitle" aria-describedby="breakTask">
+  <h2 id="breakTitle">Break it down</h2>
+  <p class="btask" id="breakTask"></p>
+  <div id="breakBody"></div>
+  <p id="breakMsg" role="status" aria-live="polite"></p>
+  <div class="row" id="breakActs"></div>
+</dialog>
 </div>
 
 <dialog id="noticeDialog" aria-labelledby="noticeTitle" aria-describedby="noticeBody">
@@ -1035,6 +1085,7 @@
     <div class="row">
       <button class="go" id="tdSave" value="save">Save</button>
       <button class="plain" id="tdFocus" value="focus" type="button">Print just this</button>
+      <button class="plain" id="tdBreak" type="button" data-ai hidden>Break it down</button>
       <button class="plain" id="tdCancel" value="cancel" formnovalidate>Cancel</button>
       <button class="go warn" id="tdDelete" type="button" style="margin-left:auto">Delete</button>
     </div>

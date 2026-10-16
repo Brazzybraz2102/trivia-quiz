@@ -465,15 +465,19 @@ def one_thing(ctx: Context) -> dict | None:
 
 
 def print_focus(ctx: Context, task_id: str | None = None, dry_run: bool | None = None,
-                source: str = "manual") -> dict:
-    """Just one thing: one task, big, with its tiny steps."""
+                source: str = "manual", steps: list[str] | None = None) -> dict:
+    """Just one thing: one task, big, with its tiny steps. `steps`: steps for a linked app's task,
+    printed on this card only (they aren't written to the app or kept)."""
     task = ctx.tasks.get_task(task_id) if task_id else one_thing(ctx)
     if task is None:
         raise ValueError("Nothing due today. Pick a task on My list to focus on.")
     today = ctx.today()
     h24, gentle = bool(ctx.prefs.get("time_24h")), bool(ctx.prefs.get("gentle_words", True))
     tag, color = _first_tag(ctx, task)
-    steps = [s["text"] for s in task.get("steps") or [] if not s.get("done")]
+    if steps is not None:
+        steps = [" ".join(str(x).split())[:200] for x in steps if str(x).strip()][:12]
+    else:
+        steps = [s["text"] for s in task.get("steps") or [] if not s.get("done")]
     minutes = task.get("minutes")
     start_by = ""
     if minutes and len(((task.get("due") or {}).get("date") or "")) >= 16:

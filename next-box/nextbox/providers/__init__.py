@@ -1,8 +1,9 @@
 """Which to-do apps people can link, and how to build a connection.
 
-Three kinds:
-  token  paste a token or password (Todoist, CalDAV, Notion, Asana)
+Four kinds:
+  token  paste a token or password (Todoist, CalDAV, Notion, Asana, monday.com)
   oauth  "Sign in with ..." (Google Tasks, Microsoft To Do, TickTick); needs the owner's one-time setup
+  later  possible, not built yet (ClickUp, Trello): people can ask for it in Feedback
   none   the app has no way in for other apps (Apple Reminders, Things, Any.do, Google Keep)
 """
 from __future__ import annotations
@@ -11,6 +12,7 @@ from . import oauth
 from .asana import Asana
 from .base import ProviderError, TaskProvider
 from .caldav_tasks import CalDAVTasks
+from .monday import Monday
 from .notion import Notion
 from .todoist import Todoist
 
@@ -46,12 +48,28 @@ _TOKEN = [
                 {"name": "workspace", "label": "Workspace", "optional": True,
                  "help": "Leave blank to use your first workspace"}],
      "filter_help": "\"all\", #tag, or words in the task"},
+    {"key": "monday", "name": "monday.com", "status": "ready",
+     "also": "items assigned to you on boards with a person, a date and a status column",
+     "fields": [{"name": "token", "label": "Personal API token", "secret": True,
+                 "help": "monday.com → your picture → Developers → My access tokens → Show, then copy it"},
+                {"name": "board", "label": "Board", "optional": True,
+                 "help": "Leave blank to use your boards that have a person, a date and a status column. Or paste "
+                         "one board's link from your browser."}],
+     "filter_help": "\"all\", #tag, or words in the item"},
 ]
 
 _OAUTH = [
     {"key": "google_tasks", "name": "Google Tasks", "app": "google", "also": "Gmail and Google Calendar's task lists"},
     {"key": "microsoft_todo", "name": "Microsoft To Do", "app": "microsoft", "also": "Outlook tasks"},
     {"key": "ticktick", "name": "TickTick", "app": "ticktick"},
+]
+
+# Possible, not built yet. Settings lists them under "Other apps" with a way to ask for them.
+_LATER = [
+    {"key": "clickup", "name": "ClickUp", "status": "later",
+     "reason": "Not yet. Ask for it in Feedback, so we know to build it next."},
+    {"key": "trello", "name": "Trello", "status": "later",
+     "reason": "Not yet. Ask for it in Feedback, so we know to build it next."},
 ]
 
 _NONE = [
@@ -76,7 +94,7 @@ def providers() -> list[dict]:
         signin.append({**p, "status": "oauth" if on else "needs_setup",
                        **({} if on else {"reason": f"Needs a one-time {oauth.APPS[p['app']]['name']} sign-in setup "
                                                    "by the Next Box owner."})})
-    return _TOKEN + signin + _NONE
+    return _TOKEN + signin + _LATER + _NONE
 
 
 def secret_fields(key: str) -> set[str]:
@@ -93,13 +111,15 @@ def build_provider(key: str, config: dict, secrets: dict) -> TaskProvider:
         return Notion(secrets.get("token", ""), config.get("database", ""))
     if key == "asana":
         return Asana(secrets.get("token", ""), config.get("workspace", ""))
+    if key == "monday":
+        return Monday(secrets.get("token", ""), config.get("board", ""))
     if key in oauth.TASKS:
         return oauth.TASKS[key](secrets)
     raise ProviderError(f"{key} isn't available yet")
 
 
 def display_name(key: str) -> str:
-    for p in _TOKEN + _OAUTH + _NONE:
+    for p in _TOKEN + _OAUTH + _LATER + _NONE:
         if p["key"] == key:
             return p["name"]
     return key
@@ -109,4 +129,4 @@ def display_name(key: str) -> str:
 PROVIDERS = _TOKEN + _NONE
 
 __all__ = ["PROVIDERS", "READY", "ProviderError", "TaskProvider", "build_provider", "secret_fields",
-           "providers", "display_name", "Todoist", "CalDAVTasks", "Notion", "Asana"]
+           "providers", "display_name", "Todoist", "CalDAVTasks", "Notion", "Asana", "Monday"]

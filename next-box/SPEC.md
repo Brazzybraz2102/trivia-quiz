@@ -517,3 +517,44 @@ Everything here is the owner's own journal: owner-scoped, never in events, admin
   an hour, no reset wait: it shows nothing the Journal tab doesn't).
 - `Store.list_printed(until=)` bounds tickets by day, like `list_scans`.
 
+## 27. FD: gentle AI helpers and monday.com
+**AI helpers** (`nextbox/coach.py`): only when the person taps a button, never automatic, 20 an hour per
+person for both together (in memory). Off with the `ai_helpers` pref (default on, Settings → Focus):
+both endpoints then answer 409 and nothing is sent. Without `ANTHROPIC_API_KEY` they answer 503 "Ask your
+Next Box owner to add an AI key." and `GET /auth/me` says `ai_ready: false`, so the app shows that instead
+of a button. Model: `NEXTBOX_COACH_MODEL` (default `claude-opus-5-5`, in `Settings.redacted()` and
+diagnostics). Each call: `client.beta.messages.parse` with a pydantic output format, effort low, the
+server-side refusal fallback (`fallbacks="default"`), 60 s timeout, 2 SDK retries; stable instructions
+(no dates or names) and the person's data in the user message inside `<task>`/`<week>`, marked as data.
+A refusal, an unreadable answer, a rate limit, a timeout, a bad key or an outage each become a short,
+plain message. Events record only that a helper ran (`ai_breakdown {ms, steps}`, `ai_look_back {ms}`) or
+the kind of failure: never what was sent or what came back. `create_app(coach=...)` takes a fake in tests.
+- **Break it down**: `POST /list/{id}/breakdown {hint?}` (My list or linked task, the caller's own) sends
+  only the task's name, minutes, due day, steps and the optional "what makes it hard" (300 characters),
+  never its description, and returns 3-6 tidied steps plus `task {id, content, local, steps, due_date,
+  app}`. Nothing is saved: the sheet (Just one thing, Edit dialog, each slug) shows them ticked and
+  editable. My list: Save sets the steps with `PATCH /list/{id}` (use instead or add after its steps;
+  Undo puts the old ones back; new steps clear the slug count as before); from the Edit dialog they go
+  into its steps field for its own Save. A linked task is never written to: "Add to My list" makes a new
+  task "<task>: steps" with them, or "Print on a card" passes them as `steps` to `POST /print/focus`
+  (linked tasks only; drawn on that card and not kept).
+- **Look back on my week**: `POST /journal/look-back {include_notes}` sends the last 7 days' wins (counts
+  and the names Next Box has), the slugs, and the journal notes (12,000 characters at most) only with
+  `include_notes`, and returns `{week, note {went_well, slug, suggestion}, text}`: 2-3 sentences on what
+  went well, one gentle sentence about a slug (empty when nothing slid) and one tiny suggestion. Coaching
+  inspired by proven techniques, not therapy: no diagnosing, no medical advice. A quiet week answers
+  `empty` without asking the AI. When the notes (or a task name) hold crisis words (`coach.CRISIS`), or the
+  model sets `concern`, the only answer is `support`: a kind nudge to reach out to someone they trust or a
+  local crisis line (988 in the US); crisis words are never sent or logged. "Save to my journal" saves
+  `text` with `POST /journal` (today's page); otherwise nothing is kept.
+
+**monday.com** (`nextbox/providers/monday.py`, a `TaskProvider`): personal API token (+ optional board
+link), GraphQL at `https://api.monday.com/v2` (`API-Version: 2026-01`) through the shared `Api` client. On
+each board (the chosen one, or the 10 most recently used that qualify) it finds a person column, a date
+column and a status column with a Done label (`done_colors`, else a label called Done/Complete/Finished),
+plus Priority and Tags when present. Lists items assigned to you (`person-<id>` rule, checked again on what
+comes back), not Done, up to 500 per board; dates with a time are UTC on monday.com and shown local. Done
+sets the status to the Done label, moving changes the date (keeping its time), delete (after the usual
+confirm) archives the item, new tasks go to the first board assigned to you. Items are never stored.
+ClickUp and Trello are listed under Settings → Linked app → Other apps as "not yet" (status `later`) with
+"Ask for it", which opens Feedback filled in as an idea.

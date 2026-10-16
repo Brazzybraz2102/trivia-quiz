@@ -157,6 +157,7 @@ function clearPerson() {
   $("#journal").classList.remove("searching"); jData.clear(); lines = { items: [], opener: null };
   listData = { tasks: [], linked: [], tags: [] }; picked = new Set(); skipped = new Set(); guide = null; showingDone = false;
   conn = null; printOpts = null; update = null; editing = null; suRows = []; suPicked = new Set(); suOpen = null;
+  $("#lookOut").innerHTML = ""; $("#lookNotes").checked = false; lookText = ""; lookPrivacy();  // the AI helpers
   markTab("mylist");
   resetSignIn();
 }
@@ -490,7 +491,9 @@ async function loadConnection(check = false) {  // check: also ask the app wheth
     $("#provSel").innerHTML = ready.map((p) => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join("");
     $("#provSel").onchange = renderProviderFields;
     $("#provOther").innerHTML = (ready.filter((p) => p.also).map((p) => `<p><b>${esc(p.name)}</b>: ${esc(p.also)}.</p>`).join("")) +
-      providers.filter((p) => p.status !== "ready" && p.status !== "oauth").map((p) => `<p><b>${esc(p.name)}</b>: ${p.status === "needs_setup" ? "not switched on yet." : "not possible."} ${esc(p.reason)}</p>`).join("");
+      providers.filter((p) => p.status !== "ready" && p.status !== "oauth").map((p) => p.status === "later"
+        ? `<p><b>${esc(p.name)}</b>: not yet. <button class="linkish" data-feedback data-ask-app="${esc(p.name)}">Ask for ${esc(p.name)}</button></p>`
+        : `<p><b>${esc(p.name)}</b>: ${p.status === "needs_setup" ? "not switched on yet." : "not possible."} ${esc(p.reason)}</p>`).join("");
     renderProviderFields();
   }
 }
@@ -982,6 +985,7 @@ function loadPrefs(prefs) {
     if (el.type === "checkbox") el.checked = !!v; else el.value = v;
   });
   confText(prefs.confidence);
+  applyAi(prefs.ai_helpers !== false);
   $("#dry").checked = true;
   applyDry();
   setAppNames();
@@ -2317,7 +2321,7 @@ async function install() {
 function appNames() {  // only the apps this Next Box offers right now
   const names = providers.filter((p) => p.status === "ready" || p.status === "oauth")
     .sort((a, b) => (a.key === "caldav") - (b.key === "caldav")).map((p) => (p.key === "caldav" ? "a CalDAV app" : p.name));
-  if (!names.length) return "Todoist, Notion, Asana or a CalDAV app";
+  if (!names.length) return "Todoist, Notion, Asana, monday.com or a CalDAV app";
   return names.length === 1 ? names[0] : names.slice(0, -1).join(", ") + " or " + names[names.length - 1];
 }
 function goto(tab, selector) {
@@ -2596,6 +2600,7 @@ async function loadSlugs() {
     $("#slugList").innerHTML = r.slugs.map((s) => `<div class="slug" data-task="${esc(s.id)}" data-content="${esc(s.content)}">
         <div><b>${esc(s.content)}</b><div class="muted">${s.moves ? `moved ${s.moves}×` : ""}${s.moves && s.waiting_days ? " · " : ""}${s.waiting_days ? `waiting ${s.waiting_days}d` : ""}</div></div>
         <div class="row" style="margin:0">${s.id.startsWith("nb:") ? `<button class="plain small" data-slug-steps>Make it smaller</button>` : ""}
+          <button class="plain small" data-slug-break data-ai${aiOn() ? "" : " hidden"}>Break it down</button>
           <button class="plain small" data-slug-go>Let it go</button><button class="linkish small" data-slug-not>Not a slug</button>
           <button class="plain small" data-slug-focus>Print just this</button></div></div>`).join("");
     $$("#slugList [data-slug-focus]").forEach((b) => b.onclick = async () => {
@@ -3002,8 +3007,349 @@ $("#jxClose").onclick = () => $("#jxDialog").close();
 closeOnBackdrop($("#jxDialog"));
 
 
+// ---------------------------------------------------------------- AI helpers (nextbox/coach.py)
+// Only ever when the person taps. "Break it down" suggests tiny first steps to tick and edit before
+// anything is saved. A linked app's task is never changed: its steps can go on a new My list task or
+// be printed on a Just one thing card. "Look back on my week" writes a short note that's kept only if
+// they save it to their journal. Settings → Focus → AI helpers hides both.
+const aiOn = () => me?.prefs?.ai_helpers !== false;
+function applyAi(on = aiOn()) {
+  $$("[data-ai]").forEach((el) => { el.hidden = !on; });
+  const ready = !!me?.ai_ready;
+  $("#lookNoKey").hidden = ready; $("#lookAsk").hidden = !ready;
+}  // loadPrefs calls it, so it follows the setting once it's saved (or put back if saving failed)
+
+const BREAK_SENT = "This sends the task's name and steps to Anthropic's AI. Nothing is kept unless you save the steps.";
+let brk = null;  // the sheet that's open: { id, content, from: edit|now|slug, opener, task, steps, replace, hint, ctl, changed }
+
+// The Edit dialog's tiny steps: the one place this sheet reads or changes that dialog.
+function editStepsNow() { return $("#tdSteps").value.split("\n").map((x) => x.trim()).filter(Boolean); }
+function editStepsSet(texts, replace) {
+  $("#tdSteps").value = (replace ? texts : [...editStepsNow(), ...texts]).join("\n");
+  $("#tdSteps").dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function openBreak(id, content, from, opener) {
+  if (!id) return;
+  brk?.ctl?.abort();
+  brk = { id, content, from, opener, steps: [], replace: true, hint: "", changed: false };
+  $("#breakTask").textContent = content || "";
+  if (!$("#breakDialog").open) $("#breakDialog").showModal();
+  if (!me?.ai_ready) return drawBreak("nokey");
+  askBreak();
+}
+
+async function askBreak(hint = "") {
+  const b = brk;
+  b.ctl?.abort();
+  b.ctl = new AbortController();
+  b.hint = hint;
+  drawBreak("loading");
+  try {
+    const r = await api(`/list/${encodeURIComponent(b.id)}/breakdown`, { method: "POST", json: { hint }, signal: b.ctl.signal });
+    if (brk !== b) return;
+    b.task = r.task;
+    $("#breakTask").textContent = r.task.content;
+    if (r.support) return drawBreak("support", r.support);
+    b.steps = r.steps.map((text) => ({ text, keep: true }));
+    drawBreak("review");
+  } catch (e) {
+    if (brk !== b || e.name === "AbortError") return;
+    if (e.message === TASK_GONE) b.changed = true;  // the list behind it is out of date
+    drawBreak("error", errText(e));
+  }
+}
+
+const keptSteps = () => (brk?.steps || []).filter((s) => s.keep && s.text.trim()).map((s) => s.text.trim());
+function hadSteps() {
+  const b = brk;
+  return b.from === "edit" ? editStepsNow().length : (b.task?.steps || []).length;
+}
+function breakMsg(text = "", cls = "") { $("#breakMsg").textContent = text; $("#breakMsg").className = cls; }
+
+function reviewHtml() {
+  const b = brk, had = hadSteps(), them = had === 1 ? "it" : "them";
+  const rows = b.steps.map((s, i) => `<li class="${s.keep ? "" : "off"}" data-i="${i}"><span class="bnum" aria-hidden="true">${i + 1}.</span>
+      <input type="checkbox" ${s.keep ? "checked" : ""} aria-label="Keep step ${i + 1}">
+      <textarea rows="1" maxlength="200" aria-label="Step ${i + 1}" placeholder="A tiny step">${esc(s.text)}</textarea></li>`).join("");
+  const how = had && b.task.local ? `<fieldset class="bhow"><legend class="muted">It has ${plural(had, "step")} now.</legend>
+      <label><input type="radio" name="bhow" value="replace"${b.replace ? " checked" : ""}> Use these instead</label>
+      <label><input type="radio" name="bhow" value="add"${b.replace ? "" : " checked"}> Add these after ${them}</label></fieldset>` : "";
+  const linked = b.task.local ? "" : `<p class="muted">These stay in Next Box. ${esc(b.task.app || "Your linked app")}'s task isn't changed.</p>`;
+  return `<p class="muted">Tick the ones to keep, and change any words you like.</p>
+    <ol class="bsteps">${rows}</ol>
+    <button class="linkish" data-b="add">+ Add a step</button>
+    ${how}${linked}
+    <details class="bhint"${b.hint ? " open" : ""}><summary>Not quite right? Ask again</summary>
+      <div class="field"><label for="bHint">What makes it hard? (optional)</label>
+        <input type="text" id="bHint" maxlength="300" value="${esc(b.hint)}" placeholder="e.g. I don't know where the form is"></div>
+      <div class="row"><button class="plain small" data-b="again">Ask again</button></div></details>`;
+}
+function reviewActs() {
+  const b = brk, n = keptSteps().length, off = n ? "" : " disabled";
+  if (b.from === "edit") return `<button class="go" data-b="use"${off}>Use ${n ? plural(n, "step") : "steps"}</button>`;
+  if (b.task.local) return `<button class="go" data-b="save"${off}>Save ${n ? plural(n, "step") : "steps"}</button>`;
+  return `<button class="go" data-b="copy"${off}>Add to My list</button><button class="plain" data-b="print"${off}>Print on a card</button>`;
+}
+function drawSteps() {  // each step's box is as tall as its words, so nothing is cut off
+  $("#breakBody").innerHTML = reviewHtml();
+  $$("#breakBody .bsteps textarea").forEach(fitText);
+}
+function countBreak() {
+  const n = keptSteps().length, go = $("#breakActs .go");
+  $$("#breakActs [data-b=use], #breakActs [data-b=save], #breakActs [data-b=copy], #breakActs [data-b=print]").forEach((x) => { x.disabled = !n; });
+  if (go && ["use", "save"].includes(go.dataset.b)) go.textContent = `${go.dataset.b === "use" ? "Use" : "Save"} ${n ? plural(n, "step") : "steps"}`;
+}
+
+function drawBreak(state, info = "") {
+  const b = brk, body = $("#breakBody"), acts = $("#breakActs");
+  b.state = state;
+  breakMsg();
+  const close = (label = "Close", cls = "plain") => `<button class="${cls}" data-b="close">${label}</button>`;
+  if (state === "nokey") {
+    body.innerHTML = `<p>Break it down uses an AI helper to suggest tiny first steps.</p><p class="muted">Ask your Next Box owner to add an AI key.</p>`;
+    acts.innerHTML = close("OK", "go");
+  } else if (state === "loading") {
+    body.innerHTML = `<p role="status"><span class="spin" aria-hidden="true"></span>Thinking of tiny first steps…</p><p class="muted">${BREAK_SENT}</p>`;
+    acts.innerHTML = close("Cancel");
+  } else if (state === "error") {
+    body.innerHTML = `<p class="err" role="alert">${esc(info)}</p>`;
+    acts.innerHTML = `<button class="go" data-b="retry">Try again</button>${close()}`;
+  } else if (state === "support") {
+    body.innerHTML = `<div class="bnote care" role="note"><p>${esc(info)}</p></div>`;
+    acts.innerHTML = close("OK", "go");
+  } else if (state === "review") {
+    drawSteps();
+    acts.innerHTML = reviewActs() + close();
+  } else if (state === "saved") {
+    const first = (info.steps || []).find((s) => !s.done);
+    body.innerHTML = `<div class="bnote" role="status"><p><b>Saved ✓</b> It has ${plural((info.steps || []).length, "tiny step")} now.</p>
+      ${first ? `<p>Start with: ${esc(first.text)}</p>` : ""}</div>${info.cut ? `<p class="muted">A task holds 12 steps, so the last ones were left off.</p>` : ""}`;
+    acts.innerHTML = `${close("Done", "go")}<button class="plain" data-b="print">Print it big</button><button class="plain" data-b="undo">Undo</button>`;
+  } else if (state === "copied") {
+    body.innerHTML = `<div class="bnote" role="status"><p><b>Added to My list ✓</b> “${esc(info.content)}”, with ${plural((info.steps || []).length, "tiny step")}.</p></div>`;
+    acts.innerHTML = `${close("Done", "go")}<button class="plain" data-b="mylist">Open My list</button>`;
+  } else if (state === "printed") {
+    body.innerHTML = `<h3 tabindex="-1">${esc(resultHeading(info))}</h3>${ticketResult(info)}`;
+    acts.innerHTML = close("Done", "go");
+  }
+  const focus = state === "review" ? body.querySelector("input[type=checkbox]") : state === "printed" ? body.querySelector("h3") : acts.querySelector("button");
+  focus?.focus();
+}
+
+// Every request from the sheet: its buttons wait, and a problem is said inside the sheet.
+async function breakDo(button, label, fn) {
+  const b = brk, buttons = $$("#breakActs button, #breakBody button");
+  buttons.forEach((x) => { x.disabled = true; });
+  const was = button.textContent;
+  button.textContent = label; button.setAttribute("aria-busy", "true");
+  breakMsg();
+  try { await fn(b); }
+  catch (e) {
+    if (brk !== b) return;
+    buttons.forEach((x) => { if (x.isConnected) x.disabled = false; });
+    button.textContent = was; button.removeAttribute("aria-busy");
+    if (e.message === TASK_GONE) b.changed = true;
+    breakMsg(errText(e), "err");
+    if (b.state === "review") countBreak();
+  }
+}
+
+async function saveBreak(button) {
+  await breakDo(button, "Saving…", async (b) => {
+    const old = (b.task.steps || []).map((s) => ({ text: s.text, done: !!s.done }));
+    const fresh = keptSteps().map((text) => ({ text, done: false }));
+    const all = b.replace || !old.length ? fresh : [...old, ...fresh];
+    const r = await api(`/list/${encodeURIComponent(b.task.id)}`, { method: "PATCH", json: { steps: all.slice(0, 12) } });
+    b.changed = true;
+    if (brk !== b) return loadList();
+    b.undo = old;
+    drawBreak("saved", { steps: r.steps, cut: all.length > 12 });
+  });
+}
+async function undoBreak(button) {
+  await breakDo(button, "Undoing…", async (b) => {
+    const r = await api(`/list/${encodeURIComponent(b.task.id)}`, { method: "PATCH", json: { steps: b.undo || [] } });
+    if (brk !== b) return loadList();
+    b.task.steps = r.steps;
+    drawBreak("review");
+    breakMsg("Undone. Its steps are back the way they were.", "muted");
+  });
+}
+async function copyBreak(button) {
+  await breakDo(button, "Adding…", async (b) => {
+    const content = `${b.task.content.slice(0, 492)}: steps`;
+    const steps = keptSteps().map((text) => ({ text, done: false }));
+    const r = await api("/list", { method: "POST", json: { content, steps, due_date: b.task.due_date || null } });
+    b.changed = true;
+    if (brk !== b) return loadList();
+    drawBreak("copied", r);
+  });
+}
+async function printBreak(button) {
+  applyDry();  // honours paused printing, preview only and "no printer yet"
+  const dry_run = $("#dry").checked;
+  if (!dry_run && !confirm("Send this to the printer?")) return;
+  await breakDo(button, dry_run ? "Making preview…" : "Printing…", async (b) => {
+    const body = { task_id: b.task.id, dry_run };
+    if (!b.task.local) body.steps = keptSteps();  // on the card only: never sent to the linked app
+    const r = await api("/print/focus", { method: "POST", json: body });
+    if (brk === b) drawBreak("printed", r);
+    loadGuide();
+  });
+}
+
+$("#breakDialog").addEventListener("click", (e) => {
+  const button = e.target.closest("[data-b]"), b = brk;
+  if (!button || !b) return;
+  const what = button.dataset.b;
+  if (what === "close") $("#breakDialog").close();
+  else if (what === "retry") askBreak(b.hint);
+  else if (what === "again") askBreak($("#bHint").value.trim());
+  else if (what === "add") {
+    b.steps.push({ text: "", keep: true });
+    drawSteps(); countBreak();
+    $("#breakBody .bsteps li:last-child textarea")?.focus();
+  }
+  else if (what === "save") saveBreak(button);
+  else if (what === "undo") undoBreak(button);
+  else if (what === "copy") copyBreak(button);
+  else if (what === "print") printBreak(button);
+  else if (what === "mylist") { $("#breakDialog").close(); goto("mylist"); }
+  else if (what === "use") {
+    editStepsSet(keptSteps(), b.replace || !hadSteps());
+    $("#breakDialog").close();
+    toast("Added to the steps. Tap Save to keep them.", 3500);
+  }
+});
+$("#breakDialog").addEventListener("change", (e) => {
+  const li = e.target.closest(".bsteps li"), b = brk;
+  if (!b) return;
+  if (e.target.name === "bhow") b.replace = e.target.value === "replace";
+  if (li && e.target.type === "checkbox") {
+    b.steps[li.dataset.i].keep = e.target.checked;
+    li.classList.toggle("off", !e.target.checked);
+    countBreak();
+  }
+});
+$("#breakDialog").addEventListener("input", (e) => {
+  const li = e.target.closest(".bsteps li");
+  if (!li || !brk || e.target.tagName !== "TEXTAREA") return;
+  brk.steps[li.dataset.i].text = e.target.value.replace(/\s*\n\s*/g, " ");
+  fitText(e.target);
+  countBreak();
+});
+$("#breakDialog").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || !(e.target.id === "bHint" || e.target.tagName === "TEXTAREA")) return;
+  e.preventDefault();  // a step is one line: Enter goes to the next one
+  if (e.target.id === "bHint") return askBreak(e.target.value.trim());
+  const next = e.target.closest("li")?.nextElementSibling?.querySelector("textarea");
+  if (next) next.focus(); else $("#breakBody [data-b=add]")?.click();  // Enter on the last step adds one
+});
+$("#breakDialog").addEventListener("close", () => {
+  const b = brk;
+  brk = null;
+  if (!b) return;
+  b.ctl?.abort();
+  $("#breakBody").innerHTML = ""; $("#breakActs").innerHTML = ""; breakMsg();
+  if (b.changed) { loadList(); if (b.from === "slug") loadSlugs(); }
+  let back = b.opener?.isConnected && !b.opener.hidden && !b.opener.disabled ? b.opener : null;
+  if (!back) { back = $("#slugCard:not([hidden]) h2") || $("section.on h2"); if (back) back.tabIndex = -1; }
+  back?.focus();
+});
+
+$("#nowBreak").onclick = () => {
+  const id = $("#nowCard").dataset.id;
+  if (id) openBreak(id, $("#nowText").textContent, "now", $("#nowBreak"));
+};
+$("#tdBreak").onclick = () => { if (editing) openBreak(editing.id, editing.content, "edit", $("#tdBreak")); };
+$("#slugList").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-slug-break]"), s = b?.closest("[data-task]");
+  if (s) openBreak(s.dataset.task, s.dataset.content, "slug", b);
+});
+
+// Look back on my week: only when asked, and the journal notes go only when ticked.
+let lookN = 0, lookCtl = null, lookText = "";
+function lookPrivacy() {
+  $("#lookPrivacy").textContent = `This sends your week's task names${$("#lookNotes").checked ? " and your journal notes" : ""} `
+    + "to Anthropic's AI to write the note. Nothing is kept by Next Box unless you save it.";
+}
+$("#lookNotes").addEventListener("change", lookPrivacy);
+function lookDone() { $("#lookGo").disabled = false; $("#lookGo").removeAttribute("aria-busy"); }
+$("#lookGo").onclick = async () => {
+  const n = ++lookN, out = $("#lookOut"), go = $("#lookGo");
+  lookCtl?.abort();
+  lookCtl = new AbortController();
+  go.disabled = true; go.setAttribute("aria-busy", "true");
+  out.innerHTML = `<p role="status"><span class="spin" aria-hidden="true"></span>Looking back on your week…</p>
+    <button class="plain small" data-look="cancel">Cancel</button>`;
+  out.querySelector("button").focus();
+  try {
+    const r = await api("/journal/look-back", { method: "POST", json: { include_notes: $("#lookNotes").checked }, signal: lookCtl.signal });
+    if (n !== lookN) return;
+    lookDone();
+    drawLook(r);
+  } catch (e) {
+    if (n !== lookN || e.name === "AbortError") return;
+    lookDone();
+    out.innerHTML = `<p class="err" role="alert">${esc(errText(e))}</p>`;
+    go.focus();
+  }
+};
+const monthDay = (iso) => new Date(iso + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+function drawLook(r) {
+  const out = $("#lookOut");
+  lookText = "";
+  if (r.empty) {
+    out.innerHTML = `<p class="muted" role="status">Nothing from this week to look back on yet. ${r.has_notes
+      ? "Tick “Include my journal notes” to use what you wrote, or tick off one small thing first."
+      : "Tick off one small thing or write a note, then come back."}</p>`;
+    return $("#lookGo").focus();
+  }
+  if (r.concern) {
+    out.innerHTML = `<div class="coachnote care" role="note"><h3 tabindex="-1">Before anything else</h3><p>${esc(r.support)}</p></div>
+      <div class="row"><button class="plain" data-look="hide">Close</button></div>`;
+  } else {
+    const n = r.note;
+    lookText = r.text;
+    out.innerHTML = `<div class="coachnote"><h3 tabindex="-1">Your week, ${esc(monthDay(r.week.first))} to ${esc(monthDay(r.week.last))}</h3>
+        <p>${esc(n.went_well)}</p>${n.slug ? `<p>${esc(n.slug)}</p>` : ""}
+        ${n.suggestion ? `<p><b>One tiny thing for next week:</b> ${esc(n.suggestion)}</p>` : ""}</div>
+      <div class="row"><button class="go" data-look="save">Save to my journal</button><button class="plain" data-look="hide">Close</button>
+        <span data-look-msg role="status"></span></div>`;
+  }
+  out.querySelector("h3").focus();
+}
+$("#lookOut").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-look]");
+  if (!b) return;
+  if (b.dataset.look === "cancel") { lookN++; lookCtl?.abort(); $("#lookOut").innerHTML = ""; lookDone(); $("#lookGo").focus(); }
+  else if (b.dataset.look === "hide") { $("#lookOut").innerHTML = ""; lookText = ""; $("#lookGo").focus(); }
+  else if (b.dataset.look === "save" && lookText) {
+    const msg = $("#lookOut [data-look-msg]");
+    b.disabled = true; msg.className = "muted"; msg.textContent = "Saving…";
+    try {
+      await api("/journal", { method: "POST", json: { notes: lookText } });
+      lookText = "";
+      b.remove(); msg.className = "ok"; msg.textContent = "Saved to today's journal ✓";
+      $("#lookOut [data-look=hide]")?.focus();
+      loadJournal();
+    } catch (err) { b.disabled = false; msg.className = "err"; msg.textContent = errText(err); }
+  }
+});
+
+// "Ask for ClickUp" (Settings → Linked app → Other apps): the feedback form, filled in as an idea.
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-ask-app]");
+  if (!b) return;
+  $(".seg [data-mode=guided]").click();
+  pick("#fbType", $("#fbType [data-v=idea]"));
+  $("#fbTrying").value = `Link ${b.dataset.askApp} to Next Box`;
+});
+
+
 // ---------------------------------------------------------------- print on paper (any printer)
-const PAPERS = [["letter", "Letter"], ["a4", "A4"], ["a5", "A5"], ["half_letter", "Half letter"]];
+const PAPERS =[["letter", "Letter"], ["a4", "A4"], ["a5", "A5"], ["half_letter", "Half letter"]];
 function paperButton(id) {
   const size = me?.prefs?.paper_size || "letter";
   return `<div class="row paperrow"><a class="go small" style="text-decoration:none" data-paper-link href="/printed/${encodeURIComponent(id)}/pdf?paper=${size}" target="_blank" rel="noopener">Print on paper</a>
