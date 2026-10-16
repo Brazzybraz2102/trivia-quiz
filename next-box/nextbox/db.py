@@ -168,6 +168,8 @@ tasks = Table(
     Column("minutes", Integer, nullable=True),                       # how long it'll take (a guess)
     Column("created", BigInteger, nullable=False),
     Column("done_at", BigInteger, nullable=True),
+    # Added after 0.10.3 (filled in by _add_missing_columns on older databases):
+    Column("repeat_day", Integer, nullable=True),                    # a monthly repeat's day of the month (31 stays 31)
     Index("ix_tasks_owner_open", "owner", "done_at"),
 )
 

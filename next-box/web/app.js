@@ -10,7 +10,7 @@ async function api(path, opts = {}) {
   const r = await fetch(path, { ...opts, headers, credentials: "same-origin" });
   const body = await r.json().catch(() => ({}));
   if (r.status === 401 && !path.startsWith("/auth/")) { showLogin("Your session ended. Sign in again."); }
-  if (!r.ok) throw Object.assign(new Error(body.detail || `${r.status}`), { status: r.status });
+  if (!r.ok) throw Object.assign(new Error(body.detail || `${r.status}`), { status: r.status, body });
   return body;
 }
 const OFFLINE = "Can't reach Next Box. Check your connection.";
@@ -81,6 +81,7 @@ async function signOut(box) {
   if (!navigator.onLine) return say(failed);
   try { await api("/auth/logout", { method: "POST" }); }
   catch { return say(failed); }  // still signed in: don't pretend otherwise
+  forgetDraft();  // an unsent Brain dump stays on this device only while you're signed in
   startOver("Signed out.");
 }
 // Belt and braces for the reload above: wipe what's on screen right away.
@@ -441,6 +442,7 @@ function setAppNames() {
   const linked = conn?.connected ? conn.name : "";
   $$(".newTasksTo").forEach((el) => el.textContent = linked && me?.prefs?.new_tasks_to === "linked" ? linked : "my list");
   $$(".todaySources").forEach((el) => el.textContent = linked ? `my list and ${linked}` : "my list");
+  $$(".maxRows").forEach((el) => el.textContent = me?.prefs?.max_rows || 5);
 }
 
 function renderProviderFields() {
@@ -909,6 +911,7 @@ $$("[data-pref]").forEach((el) => el.onchange = async () => {
     if (typed) prefErr(el, "");
     loadPrefs(prefs);
     if (k === "always_dry_run") refreshStatus();  // the header and the Preview box follow it
+    if (k === "time_24h" || k === "gentle_words") { renderList(); loadToday(); }  // times and words on My list follow it
     toast("Saved");
   } catch (e) {
     if (typed) prefErr(el, errText(e));
@@ -1282,95 +1285,195 @@ let skipped = new Set();  // "Not now" on this device, until the page reloads
 const tagColor = (name) => (listData.tags.find((t) => t.name === name) || {}).color || "white";
 const tagChip = (name) => { const c = tagColor(name); return `<span class="tag tc-${esc(c)}${c === "red" ? " solid" : ""}">${esc(name)}</span>`; };
 const today = () => new Date().toLocaleDateString("en-CA");  // YYYY-MM-DD, local
+const dayAfter = (iso, n = 1) => { const d = new Date(iso + "T12:00"); d.setDate(d.getDate() + n); return d.toLocaleDateString("en-CA"); };
+// "15:30" as Settings → 24-hour times says: 15:30, or 3:30p like the tickets.
+const fmtClock = (hhmm) => { const h = +hhmm.slice(0, 2); return me?.prefs?.time_24h ? hhmm : `${h % 12 || 12}:${hhmm.slice(3, 5)}${h < 12 ? "a" : "p"}`; };
+const MAX_PICK = 30;  // stickers at once (the server says the same)
+const shortName = (t) => (t.content.length > 60 ? t.content.slice(0, 57) + "…" : t.content);
 
 function whenText(t) {
   if (!t.due) return "";
   const d = t.due.date.slice(0, 10), now = today();
-  const time = t.due.date.length > 10 ? " " + t.due.date.slice(11, 16) : "";
+  const time = t.due.date.length > 10 ? " " + fmtClock(t.due.date.slice(11, 16)) : "";
   if (d < now) {
     const days = Math.round((new Date(now) - new Date(d)) / 86400000);
     return `${me?.prefs?.gentle_words === false ? "overdue" : "waiting"} ${days}d`;
   }
   if (d === now) return "today" + time;
+  if (d === dayAfter(now)) return "tomorrow" + time;  // as stickers and the focus card say it
   return new Date(d + "T12:00").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) + time;
+}
+
+function doneText(ts) {
+  const d = new Date(ts * 1000), day = d.toLocaleDateString("en-CA");
+  if (day === today()) return "done today";
+  if (day === dayAfter(today(), -1)) return "done yesterday";
+  return "done " + d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
 }
 
 function taskRow(t) {
   const steps = t.steps || [];
   const doneSteps = steps.filter((s) => s.done).length;
-  const meta = [whenText(t), t.repeat ? "↻ " + t.repeat : "", t.minutes ? `~${t.minutes}m` : "",
-                steps.length ? `steps ${doneSteps}/${steps.length}` : "", t.source && t.source !== "nextbox" ? "in " + (listData.linked_name || t.source) : ""]
+  const bits = (t.done ? [t.done_at ? doneText(t.done_at) : "done"] :
+    [whenText(t), t.repeat ? "↻ " + t.repeat : "", t.minutes ? `~${t.minutes}m` : "",
+     steps.length ? `steps ${doneSteps}/${steps.length}` : "", t.source && t.source !== "nextbox" ? "in " + (listData.linked_name || t.source) : ""])
     .filter(Boolean).map(esc).join(" · ");
+  const meta = bits + (t.description ? `${bits ? " " : ""}<span aria-hidden="true" title="Has notes">📝</span><span class="sr-only">has notes</span>` : "");
   const local = String(t.id).startsWith("nb:");
-  return `<div class="task" data-id="${esc(t.id)}">
-    ${t.done ? "" : `<input type="checkbox" class="pick" aria-label="Pick for printing" ${picked.has(t.id) ? "checked" : ""}>`}
+  const name = esc(shortName(t));
+  const full = !picked.has(t.id) && picked.size >= MAX_PICK;
+  return `<div class="task${t.done ? " done-row" : ""}" data-id="${esc(t.id)}">
+    ${t.done ? "" : `<label class="pickbox"><input type="checkbox" class="pick" aria-label="Pick “${name}” for printing" ${picked.has(t.id) ? "checked" : ""}${full ? " disabled" : ""}></label>`}
     <div class="body">
-      <div class="text${t.priority >= 3 ? " urgent" : ""}">${(t.labels || []).map(tagChip).join("")}${t.priority >= 3 ? "! " : ""}${esc(t.content)}</div>
+      <div class="text${t.priority >= 3 ? " urgent" : ""}">${(t.labels || []).map(tagChip).join("")}${t.priority >= 4 ? "!! " : t.priority >= 3 ? "! " : ""}${esc(t.content)}</div>
       ${meta ? `<div class="meta">${meta}</div>` : ""}
     </div>
     <div class="acts">
-      ${t.done ? (local ? `<button class="plain small" data-reopen>Undo</button>` : "") :
-        `${local ? `<button class="plain small" data-edit aria-label="Edit">Edit</button>` : ""}<button class="done" data-done aria-label="Done">✓</button>`}
+      ${t.done ? (local ? `<button class="plain small" data-reopen aria-label="Undo: “${name}” isn't done">Undo</button>` : "") :
+        `${local ? `<button class="plain small" data-edit aria-label="Edit “${name}”">Edit</button>` : ""}<button class="done" data-done aria-label="Mark “${name}” done">✓</button>`}
     </div></div>`;
 }
 
+// Where keyboard focus was in the list, so it comes back to the same place after the list is redrawn
+// (or to the next task's ✓ when that task is gone, or else the My list heading).
+let listFocus = null;
+function focusSpot(el) {
+  const row = el?.closest?.("#listBody .task");
+  if (!row) return null;
+  const kind = ["[data-done]", "[data-edit]", "[data-reopen]", ".pick"].find((s) => el.matches(s)) || "[data-done]";
+  const after = [];
+  for (let r = row.nextElementSibling; r; r = r.nextElementSibling) if (r.dataset.id) after.push(r.dataset.id);
+  return { id: row.dataset.id, kind, after };
+}
+function restoreFocus(spot) {
+  if (!spot) return;
+  const rowOf = (id) => $$("#listBody .task").find((r) => r.dataset.id === id);
+  const same = rowOf(spot.id)?.querySelector(spot.kind);
+  if (same) return same.focus({ preventScroll: true });
+  for (const id of spot.after) {
+    const el = rowOf(id)?.querySelector(spot.kind === ".pick" ? ".pick" : "[data-done], [data-reopen]");
+    if (el) return el.focus({ preventScroll: true });
+  }
+  $("#listTitle").focus({ preventScroll: true });
+}
+
 function renderList() {
+  const spot = listFocus || focusSpot(document.activeElement);
+  listFocus = null;
   const now = today();
-  const open = listData.tasks.filter((t) => !t.done);
+  const open = listData.tasks.filter((t) => !t.done);  // the server sends them in ticket order
+  const done = listData.tasks.filter((t) => t.done);
   const groups = [
-    ["Today", open.filter((t) => t.due && t.due.date.slice(0, 10) <= now)],
+    ["Today", open.filter((t) => t.due && t.due.date.slice(0, 10) <= now), "today"],
     ["Coming up", open.filter((t) => t.due && t.due.date.slice(0, 10) > now)],
     ["Someday", open.filter((t) => !t.due)],
     [`From ${listData.linked_name || "linked app"} (today)`, listData.linked || []],
-    ["Done", showingDone ? listData.tasks.filter((t) => t.done) : []],
+    ["Done", showingDone ? done : [], "done"],
   ];
-  const html = groups.filter(([, ts]) => ts.length)
-    .map(([name, ts]) => `<div class="group">${esc(name)} (${ts.length})</div>${ts.map(taskRow).join("")}`).join("");
+  const html = groups.filter(([, ts, key]) => ts.length || (key === "done" && showingDone))
+    .map(([name, ts, key]) => `<div class="group">${esc(name)} (${ts.length})${key === "today" && ts.length > 1
+        ? ` <button class="linkish" data-pickall>Pick all</button>` : ""}</div>`
+      + (ts.length ? ts.map(taskRow).join("") : `<p class="muted">Nothing finished yet. It'll show here when you tick something.</p>`)).join("");
   $("#listBody").innerHTML = html || `<p class="muted">Your list is empty. Use the brain dump above to get things out of your head.</p>`;
   $("#listBody").classList.toggle("muted", !html);
-  $("#pickCount").textContent = picked.size ? `${picked.size} picked` : "Nothing picked: prints today's tasks";
+  updatePicks();
   renderNow();
+  restoreFocus(spot);
+}
+
+// The print bar: how many are picked, Clear, and the 30-at-once limit shown before pressing.
+function updatePicks() {
+  const n = picked.size;
+  $("#pickCount").textContent = !n ? "Nothing picked: stickers for today's tasks" : n >= MAX_PICK ? `${n} picked (the most at once)` : `${n} picked`;
+  $("#pickClear").hidden = !n;
+  $$("#listBody .pick").forEach((b) => { b.disabled = !b.checked && n >= MAX_PICK; });
+  $(".printbar").classList.toggle("sticky", n > 0);  // it follows you down the list only while something is picked
 }
 
 function renderNow() {
   const open = [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])];
-  let t = listData.one_thing && !skipped.has(listData.one_thing.id) ? listData.one_thing : null;
-  if (!t) t = open.find((x) => x.due && x.due.date.slice(0, 10) <= today() && !skipped.has(x.id)) || null;
+  const dueNow = open.filter((x) => x.due && x.due.date.slice(0, 10) <= today());
+  const one = listData.one_thing;
+  let t = one && !skipped.has(one.id) && open.some((x) => x.id === one.id) ? one : null;
+  if (!t) t = dueNow.find((x) => !skipped.has(x.id)) || null;  // next in ticket order
+  const setAside = dueNow.filter((x) => skipped.has(x.id)).length;
+  const brandNew = !listData.tasks.length && !(listData.linked || []).length;
   $("#nowCard").dataset.id = t ? t.id : "";
-  $("#nowText").textContent = t ? t.content : (open.length ? "Nothing else is due today. Pick anything, or rest." : "Nothing due. Nice.");
+  const text = $("#nowText");
+  text.textContent = t ? t.content
+    : brandNew ? "Your one thing will show here."
+    : setAside ? `You've set aside ${setAside} for now.`
+    : listData.done_today ? "Nothing else is due today. Pick anything, or rest."
+    : "Nothing due today.";
+  text.classList.toggle("long", !!t && t.content.length > 120);
+  text.classList.add("clamp");
   const step = t && (t.steps || []).find((s) => !s.done);
-  $("#nowStep").textContent = step ? "Next tiny step: " + step.text : (t ? [whenText(t), t.minutes ? `about ${t.minutes} min` : ""].filter(Boolean).join(" · ") : "");
-  for (const b of ["#nowDone", "#nowPrint", "#nowSkip"]) $(b).disabled = !t;
+  $("#nowStep").textContent = step ? "Next tiny step: " + step.text
+    : t ? [whenText(t), t.minutes ? `about ${t.minutes} min` : ""].filter(Boolean).join(" · ")
+    : brandNew ? "Start by emptying your head into Brain dump."
+    : !setAside && open.length ? "Pick anything from your list, or rest." : "";
+  for (const b of ["#nowDone", "#nowPrint", "#nowSkip"]) { $(b).hidden = !t; $(b).disabled = false; }
+  $("#nowAgain").hidden = !!t || !setAside;
+  $("#nowStart").hidden = !!t || !brandNew;
+  $("#nowMore").hidden = !(text.scrollHeight > text.clientHeight + 2);  // a long task: the rest on request
 }
+$("#nowMore").onclick = () => { $("#nowText").classList.remove("clamp"); $("#nowMore").hidden = true; };
+$("#nowAgain").onclick = () => { skipped.clear(); renderNow(); $("#nowDone").focus(); };
+$("#nowStart").onclick = () => { $("#dumpText").scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "center" }); $("#dumpText").focus({ preventScroll: true }); };
 
+let lastLoad = { at: 0, day: "" };
 async function loadList() {
   try { listData = await api("/list" + (showingDone ? "?include_done=true" : "")); }
   catch (e) { $("#listBody").textContent = e.message; return; }
+  if (lastLoad.day && lastLoad.day !== today()) skipped.clear();  // "Not now" means today
+  lastLoad = { at: Date.now(), day: today() };
   $("#linkedErr").hidden = !listData.linked_error;
   $("#linkedErr").textContent = listData.linked_error || "";
   const ids = new Set([...listData.tasks, ...(listData.linked || [])].map((t) => t.id));
   picked = new Set([...picked].filter((id) => ids.has(id)));
   renderList();
   setWaiting(listData.marks_waiting || 0);
+  if (!loadList.draftChecked) { loadList.draftChecked = true; restoreDraft(); }
   if (guide && !guide.steps.find((x) => x.key === "tasks")?.done && listData.tasks.length) loadGuide();
 }
+
+// Coming back to the app (a home-screen app resumed next morning, or another tab): fresh list, right day.
+function refreshIfStale() {
+  if (!me || document.visibilityState !== "visible" || !$("#mylist").classList.contains("on")) return;
+  if (Date.now() - lastLoad.at > 120000 || today() !== lastLoad.day) { loadList(); loadToday(); loadGuide(); }
+}
+document.addEventListener("visibilitychange", refreshIfStale);
+window.addEventListener("pageshow", (e) => { if (e.persisted) refreshIfStale(); });
 
 $("#listBody").addEventListener("change", (e) => {
   if (!e.target.classList.contains("pick")) return;
   const id = e.target.closest(".task").dataset.id;
+  if (e.target.checked && picked.size >= MAX_PICK) { e.target.checked = false; return updatePicks(); }
   e.target.checked ? picked.add(id) : picked.delete(id);
-  renderList();
+  updatePicks();  // no redraw: focus stays on the box you just ticked
 });
 $("#listBody").addEventListener("click", async (e) => {
+  if (e.target.closest("[data-pickall]")) {
+    const now = today();
+    for (const t of listData.tasks.filter((x) => !x.done && x.due && x.due.date.slice(0, 10) <= now)) {
+      if (picked.size >= MAX_PICK) break;
+      picked.add(t.id);
+    }
+    $$("#listBody .task").forEach((r) => { const b = r.querySelector(".pick"); if (b) b.checked = picked.has(r.dataset.id); });
+    return updatePicks();
+  }
   const row = e.target.closest(".task");
   if (!row) return;
   const id = row.dataset.id;
-  if (e.target.matches("[data-done]")) { await markDone(id); }
-  else if (e.target.matches("[data-reopen]")) {
+  const btn = e.target.closest("button");
+  if (btn?.matches("[data-done]")) { await markDone(id, btn); }
+  else if (btn?.matches("[data-reopen]")) {
+    listFocus = focusSpot(btn);
     try { await api(`/list/${encodeURIComponent(id)}/reopen`, { method: "POST" }); loadList(); } catch (err) { listError(err, id); }
   }
-  else if (e.target.matches("[data-edit]")) openTask(listData.tasks.find((t) => t.id === id));
+  else if (btn?.matches("[data-edit]")) openTask(listData.tasks.find((t) => t.id === id));
 });
+$("#pickClear").onclick = () => { picked.clear(); $$("#listBody .pick").forEach((b) => { b.checked = false; }); updatePicks(); $("#printStickers").focus(); };
 
 // A task ticked or deleted on another device: say so, and show the list as it is now.
 const TASK_GONE = "That task was already removed.";
@@ -1382,18 +1485,54 @@ function listError(err, id) {
   loadList();
 }
 
-async function markDone(id) {
+// Done, with a few seconds to take it back. The button can't be pressed twice while it's on its way
+// (aria-disabled, not disabled, so keyboard focus stays put until the list is redrawn).
+async function markDone(id, btn) {
+  if (btn?.getAttribute("aria-disabled") === "true") return;
+  btn?.setAttribute("aria-disabled", "true");
+  if (btn) listFocus = focusSpot(btn);
+  const t = [...listData.tasks, ...(listData.linked || [])].find((x) => x.id === id);
   try {
-    await api(`/list/${encodeURIComponent(id)}/done`, { method: "POST" });
+    const r = await api(`/list/${encodeURIComponent(id)}/done`, { method: "POST" });
     picked.delete(id);
-    toast(["Done ✓", "Nice. ✓", "That counts. ✓", "One less thing ✓"][Math.floor(Math.random() * 4)]);
+    // A linked app's repeating task has moved on there: Undo can't put its day back.
+    const canUndo = r.undo != null && !(t && !String(id).startsWith("nb:") && t.due?.is_recurring);
+    snack(["Done ✓", "Nice. ✓", "That counts. ✓", "One less thing ✓"][Math.floor(Math.random() * 4)],
+          canUndo ? () => undoDone(id, r.undo) : null);
+    await loadList();
+  } catch (err) { listError(err, id); }
+  finally { btn?.removeAttribute("aria-disabled"); }
+}
+async function undoDone(id, undo) {
+  try {
+    await api(`/list/${encodeURIComponent(id)}/reopen`, { method: "POST", json: undo || {} });
+    toast("Back on your list");
     loadList();
   } catch (err) { listError(err, id); }
 }
 
-$("#nowDone").onclick = () => $("#nowCard").dataset.id && markDone($("#nowCard").dataset.id);
+// A message with an Undo button that stays long enough to use it (longer with bigger text).
+let snackTimer = null;
+function snack(msg, undo) {
+  const box = $("#snack");
+  clearTimeout(snackTimer);
+  $("#snackUndo").hidden = !undo;
+  $("#snackUndo").onclick = undo ? () => { hide(true); undo(); } : null;
+  box.classList.add("show");
+  $("#snackText").textContent = "";
+  requestAnimationFrame(() => { $("#snackText").textContent = msg; });  // said again even if it's the same words
+  function hide(now) {
+    if (!now && box.contains(document.activeElement)) { snackTimer = setTimeout(hide, 2000); return; }
+    if (box.contains(document.activeElement)) $("#listTitle").focus({ preventScroll: true });
+    box.classList.remove("show");
+  }
+  snackTimer = setTimeout(hide, ["large", "xlarge"].includes(me?.prefs?.text_size) ? 10000 : 6000);
+}
+
+$("#nowDone").onclick = () => $("#nowCard").dataset.id && markDone($("#nowCard").dataset.id, $("#nowDone"));
 $("#nowSkip").onclick = () => { skipped.add($("#nowCard").dataset.id); listData.one_thing = null; renderNow(); };
 $("#nowPrint").onclick = () => printFrom("/print/focus", { task_id: $("#nowCard").dataset.id }, $("#nowPrint"));
+$("#printTodayList").onclick = () => printFrom("/print/today", { source: "manual" }, $("#printTodayList"));
 
 async function printFrom(path, body, button) {
   const dry_run = $("#dry").checked;
@@ -1408,6 +1547,11 @@ async function printFrom(path, body, button) {
       [r, ...(r.also || [])].map(ticketResult).join("<hr>");
     revealResult(box);  // the top of the result, so the preview loading below doesn't push it under the tab bar
     loadGuide();
+    if (body.task_ids && [r, ...(r.also || [])].every((x) => x.status === "printed")) {
+      picked.clear();  // printed for real: un-tick them, so the next press doesn't print them again
+      $$("#listBody .pick").forEach((b) => { b.checked = false; });
+      updatePicks();
+    }
     if (gone) { for (const id of r.missing) picked.delete(id); loadList(); }
   } catch (e) {
     showResultError(box, errText(e));
@@ -1417,20 +1561,79 @@ async function printFrom(path, body, button) {
 }
 $("#printStickers").onclick = () => printFrom("/print/stickers", picked.size ? { task_ids: [...picked] } : {}, $("#printStickers"));
 $("#printStrips").onclick = () => printFrom("/print/strips", picked.size ? { task_ids: [...picked] } : {}, $("#printStrips"));
-$("#showDone").onclick = () => { showingDone = !showingDone; $("#showDone").textContent = showingDone ? "Hide done" : "Show done"; loadList(); };
+$("#showDone").onclick = () => {
+  showingDone = !showingDone;
+  $("#showDone").textContent = showingDone ? "Hide done" : "Show done";
+  $("#showDone").setAttribute("aria-pressed", String(showingDone));
+  loadList();
+};
+
+// Brain dump. An unsent draft is kept on this device for the person who typed it (until it's added
+// or they sign out), so a phone that drops the page in the background doesn't lose it.
+const draftKey = () => (me ? `nb.dumpDraft:${me.username}` : "");
+function saveDraft() {
+  try { const v = $("#dumpText").value; if (draftKey()) v.trim() ? localStorage.setItem(draftKey(), v) : localStorage.removeItem(draftKey()); } catch {}
+}
+function restoreDraft() {
+  try { const v = draftKey() && localStorage.getItem(draftKey()); if (v && !$("#dumpText").value.trim()) $("#dumpText").value = v; } catch {}
+}
+function forgetDraft() {
+  try { if (draftKey()) localStorage.removeItem(draftKey()); } catch {}
+}
+let draftTimer = null;
+$("#dumpText").addEventListener("input", () => { clearTimeout(draftTimer); draftTimer = setTimeout(saveDraft, 400); });
+$("#dumpText").addEventListener("keydown", (e) => {  // Ctrl+Enter (⌘+Enter on a Mac) adds it
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); $("#dumpGo").click(); }
+});
+
+// "2 today, 1 tomorrow, 2 someday": where the new tasks went.
+function dumpSummary(added) {
+  const now = today(), n = { today: 0, tomorrow: 0, later: 0, someday: 0 };
+  for (const t of added) {
+    const d = t.due?.date?.slice(0, 10);
+    n[!d ? "someday" : d <= now ? "today" : d === dayAfter(now) ? "tomorrow" : "later"]++;
+  }
+  return Object.entries(n).filter(([, v]) => v).map(([k, v]) => `${v} ${k === "later" ? "coming up" : k}`).join(", ");
+}
 
 $("#dumpGo").onclick = async () => {
   const text = $("#dumpText").value;
   if (!text.trim()) return toast("Nothing to add yet");
   $("#dumpGo").disabled = true;
+  $("#dumpProblems").innerHTML = "";
+  $("#dumpMsg").className = "muted";
   try {
     const r = await api("/list/dump", { method: "POST", json: { text } });
-    $("#dumpText").value = "";
-    $("#dumpMsg").textContent = `Added ${r.added.length}. Your head has more room now.`;
-    loadList();
-  } catch (e) { $("#dumpMsg").textContent = e.message; }
+    $("#dumpText").value = r.skipped_text || "";  // lines past the first 200 stay in the box, for next time
+    saveDraft();
+    const toApp = r.to && r.to !== "My list";
+    const where = toApp ? ` to ${r.to}` : r.added.length ? `: ${dumpSummary(r.added)}` : "";
+    const rest = r.skipped_text ? r.skipped_text.split("\n").filter((l) => l.trim()).length : 0;
+    $("#dumpMsg").textContent = [
+      `Added ${r.added.length}${where}.` + (rest || r.error ? "" : " Your head has more room now."),
+      rest ? `${rest} more line${rest === 1 ? " is" : "s are"} still in the box: 200 at a time, so add ${rest === 1 ? "it" : "them"} next.` : "",
+      (r.left_out || []).length ? `Left out ${r.left_out.length} line${r.left_out.length === 1 ? "" : "s"} ticked already ([x]).` : "",
+      ...(r.notes || []), r.error || ""].filter(Boolean).join(" ");
+    if (r.error) $("#dumpMsg").className = "err";
+    await loadList();
+    if (!toApp) flashRows(r.added.map((t) => t.id));
+  } catch (e) {
+    const problems = e.body?.problems || [];
+    $("#dumpMsg").className = "err";
+    $("#dumpMsg").textContent = problems.length ? `Nothing was added yet. Fix ${problems.length === 1 ? "this line" : "these lines"}, then add again:` : errText(e);
+    $("#dumpProblems").innerHTML = problems.map((p) => `<li><b>Line ${p.line}:</b> ${esc(p.problem)} <span class="muted">(“${esc(p.text)}”)</span></li>`).join("");
+    loadList();  // in case anything changed anyway
+  }
   finally { $("#dumpGo").disabled = false; }
 };
+// New rows light up for a moment, so they're easy to find.
+function flashRows(ids) {
+  const want = new Set(ids);
+  $$("#listBody .task").filter((r) => want.has(r.dataset.id)).forEach((r) => {
+    r.classList.add("fresh");
+    setTimeout(() => r.classList.remove("fresh"), 2500);
+  });
+}
 
 // edit dialog
 let editing = null;
@@ -1442,30 +1645,79 @@ function openTask(t) {
   $("#tdTime").value = t.due && t.due.date.length > 10 ? t.due.date.slice(11, 16) : "";
   $("#tdMinutes").value = t.minutes || "";
   $("#tdRepeat").value = t.repeat || "";
-  $("#tdPriority").value = t.priority >= 4 ? "4" : t.priority >= 3 ? "3" : "1";
+  $("#tdPriority").value = String(Math.min(4, Math.max(1, t.priority || 1)));
+  $("#tdNotes").value = t.description || "";
   $("#tdSteps").value = (t.steps || []).map((s) => s.text).join("\n");
   const on = new Set(t.labels || []);
-  $("#tdTags").innerHTML = listData.tags.map((g) => `<button type="button" data-tag="${esc(g.name)}" class="${on.has(g.name) ? "on" : ""}">${esc(g.name)}</button>`).join("")
+  // Your tags, plus any this task still has whose tag was removed, so saving never drops one quietly.
+  const names = [...new Set([...listData.tags.map((g) => g.name), ...(t.labels || [])])];
+  $("#tdTags").innerHTML = names.map((g) => `<button type="button" data-tag="${esc(g)}" class="${on.has(g) ? "on" : ""}">${esc(g)}</button>`).join("")
     || `<span class="muted">No tags yet. Add some in Settings.</span>`;
+  focusLabel();
   $("#taskDialog").showModal();
 }
-$("#tdTags").onclick = (e) => { const b = e.target.closest("[data-tag]"); if (b) b.classList.toggle("on"); };
+$("#tdTags").onclick = (e) => {
+  const b = e.target.closest("[data-tag]");
+  if (!b) return;
+  b.classList.toggle("on");
+  if (b.dataset.tag === "urgent" && b.classList.contains("on") && +$("#tdPriority").value < 3) $("#tdPriority").value = "3";  // the urgent tag is urgent
+  focusLabel();
+};
 $("#tdCancel").onclick = () => { editing = null; };
+
+// What the form changes, compared with the task as it was opened: only those fields are sent, so
+// saving never quietly changes something you didn't touch.
+function editBody() {
+  const t = editing, body = {};
+  let day = $("#tdDate").value;
+  // A time or repeat needs a day: today, as Brain dump does. (Clearing the day of a task that had
+  // one takes it off the calendar, time and repeat too.)
+  if (!day && !t.due && ($("#tdTime").value || $("#tdRepeat").value)) day = today();
+  const was = {
+    content: t.content, description: t.description || "", due_date: t.due ? t.due.date.slice(0, 10) : "",
+    due_time: t.due && t.due.date.length > 10 ? t.due.date.slice(11, 16) : "", repeat: t.repeat || "",
+    minutes: String(t.minutes || ""), priority: String(t.priority || 1),
+  };
+  const now = {
+    content: $("#tdContent").value.trim(), description: $("#tdNotes").value, due_date: day,
+    due_time: day ? $("#tdTime").value : "", repeat: day ? $("#tdRepeat").value : "",
+    minutes: $("#tdMinutes").value, priority: $("#tdPriority").value,
+  };
+  for (const k of Object.keys(now)) {
+    if (now[k] === was[k]) continue;
+    body[k] = k === "minutes" ? (now[k] ? Number(now[k]) : null) : k === "priority" ? Number(now[k])
+      : ["due_date", "due_time", "repeat"].includes(k) ? (now[k] || null) : now[k];
+  }
+  const tags = $$("#tdTags [data-tag].on").map((b) => b.dataset.tag);
+  if ([...tags].sort().join("\n") !== [...(t.labels || [])].sort().join("\n")) body.tags = tags;
+  const old = new Map((t.steps || []).map((s) => [s.text, s.done]));
+  const steps = $("#tdSteps").value.split("\n").map((x) => x.trim()).filter(Boolean);
+  if (steps.join("\n") !== (t.steps || []).map((s) => s.text).join("\n")) body.steps = steps.map((text) => ({ text, done: !!old.get(text) }));
+  return body;
+}
+async function saveEditing() {
+  const body = editBody();
+  if (Object.keys(body).length) await api(`/list/${encodeURIComponent(editing.id)}`, { method: "PATCH", json: body });
+  return body;
+}
+// While there are unsaved changes, the print button says it saves them first.
+const FOCUS_LABEL = $("#tdFocus").textContent;
+function focusLabel() {
+  const dirty = !!editing && Object.keys(editBody()).length > 0;
+  $("#tdFocus").textContent = dirty ? "Save & " + FOCUS_LABEL.charAt(0).toLowerCase() + FOCUS_LABEL.slice(1) : FOCUS_LABEL;
+}
+$("#taskForm").addEventListener("input", focusLabel);
+$("#taskForm").addEventListener("change", focusLabel);
 $("#taskForm").onsubmit = async (e) => {
   if (e.submitter?.value !== "save" || !editing) return;
   e.preventDefault();
-  const old = new Map((editing.steps || []).map((s) => [s.text, s.done]));
-  const body = {
-    content: $("#tdContent").value,
-    due_date: $("#tdDate").value || null,
-    due_time: $("#tdDate").value && $("#tdTime").value ? $("#tdTime").value : null,
-    minutes: $("#tdMinutes").value ? Number($("#tdMinutes").value) : null,
-    repeat: $("#tdDate").value ? ($("#tdRepeat").value || null) : null,
-    priority: Number($("#tdPriority").value),
-    tags: $$("#tdTags [data-tag].on").map((b) => b.dataset.tag),
-    steps: $("#tdSteps").value.split("\n").map((x) => x.trim()).filter(Boolean).map((text) => ({ text, done: !!old.get(text) })),
-  };
-  try { await api(`/list/${encodeURIComponent(editing.id)}`, { method: "PATCH", json: body }); $("#taskDialog").close(); toast("Saved"); loadList(); }
+  const autoDay = !$("#tdDate").value && !editing.due && ($("#tdTime").value || $("#tdRepeat").value);
+  try {
+    const body = await saveEditing();
+    $("#taskDialog").close();
+    toast(!Object.keys(body).length ? "Nothing changed" : autoDay ? "Saved for today" : "Saved");
+    loadList();
+  }
   catch (err) { listError(err, editing?.id); }
 };
 $("#tdDelete").onclick = async () => {
@@ -1473,7 +1725,16 @@ $("#tdDelete").onclick = async () => {
   try { await api(`/list/${encodeURIComponent(editing.id)}?confirm=true`, { method: "DELETE" }); $("#taskDialog").close(); toast("Deleted"); loadList(); }
   catch (err) { listError(err, editing?.id); }
 };
-$("#tdFocus").onclick = () => { const id = editing?.id; $("#taskDialog").close(); if (id) printFrom("/print/focus", { task_id: id }, $("#nowPrint")); };
+// Print just this task. Unsaved changes are saved first, so what prints is what you see.
+$("#tdFocus").onclick = async () => {
+  const id = editing?.id;
+  if (!id) return;
+  if (!$("#tdContent").value.trim()) return $("#taskForm").reportValidity();
+  try { await saveEditing(); } catch (err) { return listError(err, id); }
+  $("#taskDialog").close();
+  loadList();
+  printFrom("/print/focus", { task_id: id }, $("#tdFocus"));
+};
 
 // tags (Settings)
 async function loadTags() {
@@ -1494,8 +1755,11 @@ $("#tagList").addEventListener("change", async (e) => {
 $("#tagList").addEventListener("click", async (e) => {
   if (!e.target.matches("[data-del]")) return;
   const name = e.target.closest(".tagrow").dataset.name;
-  if (!confirm(`Remove the tag "${name}"? Tasks keep their other tags.`)) return;
-  try { await api(`/tags/${encodeURIComponent(name)}`, { method: "DELETE" }); loadTags(); } catch (err) { toast(err.message); }
+  const uses = (listData.tags.find((t) => t.name === name) || {}).uses || 0;
+  const on = uses === 1 ? "1 task has it" : `${uses} tasks have it`;
+  if (!confirm(uses ? `Remove the tag "${name}"? ${on}: it comes off ${uses === 1 ? "that task" : "them"} too, and they keep their other tags.`
+                    : `Remove the tag "${name}"?`)) return;
+  try { await api(`/tags/${encodeURIComponent(name)}?strip=true`, { method: "DELETE" }); loadTags(); loadList(); } catch (err) { toast(err.message); }
 });
 $("#tagForm").onsubmit = async (e) => {  // a form, so Enter adds it too
   e.preventDefault();
@@ -1912,9 +2176,8 @@ $("#calList").addEventListener("click", async (e) => {
 async function loadToday() {
   let r;
   try { r = await api("/calendars/today"); } catch { $("#todayCard").hidden = true; return; }
-  const clock = (hhmm) => { const h = +hhmm.slice(0, 2); return me?.prefs?.time_24h ? hhmm : `${h % 12 || 12}:${hhmm.slice(3, 5)}${h < 12 ? "a" : "p"}`; };
   $("#todayCard").hidden = !r.events.length && !r.problems.length;
-  $("#todayEvents").innerHTML = r.events.map((e) => `<div class="mini"><b style="display:inline-block;min-width:70px">${e.all_day ? "all day" : esc(clock(e.start))}</b>${esc(e.title)}${e.location ? ` <span class="muted">· ${esc(e.location)}</span>` : ""}</div>`).join("")
+  $("#todayEvents").innerHTML = r.events.map((e) => `<div class="mini"><b style="display:inline-block;min-width:70px">${e.all_day ? "all day" : esc(fmtClock(e.start))}</b>${esc(e.title)}${e.location ? ` <span class="muted">· ${esc(e.location)}</span>` : ""}</div>`).join("")
     + r.problems.map((p) => `<div class="mini err">${esc(p)}</div>`).join("");
 }
 

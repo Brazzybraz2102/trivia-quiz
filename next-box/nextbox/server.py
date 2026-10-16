@@ -38,7 +38,7 @@ from .events import Events, ServerSettings
 from .feedback import Feedback, FeedbackError
 from .jobs import Context, print_text
 from .journal import Journal, Slides, Wins, slugs as find_slugs
-from .mylist import TAG_COLORS, LocalTasks, TagExists, Tags, is_local, parse_dump
+from .mylist import TAG_COLORS, LocalTasks, TagExists, Tags, is_local, parse_dump, split_dump
 from .printer import COLORS, DRIVERS
 from .printers import REASONS, PrinterError, Printers
 from .printers import validate as validate_printer
@@ -161,6 +161,11 @@ class TaskIn(BaseModel):
 
 class DumpBody(BaseModel):
     text: str
+
+
+class ReopenBody(BaseModel):
+    prev_due: str | None = Field(None, max_length=40)
+    prev_steps: list[bool] | None = Field(None, max_length=50)
 
 
 class CalendarBody(BaseModel):
@@ -971,7 +976,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def get_list(include_done: bool = False, caller: Caller = Depends(person)):
         """The built-in list, plus today's tasks from a linked app (they stay in that app)."""
         mine = my_list(caller)
-        tasks = mine.all_open()
+        today = ctx.today()
+        tasks = sorted(mine.all_open(), key=lambda t: jobs.list_order(t, today))  # as the ticket lists them
         if include_done:
             from sqlalchemy import select as _select
             from . import db as _db
@@ -981,15 +987,18 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                                     .order_by(_db.tasks.c.done_at.desc()).limit(50)).mappings().all()
             tasks += [mine._task(r) for r in rows]
         status = connections.status(caller.name)
-        linked, linked_error = [], ""
+        linked, linked_error, linked_undo = [], "", False
         if status.get("connected"):
             try:
-                linked = rctx(caller).tasks.linked.today()
+                app_tasks = rctx(caller).tasks.linked
+                linked_undo = getattr(app_tasks, "reopen_task", None) is not None  # can a ✓ be undone there?
+                linked = sorted(app_tasks.today(), key=lambda t: jobs.list_order(t, today))
                 linked = [{**t, "source": status["provider"], "labels": list(t.get("labels") or [])} for t in linked]
             except Exception as exc:  # the list still works when the linked app is down
                 linked_error = f"{status.get('name', 'Your app')} didn't answer: {exc}"[:300]
         return {"tasks": tasks, "linked": linked, "linked_name": status.get("name") if status.get("connected") else None,
-                "linked_error": linked_error, "tags": Tags(accounts.db, caller.name).all(),
+                "linked_error": linked_error, "linked_undo": linked_undo, "tags": _tags_with_uses(caller.name),
+                "done_today": len(Wins(accounts.db, caller.name).between(today.isoformat(), today.isoformat())),
                 "one_thing": _one_thing(caller),
                 "marks_waiting": sum(len(_waiting(r)) for r in ctx.store.list_scans(50, by=caller.name))}
 
@@ -1098,16 +1107,86 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.post("/list/dump")
     def brain_dump(body: DumpBody, caller: Caller = Depends(person)):
-        """Type or paste everything on your mind, one per line. #tag !urgent tomorrow 3pm ~15m."""
-        items = parse_dump(body.text, ctx.today())
+        """Type or paste everything on your mind, one per line. #tag !urgent tomorrow 3pm ~15m.
+        All or nothing: a date or time that can't be real stops the whole dump before anything is
+        added, and says which line. 200 lines at a time: the rest come back as skipped_text.
+        Lines ticked already ([x]) are left out. With prefs.new_tasks_to = linked, the tasks go
+        to the linked app instead (and are never kept here)."""
+        head, rest = split_dump(body.text)
+        items = parse_dump(head, ctx.today())
+        problems = [{"line": i["line"], "text": i["text"][:120], "problem": i["problem"]}
+                    for i in items if i.get("problem")]
+        if problems:
+            first, more = problems[0], len(problems) - 1
+            return JSONResponse(status_code=400, content={"problems": problems[:50], "detail": (
+                f"Nothing was added yet. Line {first['line']}: {first['problem']}."
+                + (f" {more} more line{'s' if more != 1 else ''} need a look too." if more else "")
+                + " Fix it and add again.")})
+        left_out = [{"line": i["line"], "text": i["text"][:120]} for i in items if i.get("ticked")]
+        items = [i for i in items if not i.get("ticked")]
         if not items:
-            raise HTTPException(400, "Nothing to add. Put one task on each line.")
-        mine = my_list(caller)
+            raise HTTPException(400, "Those lines are ticked already, so there's nothing to add."
+                                if left_out else "Nothing to add. Put one task on each line.")
+        if caller.prefs.get("new_tasks_to") == "linked":
+            linked = getattr(rctx(caller).tasks, "linked", None)
+            if linked is not None:
+                return {**run(caller, "brain_dump_linked", _dump_to_linked, linked, items, rest), "left_out": left_out}
+        # A new #tag starts white. Past the 30-tag limit, the #word stays in the task's words instead.
+        known = {t["name"] for t in Tags(accounts.db, caller.name).all()}
+        new: list[str] = []
+        kept_words: list[str] = []
         for item in items:
+            keep = []
             for name in item.get("tags", []):
-                _ensure_tag(caller, name)
-        added = run(caller, "brain_dump", lambda: [mine.create(i) for i in items])
-        return {"added": added}
+                if name in known or name in new or len(known) + len(new) < 30:
+                    keep.append(name)
+                    if name not in known and name not in new:
+                        new.append(name)
+                else:
+                    item["content"] = f"{item['content']} #{name}"[:500]
+                    kept_words.append(f"#{name}")
+            item["tags"] = keep
+        added = run(caller, "brain_dump", my_list(caller).create_many, items, new_tags=new)
+        out = {"added": added, "to": "My list", "skipped_text": rest, "left_out": left_out, "notes": []}
+        if kept_words:
+            out["notes"].append(f"You have 30 tags, the most there can be, so {', '.join(dict.fromkeys(kept_words))} "
+                                "stayed in the words. Remove a tag in Settings to make room.")
+        return out
+
+    def _due_words(item: dict) -> str | None:
+        """A parsed line's day, time and repeat in words Todoist understands."""
+        day, at, repeat = item.get("due_date"), item.get("due_time"), item.get("repeat")
+        if repeat:
+            unit = {"daily": "day", "weekdays": "weekday", "weekly": "week", "monthly": "month"}[repeat]
+            return f"every {unit}" + (f" at {at}" if at else "") + (f" starting {day}" if day else "")
+        return f"{day} {at}" if day and at else day
+
+    def _dump_to_linked(linked, items: list[dict], rest: str) -> dict:
+        """Brain dump into the linked app. Apps that take a due date (Todoist) get the day, time and
+        repeat; the others get each line as it was typed, so no date is lost on the way."""
+        import inspect
+        name = display_name(getattr(linked, "key", "")) or "your linked app"
+        dated = "due_string" in inspect.signature(linked.add_task).parameters
+        added, lost = [], []
+        for n, item in enumerate(items):
+            try:
+                if dated:
+                    task = linked.add_task(item["content"], description=item.get("description", ""),
+                                           due_string=_due_words(item))
+                    lost += [w for w, on in (("tags", item.get("tags")), ("urgency", item.get("priority", 1) > 1),
+                                             ("how long", item.get("minutes"))) if on and w not in lost]
+                else:
+                    task = linked.add_task(item["text"], description="")
+            except (ProviderError, OSError) as exc:  # stopped part way: the rest go back in the box
+                left = "\n".join([i["text"] for i in items[n:]] + ([rest] if rest else []))
+                return {"added": added, "to": name, "skipped_text": left, "notes": [],
+                        "error": f"{name} stopped answering after {len(added)}: {exc}"[:300]}
+            added.append({"id": str(task.get("id", "")), "content": task.get("content") or item["content"],
+                          "source": getattr(linked, "key", "linked")})
+        notes = [f"{name} doesn't take {' or '.join(lost)} from Next Box: add them there."] if lost else []
+        if not dated:
+            notes = [f"{name} got each line as you typed it. Set days and times there."]
+        return {"added": added, "to": name, "skipped_text": rest, "notes": notes}
 
     def _local_id(task_id: str) -> str:
         if not is_local(task_id):
@@ -1139,19 +1218,36 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.post("/list/{task_id}/done")
     def done_list_task(task_id: str, caller: Caller = Depends(person)):
+        """Done. `undo` is what /reopen needs to put it back (a repeat's day and ticked steps), or
+        None when it was finished already (a double tap counts once) or its app can't reopen it."""
         c = rctx(caller)
-        run(caller, "list_done", c.tasks.close_task, task_id)
+        undo = run(caller, "list_done", c.tasks.close_task, task_id)
         Slides(accounts.db, caller.name).clear(task_id)
         if not is_local(task_id):  # My list counts its own wins; a linked app's task counts here
             events.log(caller.name, "task_done", detail={"source": "linked", "task_id": task_id[:200]},
                        household=caller.household)
             Wins(accounts.db, caller.name, caller.household).add(task_id, ctx.today().isoformat(), "linked",
                                                                  once_a_day=True)
-        return {"ok": True}
+            undo = {} if getattr(getattr(c.tasks, "linked", None), "reopen_task", None) else None
+        return {"ok": True, "undo": undo}
 
     @app.post("/list/{task_id}/reopen")
-    def reopen_list_task(task_id: str, caller: Caller = Depends(person)):
-        return run(caller, "list_reopen", my_list(caller).reopen, _local_id(task_id))
+    def reopen_list_task(task_id: str, body: ReopenBody | None = None, caller: Caller = Depends(person)):
+        """Not done after all. A repeat goes back to body.prev_due (from /done's `undo`) with its
+        ticked steps; a linked app's task is reopened there, where the app allows it."""
+        body = body or ReopenBody()
+        if is_local(task_id):
+            return run(caller, "list_reopen", my_list(caller).reopen, task_id,
+                       prev_due=body.prev_due, prev_steps=body.prev_steps)
+        tasks = rctx(caller).tasks
+        linked = getattr(tasks, "linked", tasks)
+        reopen = getattr(tasks, "reopen_task", None)
+        if reopen is None or (linked is not None and getattr(linked, "reopen_task", None) is None):
+            name = tasks.linked_name() if hasattr(tasks, "linked_name") else "your linked app"
+            raise HTTPException(400, f"Reopen it in {name}.")
+        run(caller, "list_reopen", reopen, task_id)  # not linked any more: 409
+        Wins(accounts.db, caller.name, caller.household).remove_last(task_id)
+        return {"ok": True}
 
     @app.delete("/list/{task_id}")
     def delete_list_task(task_id: str, confirm: bool = False, caller: Caller = Depends(person)):
@@ -1162,7 +1258,13 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.get("/tags")
     def get_tags(caller: Caller = Depends(person)):
-        return {"tags": Tags(accounts.db, caller.name).all(), "colors": list(TAG_COLORS)}
+        """Each tag with `uses`: how many open tasks carry it (so removing one can say so)."""
+        return {"tags": _tags_with_uses(caller.name), "colors": list(TAG_COLORS)}
+
+    def _tags_with_uses(name: str) -> list[dict]:
+        tags = Tags(accounts.db, name)
+        uses = tags.usage()
+        return [{**t, "uses": uses.get(t["name"], 0)} for t in tags.all()]
 
     @app.post("/tags")
     def add_tag(body: NewTagBody, caller: Caller = Depends(person)):
@@ -1182,12 +1284,13 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(400, str(exc)) from exc
 
     @app.delete("/tags/{name}")
-    def delete_tag(name: str, caller: Caller = Depends(person)):
+    def delete_tag(name: str, strip: bool = False, caller: Caller = Depends(person)):
+        """strip=true: take the tag off the tasks that have it too (they keep their other tags)."""
         try:
-            Tags(accounts.db, caller.name).remove(name)
+            changed = Tags(accounts.db, caller.name).remove(name, strip=strip)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        return {"ok": True}
+        return {"ok": True, "tasks_changed": changed}
 
     @app.post("/print/stickers")
     def p_stickers(body: PickBody, caller: Caller = Depends(auth)):

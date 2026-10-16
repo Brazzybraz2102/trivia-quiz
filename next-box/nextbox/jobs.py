@@ -115,6 +115,23 @@ def _sort_key(task: dict, today: date):
             task.get("child_order", 0))
 
 
+def list_order(task: dict, today: date):
+    """My list on screen: today and overdue in the order today's ticket prints them, then what's
+    coming up by day and time, then tasks with no day (urgent first). Not _sort_key alone for
+    later days: its days_late would put the furthest date first."""
+    due = task.get("due") or {}
+    day = (due.get("date") or "")[:10]
+    tid = str(task.get("id", ""))
+    num = int(tid[3:]) if tid.startswith("nb:") and tid[3:].isdigit() else 0
+    pri = -int(task.get("priority", 1) or 1)
+    if day and day <= today.isoformat():
+        return (0, _sort_key(task, today), num)
+    if day:
+        timed = len(due.get("datetime") or due.get("date") or "") >= 16
+        return (1, (day, _time_minutes(task) if timed else 24 * 60, pri, num))
+    return (2, (pri, num))
+
+
 def _time_minutes(task: dict) -> int:
     due = task.get("due") or {}
     raw = due.get("datetime") or due.get("date") or ""
@@ -285,7 +302,7 @@ def _task_label(ctx: Context, *, kind: str, title: str, subtitle: str, tasks: li
             "is_recurring": bool(due.get("is_recurring")),
         })
     now = datetime.now()
-    made = f"{now:%a} {now.hour % 12 or 12}:{now:%M}{'a' if now.hour < 12 else 'p'}"
+    made = f"{now:%a} {now:%H:%M}" if h24 else f"{now:%a} {now.hour % 12 or 12}:{now:%M}{'a' if now.hour < 12 else 'p'}"
     footer = f"{kind}  {today.isoformat()}  made {made}"
     show_waiting = ctx.prefs.get("show_waiting", True)
 
@@ -582,6 +599,8 @@ def add_and_print(ctx: Context, text: str, dry_run: bool | None = None, source: 
     local = tasks if isinstance(tasks, LocalTasks) else getattr(tasks, "local", None)
     to_my_list = local is not None and getattr(tasks, "new_tasks_to", "nextbox") != "linked"
     fields = parse_line(first, ctx.today()) if to_my_list else None
+    if fields and fields.get("problem"):  # "2026-02-30": say so, rather than file it with no date
+        raise ValueError(f"{fields['problem'][:1].upper()}{fields['problem'][1:]}. Fix it and try again.")
     if fields:
         try:
             Tags(local.db, local.owner).ensure(fields.get("tags", []))
