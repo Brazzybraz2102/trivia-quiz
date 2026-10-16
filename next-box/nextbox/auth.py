@@ -66,6 +66,10 @@ PREFS = {
     "routine_mode": (False, lambda v: isinstance(v, bool)),  # same words every time; My list opens on Schedule
     "routine_morning": ("08:00", lambda v: _is_hhmm(v)),     # when they plan the day
     "routine_evening": ("18:00", lambda v: _is_hhmm(v)),     # when they look back and snap their pages
+    # FE: the routine card, reminders before timed tasks (all worked out in the browser while it's open)
+    "routine_card": (True, lambda v: isinstance(v, bool)),   # My list's "Print today's label" / "Snap your pages" card
+    "remind_before": (10, lambda v: type(v) is int and 0 <= v <= 120),  # minutes before a timed task; 0 = off
+    "remind_notify": (False, lambda v: isinstance(v, bool)),  # also a browser notification (asked for on this device)
 }
 
 # What to tell someone whose setting wasn't saved: plain words, never the setting's key.
@@ -84,6 +88,7 @@ PREF_HINTS = {
     "print_with": "Pick how you print from the list.",
     "routine_morning": "Pick a time, like 08:00.",
     "routine_evening": "Pick a time, like 18:00.",
+    "remind_before": "Pick how long before from the list.",
 }
 
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
