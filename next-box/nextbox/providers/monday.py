@@ -272,7 +272,15 @@ class Monday(TaskProvider):
                               if v.get("id") == board["date"]), None))
         value = {"date": date_iso[:10]}
         if current.get("time"):
-            value["time"] = current["time"]  # keep its time of day
+            # Keep its time of day. monday.com keeps date and time in UTC and Next Box shows them in
+            # local time (_shape), so the new day is a local day at the same local time, back in UTC.
+            try:
+                was = dt.datetime.fromisoformat(f"{current['date'][:10]}T{current['time'][:8]}+00:00").astimezone()
+                when = dt.datetime.fromisoformat(f"{date_iso[:10]}T{was:%H:%M:%S}").astimezone()
+                utc = when.astimezone(dt.timezone.utc)
+                value = {"date": f"{utc:%Y-%m-%d}", "time": f"{utc:%H:%M:%S}"}
+            except (KeyError, TypeError, ValueError):
+                value["time"] = current["time"]
         self._change(board, item["id"], board["date"], value)
 
     def delete_task(self, task_id: str) -> None:

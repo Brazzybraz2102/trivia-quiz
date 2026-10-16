@@ -29,6 +29,7 @@ Mark = Literal["done", "tomorrow", "drop", "none"]
 # Why a row read from the photo changed nothing (record["ignored"][...]["reason"]).
 NOT_ON_LABEL, DUPLICATE_ROW = "not on this label", "duplicate row"
 ALREADY_DONE, ALREADY_MOVED, READ_BEFORE = "already done", "already moved", "read before"
+NEWER_TASK = "deleted since printed"  # the row's task was deleted; a newer task has its old id
 NO_CODE = "We couldn't read the ticket code. Pick the ticket below."
 NO_LABEL = "We couldn't find a printed label in the photo, so nothing changed."
 READ_FAILED = "Saved your photo; reading it failed. Tap Try again."
@@ -245,11 +246,26 @@ def _due(task: dict | None) -> str:
     return (((task or {}).get("due") or {}).get("date") or "")[:10]
 
 
-def _apply(ctx: Context, mark: str, item: dict, day: str | None = None, scan_id: str | None = None) -> dict:
-    """Make one change. `day` is the ticket's day. Returns what undoing it needs, or
-    {"skip": reason} when the list already shows it (done or moved since the ticket printed)."""
+def _added_since(task: dict | None, printed: str | None) -> bool:
+    """A My list task made after the ticket printed can't be the one on it (its id was a deleted
+    task's, on a database from before ids were never reused)."""
+    if not task or not task.get("created") or not printed:
+        return False
+    try:
+        return int(task["created"]) > datetime.fromisoformat(printed).timestamp()
+    except (TypeError, ValueError):
+        return False
+
+
+def _apply(ctx: Context, mark: str, item: dict, day: str | None = None, scan_id: str | None = None,
+           printed: str | None = None) -> dict:
+    """Make one change. `day` is the ticket's day and `printed` when it printed. Returns what undoing
+    it needs, or {"skip": reason} when the list already shows it (done or moved since the ticket
+    printed), or when the row's task was deleted since and a newer one has its id."""
     td, tid = ctx.tasks, item["task_id"]
     on_day = date.fromisoformat(day) if day else ctx.today()
+    if printed and is_local(tid) and _added_since(_current(ctx, tid), printed):
+        return {"skip": NEWER_TASK}
     if mark == "done":
         cur = _current(ctx, tid)
         if cur is not None:
@@ -266,6 +282,9 @@ def _apply(ctx: Context, mark: str, item: dict, day: str | None = None, scan_id:
         else:
             td.close_task(tid)
         if ctx.on_done:
+            slid = ctx.slides().get(str(tid)) if ctx.slides else None
+            if slid is not None:  # finishing clears its slide count: Undo puts it back
+                undo["slides"] = slid
             ctx.on_done(tid, day=on_day.isoformat(), scan_id=scan_id)
         return undo
     if mark == "tomorrow":
@@ -312,7 +331,7 @@ def _match(ctx: Context, record: dict, label: dict, rows: list[dict], *, hold_al
             record["needs_confirmation"].append({**entry, "status": "pending"})
             continue
         try:
-            done = _apply(ctx, mark, item, record.get("day"), record["id"])
+            done = _apply(ctx, mark, item, record.get("day"), record["id"], printed=label.get("created_at"))
         except Exception as exc:  # keep going; report per-row
             record["errors"].append(f"row {row}: {exc}")
             continue
@@ -496,13 +515,14 @@ def confirm(ctx: Context, scan_id: str, decisions: dict[int, str]) -> dict:
                 continue
             item["status"] = "applying"
             claimed.append(dict(item))
-        day = record.get("day")
+        day, label_id = record.get("day"), record.get("label_id")
         if not claimed:
             return record
+    printed = ((ctx.store.get_printed(label_id) or {}) if label_id else {}).get("created_at")
     results: dict[int, dict] = {}
     for item in claimed:  # outside the lock: the to-do app may take a moment
         try:
-            done = _apply(ctx, item["mark"], item, day, scan_id)
+            done = _apply(ctx, item["mark"], item, day, scan_id, printed=printed)
             results[item["row"]] = ({"status": "already", "reason": done["skip"]} if "skip" in done
                                     else {"status": "applied", **done})
         except Exception as exc:

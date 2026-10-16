@@ -10,12 +10,13 @@ journal or activity.
 - dates: due dates and journal days stored as 20261016 or 2026-W42-5 instead of 2026-10-16
 - wins: wins used to be worked out from events (deleted after 180 days) and read-backs (90 days);
   they're kept in their own table now, filled once from what older versions had
+- tasks-autoincrement: SQLite reused a deleted task's id; older tasks tables are rebuilt so it can't
 """
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -159,8 +160,45 @@ def backfill_wins(engine: Engine, store) -> int:
     return len(rows)
 
 
+def tasks_autoincrement(engine: Engine) -> bool:
+    """SQLite gave a new task the id of the newest one deleted, so an old ticket's row (or its slide
+    count) could land on the new task. Rebuild an older tasks table with AUTOINCREMENT, which never
+    hands an id out twice, and start the count past every task id a win or a slide count still
+    names. PostgreSQL never reused ids. Returns whether the table was rebuilt."""
+    if engine.dialect.name != "sqlite":
+        return False
+    with engine.connect() as conn:
+        conn.exec_driver_sql("BEGIN IMMEDIATE")  # one process at a time; the next one finds it done
+        try:
+            made = conn.exec_driver_sql("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tasks'").scalar()
+            if not made or "AUTOINCREMENT" in made.upper():
+                conn.rollback()
+                return False
+            have = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(tasks)")}
+            cols = ", ".join(f'"{c.name}"' for c in db.tasks.columns if c.name in have)
+            conn.exec_driver_sql("ALTER TABLE tasks RENAME TO tasks_before_v0141")
+            conn.exec_driver_sql("DROP INDEX IF EXISTS ix_tasks_owner_open")
+            db.tasks.create(conn)
+            conn.exec_driver_sql(f"INSERT INTO tasks ({cols}) SELECT {cols} FROM tasks_before_v0141")
+            conn.exec_driver_sql("DROP TABLE tasks_before_v0141")
+            top = conn.execute(select(func.max(db.tasks.c.id))).scalar() or 0
+            for col in (db.wins.c.task_id, db.task_slides.c.task_id):
+                for (tid,) in conn.execute(select(col).where(col.like("nb:%")).distinct()):
+                    if tid[3:].isdigit() and len(tid) <= 18:
+                        top = max(top, int(tid[3:]))
+            conn.exec_driver_sql("DELETE FROM sqlite_sequence WHERE name = 'tasks'")
+            if top:
+                conn.exec_driver_sql("INSERT INTO sqlite_sequence (name, seq) VALUES ('tasks', ?)", (top,))
+        except BaseException:
+            conn.rollback()
+            raise
+        conn.commit()
+    return True
+
+
 def run_startup_fixes(engine: Engine, store) -> None:
     _once(engine, "orphans-v1", lambda: sweep_orphans(engine, store))
     _once(engine, "debug-details-v1", lambda: scrub_debug_details(engine))
     _once(engine, "dates-v1", lambda: normalise_dates(engine))
     _once(engine, "wins-v1", lambda: backfill_wins(engine, store))
+    _once(engine, "tasks-autoincrement-v1", lambda: tasks_autoincrement(engine))

@@ -9,6 +9,7 @@ from __future__ import annotations
 import calendar
 import re
 import time
+from contextlib import contextmanager
 from datetime import date, timedelta
 
 from sqlalchemy import and_, delete, func, insert, select, update
@@ -58,27 +59,38 @@ def _roll_to_weekday(d: date) -> date:
     return d + timedelta(days=(7 - d.weekday()) % 7) if d.weekday() >= 5 else d
 
 
+def repeat_anchor(repeat: str | None, due_date: str | None) -> int | None:
+    """The day a repeat belongs on, kept in tasks.repeat_day: the day of the month for a monthly
+    repeat (the 31st stays the 31st after a short month), the weekday (0 = Monday) for a weekly one."""
+    if not due_date or repeat not in ("weekly", "monthly"):
+        return None
+    d = date.fromisoformat(due_date[:10])
+    return d.day if repeat == "monthly" else d.weekday()
+
+
 def next_due(repeat: str, due: date, today: date, anchor_day: int | None = None) -> date:
     """The next occurrence after the current one and after today, so ticking a repeat early moves
-    it on, and one that was missed never piles up as overdue. `anchor_day`: the day of the month
-    a monthly repeat belongs on (the 31st stays the 31st after a short month)."""
+    it on, and one that was missed never piles up as overdue. `anchor_day` (repeat_anchor): the
+    day a weekly or monthly repeat belongs on, so one moved to another day (→ Tomorrow) comes back
+    to its own day: "every Friday" done on Saturday is next due on Friday, not Saturday."""
+    after = max(due, today)
     if repeat == "daily":
-        return max(due, today) + timedelta(days=1)
+        return after + timedelta(days=1)
     if repeat == "weekdays":
-        d = max(due, today) + timedelta(days=1)
+        d = after + timedelta(days=1)
         while d.weekday() >= 5:
             d += timedelta(days=1)
         return d
-    day = anchor_day or due.day
-    d = due
-    while True:
-        if repeat == "weekly":
-            d += timedelta(days=7)
-        else:  # monthly, on its day where the month has it, else the month's last day
-            y, m = (d.year + 1, 1) if d.month == 12 else (d.year, d.month + 1)
-            d = date(y, m, min(day, calendar.monthrange(y, m)[1]))
-        if d > today:
+    if repeat == "weekly":
+        weekday = due.weekday() if anchor_day is None else anchor_day % 7
+        return after + timedelta(days=(weekday - after.weekday()) % 7 or 7)
+    day = due.day if anchor_day is None else anchor_day
+    y, m = after.year, after.month
+    while True:  # monthly, on its day where the month has it, else the month's last day
+        d = date(y, m, min(day, calendar.monthrange(y, m)[1]))
+        if d > after:
             return d
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
 
 
 # --- brain dump ------------------------------------------------------------------------------
@@ -437,7 +449,7 @@ class LocalTasks(TaskProvider):
                 "priority": r["priority"], "due": due, "labels": list(r["tags"] or []),
                 "steps": list(r["steps"] or []), "minutes": r["minutes"],
                 "repeat": r["repeat"], "source": "nextbox", "done": r["done_at"] is not None,
-                "done_at": r["done_at"]}
+                "done_at": r["done_at"], "created": r["created"]}
 
     def _num(self, task_id: str) -> int:
         digits = str(task_id)[len(PREFIX):]
@@ -447,6 +459,26 @@ class LocalTasks(TaskProvider):
 
     def _mine(self, num: int):
         return and_(db.tasks.c.id == num, db.tasks.c.owner == self.owner)
+
+    @contextmanager
+    def _locked(self, num: int):
+        """Read, change and write one task as a single step (as Store.edit_scan does): two quick
+        taps, or two devices, wait for each other, so neither change is lost. Yields (conn, row)."""
+        with self.db.connect() as conn:
+            if conn.dialect.name == "sqlite":
+                conn.exec_driver_sql("BEGIN IMMEDIATE")  # take the write lock before reading
+            q = select(db.tasks).where(self._mine(num))
+            if conn.dialect.name == "postgresql":
+                q = q.with_for_update()
+            try:
+                row = conn.execute(q).mappings().first()
+                if not row:
+                    raise TaskNotFound(GONE)
+                yield conn, dict(row)
+            except BaseException:
+                conn.rollback()
+                raise
+            conn.commit()
 
     def _open(self, *conds) -> list[dict]:
         q = select(db.tasks).where(db.tasks.c.owner == self.owner, db.tasks.c.done_at.is_(None), *conds)
@@ -518,22 +550,36 @@ class LocalTasks(TaskProvider):
                 select(db.tasks).where(db.tasks.c.id.in_(ids))).mappings()}
         return [found[i] for i in ids]
 
-    def update(self, task_id: str, fields: dict) -> dict:
+    def update(self, task_id: str, fields: dict, new_tags: list[str] = ()) -> dict:
+        """Change the task (the Edit dialog): a new day here changes a repeat's day too. `new_tags`
+        are made (white) in the same go, so a change that fails never leaves tags behind."""
         num = self._num(task_id)
-        with self.db.connect() as conn:
-            had = conn.execute(select(db.tasks).where(self._mine(num))).mappings().first()
-        if not had:
-            raise TaskNotFound(GONE)
-        values = self._settle(self._validate(fields, creating=False), dict(had))
-        if values:
-            with self.db.begin() as conn:
+        checked = self._validate(fields, creating=False)
+        with self._locked(num) as (conn, had):  # read and write together: a step tick can't slip between
+            values = self._settle(checked, had)
+            if new_tags:
+                Tags(self.db, self.owner).add_new(conn, list(new_tags))
+            if values:
                 conn.execute(update(db.tasks).where(self._mine(num)).values(**values))
         return self.get_task(task_id)
 
-    def _settle(self, values: dict, had: dict | None = None) -> dict:
+    def move(self, task_id: str, date_iso: str | None) -> dict:
+        """Move this time only to another day (→ Tomorrow, a → on paper, Undo): it keeps its time, a
+        weekday repeat skips the weekend, and a repeat keeps the day it belongs on, so "every Friday"
+        moved to Saturday is back on Friday once it's done. (No day at all ends a repeat, as Edit does.)"""
+        num = self._num(task_id)
+        checked = self._validate({"due_date": date_iso}, creating=False)
+        with self._locked(num) as (conn, had):
+            values = self._settle(checked, had, occurrence=True)
+            conn.execute(update(db.tasks).where(self._mine(num)).values(**values))
+        return self.get_task(task_id)
+
+    def _settle(self, values: dict, had: dict | None = None, occurrence: bool = False) -> dict:
         """Rules about the task as a whole, once a change is applied: a time or a repeat needs a
         day (today, as Brain dump does, when none was picked), a weekday repeat starts on a weekday,
-        a monthly repeat remembers its day of the month, and the urgent tag means urgent."""
+        a weekly or monthly repeat remembers the day it belongs on (a new day or repeat sets it; moving
+        one time only, `occurrence`, doesn't), and the urgent tag means urgent: taking it off takes back
+        the urgency it gave (not a "most urgent" set on purpose)."""
         merged = {**(had or {}), **values}
         if (merged.get("due_time") or merged.get("repeat")) and not merged.get("due_date"):
             values["due_date"] = merged["due_date"] = self._today().isoformat()
@@ -541,9 +587,17 @@ class LocalTasks(TaskProvider):
             rolled = _roll_to_weekday(date.fromisoformat(merged["due_date"])).isoformat()
             if rolled != merged["due_date"]:
                 values["due_date"] = merged["due_date"] = rolled
-        if "repeat" in values or "due_date" in values:
-            monthly = merged.get("repeat") == "monthly" and merged.get("due_date")
-            values["repeat_day"] = int(merged["due_date"][8:10]) if monthly else None
+
+        def changed(key: str) -> bool:
+            return key in values and (had is None or values[key] != had.get(key))
+        if occurrence and merged.get("repeat") and merged.get("due_date"):
+            if had and had.get("repeat_day") is None:  # set before 0.14.1 (weekly) or never: its day until now
+                values["repeat_day"] = repeat_anchor(merged["repeat"], had.get("due_date"))
+        elif changed("repeat") or changed("due_date"):
+            values["repeat_day"] = repeat_anchor(merged.get("repeat"), merged.get("due_date"))
+        if had and "tags" in values and "priority" not in values and "urgent" in (had.get("tags") or []) \
+                and "urgent" not in (values["tags"] or []) and int(had.get("priority") or 1) == 3:
+            values["priority"] = merged["priority"] = 1  # the tag made it urgent: untagging undoes that
         if ("tags" in values or "priority" in values) and "urgent" in (merged.get("tags") or []) \
                 and int(merged.get("priority") or 1) < 3:
             values["priority"] = 3
@@ -609,10 +663,7 @@ class LocalTasks(TaskProvider):
         """Tick (or untick) one tiny step. `text` is the step as the screen showed it: when the steps
         changed on another device since, nothing is ticked and StepChanged says so."""
         num = self._num(task_id)
-        with self.db.begin() as conn:
-            r = conn.execute(select(db.tasks.c.steps, db.tasks.c.done_at).where(self._mine(num))).mappings().first()
-            if not r:
-                raise TaskNotFound(GONE)
+        with self._locked(num) as (conn, r):  # two quick ticks wait for each other: neither is lost
             steps = [dict(s) for s in (r["steps"] or [])]
             if r["done_at"] is not None or not 0 <= index < len(steps) \
                     or (text is not None and steps[index].get("text") != text):
@@ -652,13 +703,16 @@ class LocalTasks(TaskProvider):
         return self.get_task(task_id)
 
     def set_due_date(self, task_id: str, date_iso: str) -> None:
-        self.update(task_id, {"due_date": date_iso})
+        self.move(task_id, date_iso)  # a read-back → or its undo: this time only, the repeat keeps its day
 
     def delete_task(self, task_id: str) -> None:
         num = self._num(task_id)
         self.get_task(task_id)
         with self.db.begin() as conn:
             conn.execute(delete(db.tasks).where(self._mine(num)))
+            # Its slide count goes too, so nothing about it is left for a later task to inherit.
+            conn.execute(delete(db.task_slides).where(db.task_slides.c.owner == self.owner,
+                                                      db.task_slides.c.task_id == f"{PREFIX}{num}"))
 
     def delete_for_user(self) -> int:
         with self.db.begin() as conn:

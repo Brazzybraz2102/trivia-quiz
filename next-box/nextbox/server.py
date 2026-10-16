@@ -159,6 +159,7 @@ class TaskIn(BaseModel):
     tags: list[str] | None = None
     steps: list[str | StepIn] | None = None
     minutes: int | None = None
+    slides: int | None = Field(None, ge=-1, le=10_000)  # PATCH: Undo after Break it down puts the slide count back
 
 
 class DumpBody(BaseModel):
@@ -168,6 +169,7 @@ class DumpBody(BaseModel):
 class ReopenBody(BaseModel):
     prev_due: str | None = Field(None, max_length=40)
     prev_steps: list[bool] | None = Field(None, max_length=50)
+    slides: int | None = Field(None, ge=-1, le=10_000)  # its slide count before Done cleared it
 
 
 class MoveBody(BaseModel):
@@ -500,7 +502,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def wins_by_day(name: str, first: date, last: date) -> dict[str, dict]:
         """What someone finished each day from `first` to `last`: {day: {"count", "items", "linked"}}.
         `items` names My list tasks and linked tasks read back from a ticket that's still kept;
-        `linked` counts the linked app's tasks with no name to show (their text isn't stored)."""
+        `linked` counts the linked app's tasks with no name to show (their text isn't stored);
+        `other` (only when there are some) counts My list wins with no name (filled in from an
+        older version, which kept none): they weren't in a linked app."""
         days = {(first + timedelta(days=i)).isoformat(): {"count": 0, "items": [], "linked": 0}
                 for i in range((last - first).days + 1)}
         names: dict[tuple, str] = {}
@@ -517,8 +521,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             label = r["content"] or names.get((r["scan_id"], r["task_id"]))
             if label:
                 day["items"].append(label)
-            else:
+            elif r["source"] in ("linked", "readback"):
                 day["linked"] += 1
+            else:
+                day["other"] = day.get("other", 0) + 1
         return days
 
     def wins_yesterday(name: str) -> int:
@@ -1030,12 +1036,15 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             tasks += [mine._task(r) for r in rows]
         status = connections.status(caller.name)
         linked, linked_error, linked_undo = [], "", False
+        candidates = mine.today()  # for Just one thing: what today's ticket would list (asked of the app once)
         if status.get("connected"):
             try:
                 app_tasks = rctx(caller).tasks.linked
                 linked_undo = getattr(app_tasks, "reopen_task", None) is not None  # can a ✓ be undone there?
-                linked = sorted(app_tasks.today(), key=lambda t: jobs.list_order(t, today))
-                linked = [{**t, "source": status["provider"], "labels": list(t.get("labels") or [])} for t in linked]
+                fetched = [{**t, "source": status["provider"], "labels": list(t.get("labels") or [])}
+                           for t in app_tasks.today()]
+                candidates += fetched
+                linked = sorted(fetched, key=lambda t: jobs.list_order(t, today))
             except Exception as exc:  # the list still works when the linked app is down
                 linked_error = f"{status.get('name', 'Your app')} didn't answer: {exc}"[:300]
         # Slugs, as the Journal and the daily label count them: moved to a later day slug_after+ times.
@@ -1047,19 +1056,12 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 "slides": slides, "slug_after": slug_after,
                 "linked_error": linked_error, "linked_undo": linked_undo, "tags": _tags_with_uses(caller.name),
                 "done_today": len(Wins(accounts.db, caller.name).between(today.isoformat(), today.isoformat())),
-                "one_thing": _one_thing(caller),
+                "one_thing": min(candidates, key=lambda t: jobs._sort_key(t, today), default=None),
                 "marks_waiting": sum(len(_waiting(r)) for r in ctx.store.list_scans(50, by=caller.name))}
 
     def _waiting(rec: dict) -> list[dict]:
         """Marks on a read-back still waiting for the person to confirm or skip."""
         return [p for p in rec.get("needs_confirmation", []) if p.get("status") == "pending"]
-
-    def _one_thing(caller: Caller):
-        c = rctx(caller)
-        try:
-            return jobs.one_thing(c)
-        except Exception:  # a linked app that's down shouldn't hide what's on your own list
-            return jobs.one_thing(dataclasses.replace(c, tasks_factory=lambda: my_list(caller), _tasks=None))
 
     # ----------------------------------------------------------- Get started guide
     SETUP_STEPS = ("tasks", "home", "app", "calendar", "printer", "preview", "today", "snap", "focus")
@@ -1160,28 +1162,39 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             extra["setup_done"] = sorted(set(caller.prefs.get("setup_done") or []) | {"focus"})
         if changes.get("print_with") in ("paper", "none"):
             extra["setup_dismissed"] = sorted(set(caller.prefs.get("setup_dismissed") or []) | {"printer"})
+        changed = {k: v for k, v in changes.items() if caller.prefs.get(k) != v}  # not what was so already
         prefs = accounts.set_prefs(caller.name, {**changes, **extra})
         # Which settings changed, never the answers themselves (what helps can hint at a diagnosis).
-        events.log(caller.name, "setup_quiz", detail={"skipped": skip, "changed": sorted(changes)})
-        return {"prefs": prefs, "changed": changes}
+        events.log(caller.name, "setup_quiz", detail={"skipped": skip, "changed": sorted(changed)})
+        return {"prefs": prefs, "changed": changed}
 
     @app.post("/list")
     def add_list_task(body: TaskIn, caller: Caller = Depends(person)):
         fields = body.model_dump(exclude_none=True)
-        for name in fields.get("tags", []):
-            _ensure_tag(caller, name)
-        task = run(caller, "list_add", my_list(caller).create, fields)
+        fields.pop("slides", None)
+        new = _new_tags(caller, fields)
+        task = run(caller, "list_add", my_list(caller).create_many, [fields], new_tags=new)[0]
         return task
 
-    def _ensure_tag(caller: Caller, name: str) -> None:
-        tags = Tags(accounts.db, caller.name)
+    def _new_tags(caller: Caller, fields: dict) -> list[str]:
+        """Check a task's tags before anything is saved, and say which are new. They're made (white)
+        together with the task, so a save that fails never leaves tags behind."""
+        if fields.get("tags") is None:
+            return []
+        from .mylist import tag_name
         try:
-            known = {t["name"] for t in tags.all()}
-            from .mylist import tag_name
-            if tag_name(name) not in known:
-                tags.set(name, "white")
+            names = list(dict.fromkeys(tag_name(str(t)) for t in fields["tags"]))
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        if len(names) > 8:
+            raise HTTPException(400, "8 tags on one task is the most. Pick the ones that matter.")
+        fields["tags"] = names
+        known = {t["name"] for t in Tags(accounts.db, caller.name).all()}
+        new = [n for n in names if n not in known]
+        if new and len(known) + len(new) > 30:
+            raise HTTPException(400, "30 tags is the limit; fewer tags are easier to use anyway. "
+                                     "Remove one in Settings to make room.")
+        return new
 
     @app.post("/list/dump")
     def brain_dump(body: DumpBody, preview: bool = False, caller: Caller = Depends(person)):
@@ -1305,8 +1318,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.patch("/list/{task_id}")
     def edit_list_task(task_id: str, body: TaskIn, caller: Caller = Depends(person)):
         fields = body.model_dump(exclude_unset=True)
-        for name in fields.get("tags") or []:
-            _ensure_tag(caller, name)
+        restore = fields.pop("slides", None)  # Undo after Break it down: the count the new steps cleared
+        new = _new_tags(caller, fields)
         mine = my_list(caller)
         before = None
         old_steps = None
@@ -1317,13 +1330,19 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 old_steps = [s["text"] for s in had.get("steps") or []]
             except Exception:
                 before = None
-        result = run(caller, "list_edit", mine.update, _local_id(task_id), fields)
+        result = run(caller, "list_edit", mine.update, _local_id(task_id), fields, new_tags=new)
+        slides = Slides(accounts.db, caller.name)
         if before and fields.get("due_date") and fields["due_date"] > before:
-            Slides(accounts.db, caller.name).bump(task_id)  # moved to a later day
+            slides.bump(task_id)  # moved to a later day
         new_steps = [s["text"] for s in result.get("steps") or []]
         if old_steps is not None and set(new_steps) - set(old_steps):
             # A new step: made smaller, a fresh start. (Ticking, reordering or removing steps isn't.)
-            Slides(accounts.db, caller.name).clear(task_id)
+            was = slides.counts().get(task_id)
+            slides.clear(task_id)
+            if was is not None:
+                result = {**result, "slides_was": was}  # what Undo sends back
+        if restore is not None:
+            slides.set(task_id, restore)
         return result
 
     @app.post("/list/{task_id}/done")
@@ -1332,13 +1351,17 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         None when it was finished already (a double tap counts once) or its app can't reopen it."""
         c = rctx(caller)
         undo = run(caller, "list_done", c.tasks.close_task, task_id)
-        Slides(accounts.db, caller.name).clear(task_id)
+        slides = Slides(accounts.db, caller.name)
+        slid = slides.counts().get(task_id)
+        slides.clear(task_id)
         if not is_local(task_id):  # My list counts its own wins; a linked app's task counts here
             events.log(caller.name, "task_done", detail={"source": "linked", "task_id": task_id[:200]},
                        household=caller.household)
             Wins(accounts.db, caller.name, caller.household).add(task_id, ctx.today().isoformat(), "linked",
                                                                  once_a_day=True)
             undo = {} if getattr(getattr(c.tasks, "linked", None), "reopen_task", None) else None
+        if undo is not None and slid is not None:
+            undo = {**undo, "slides": slid}  # Undo puts its slide count back too
         return {"ok": True, "undo": undo}
 
     @app.post("/list/{task_id}/reopen")
@@ -1347,8 +1370,11 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         ticked steps; a linked app's task is reopened there, where the app allows it."""
         body = body or ReopenBody()
         if is_local(task_id):
-            return run(caller, "list_reopen", my_list(caller).reopen, task_id,
+            task = run(caller, "list_reopen", my_list(caller).reopen, task_id,
                        prev_due=body.prev_due, prev_steps=body.prev_steps)
+            if body.slides is not None:
+                Slides(accounts.db, caller.name).set(task_id, body.slides)
+            return task
         tasks = rctx(caller).tasks
         linked = getattr(tasks, "linked", tasks)
         reopen = getattr(tasks, "reopen_task", None)
@@ -1357,6 +1383,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(400, f"Reopen it in {name}.")
         run(caller, "list_reopen", reopen, task_id)  # not linked any more: 409
         Wins(accounts.db, caller.name, caller.household).remove_last(task_id)
+        if body.slides is not None:
+            Slides(accounts.db, caller.name).set(task_id, body.slides)
         return {"ok": True}
 
     @app.post("/list/{task_id}/move")
@@ -1387,14 +1415,21 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             if prev == target:
                 return {"ok": True, "moved": False, "from": prev, "to": target, "task": task if local else None}
             if local:
-                task = tasks.update(task_id, {"due_date": target})  # keeps its time; a weekday repeat skips weekends
+                # This time only: keeps its time, a weekday repeat skips weekends, a repeat keeps its own day.
+                task = tasks.move(task_id, target)
                 now = ((task.get("due") or {}).get("date") or "")[:10] or None
             elif target is None:
                 name = tasks.linked_name() if hasattr(tasks, "linked_name") else "your linked app"
                 raise ValueError(f"Take its date off in {name}.")
             else:
                 tasks.set_due_date(task_id, target)
-                now = target
+                try:  # what the app says now: a move it didn't make isn't counted as a slide
+                    now = ((tasks.get_task(task_id).get("due") or {}).get("date") or "")[:10] or target
+                except Exception:
+                    now = target
+                if now == prev:
+                    name = tasks.linked_name() if hasattr(tasks, "linked_name") else "your linked app"
+                    raise ValueError(f"{name} kept it on the same day. Move it there instead.")
             slides, slid = Slides(accounts.db, caller.name), None
             if prev and now and not body.undo and now > prev:
                 slid = slides.bump(task_id)
@@ -1639,6 +1674,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             Slides(accounts.db, acting_as(caller)).unbump(undone["task_id"])
         elif undone and not is_local(undone["task_id"]):  # My list took its own win back when it reopened
             Wins(accounts.db, acting_as(caller)).remove_last(undone["task_id"], scan_id=scan_id)
+        if undone and undone["mark"] == "done" and undone.get("slides") is not None:
+            Slides(accounts.db, acting_as(caller)).set(undone["task_id"], undone["slides"])  # as before the ✓
         return rec
 
     # ----------------------------------------------------------- journal, wins, slugs
