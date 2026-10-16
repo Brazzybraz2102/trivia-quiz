@@ -124,8 +124,8 @@ def test_a_new_account_with_an_old_name_starts_empty(ctx):
     new = login("sam", temp)
     assert new.post("/auth/password", json={"current": temp, "new": "new sam password"}).status_code == 200
     assert new.get("/list").json()["tasks"] == []
-    assert new.get("/journal").json() == {"days": [], "next_until": new.get("/journal").json()["next_until"],
-                                          "total_pages": 0}
+    fresh = new.get("/journal").json()
+    assert fresh["days"] == [] and fresh["total_pages"] == 0 and not fresh["has_more"]
     assert new.get("/printed").json() == [] and new.get("/scans").json() == []
     assert new.get(f"/printed/{label['id']}/png").status_code == 404
     assert new.get("/journal/wins").json()["total"] == 0

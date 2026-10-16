@@ -36,7 +36,7 @@ from .connections import Builder, Connections, NotConnected
 from .events import Events, ServerSettings
 from .feedback import Feedback, FeedbackError
 from .jobs import Context, print_text
-from .journal import Journal, Slides, slugs as find_slugs
+from .journal import Journal, Slides, Wins, slugs as find_slugs
 from .mylist import TAG_COLORS, LocalTasks, Tags, is_local, parse_dump
 from .printer import COLORS, DRIVERS
 from .printers import REASONS, PrinterError, Printers
@@ -57,6 +57,9 @@ COOKIE = "nextbox_session"
 OAUTH_COOKIE = "nb_oauth"            # proves the browser finishing "Sign in with Google" is the one that started
 RESET_HOLD = 72 * 3600               # after an admin sets a one-time password: no data download or account delete
 STARTED = time.time()
+# Journal photos and tickets: never kept by the browser, so after signing out on a shared phone
+# nobody can open them again from its history or cache.
+PRIVATE = {"Cache-Control": "no-store", "Vary": "Cookie"}
 
 
 class LoginBody(BaseModel):
@@ -121,6 +124,14 @@ class TextBody(BaseModel):
 
 class ConfirmBody(BaseModel):
     decisions: dict[int, str]  # {row: "confirm" | "skip"}
+
+
+class ScanLabelBody(BaseModel):
+    label_id: str  # the ticket the photo shows, picked or typed
+
+
+class UndoBody(BaseModel):
+    row: int
 
 
 class NewUserBody(BaseModel):
@@ -422,46 +433,39 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                                    wins=lambda: wins_yesterday(name),
                                    slides=lambda: Slides(accounts.db, name).counts(),
                                    on_move=lambda tid: Slides(accounts.db, name).bump(tid),
-                                   on_done=lambda tid: Slides(accounts.db, name).clear(tid),
-                                   save_page=lambda **kw: Journal(accounts.db, name, household_of(caller)).add(**kw))
+                                   on_done=lambda tid, **kw: finished(name, household_of(caller), tid, **kw),
+                                   save_page=lambda **kw: Journal(accounts.db, name, household_of(caller)).save_snap(**kw))
+
+    def finished(name: str, household: str, task_id: str, day: str | None = None, scan_id: str | None = None) -> None:
+        """A read-back finished a task. My list counted the win itself; a linked app's task counts
+        here, once per day (it may have been ticked in the app too)."""
+        Slides(accounts.db, name).clear(task_id)
+        if not is_local(task_id):
+            Wins(accounts.db, name, household).add(task_id, day or ctx.today().isoformat(), "readback",
+                                                   scan_id=scan_id, once_a_day=True)
 
     def wins_by_day(name: str, first: date, last: date) -> dict[str, dict]:
-        """What someone finished each day from `first` to `last`: {day: {"count", "items"}}.
-        Counts come from task_done events (My list, and linked tasks ticked in the app) plus
-        read-backs; the names come from My list and read-backs (linked apps' names aren't kept)."""
-        days = {(first + timedelta(days=i)).isoformat(): {"count": 0, "items": []}
+        """What someone finished each day from `first` to `last`: {day: {"count", "items", "linked"}}.
+        `items` names My list tasks and linked tasks read back from a ticket that's still kept;
+        `linked` counts the linked app's tasks with no name to show (their text isn't stored)."""
+        days = {(first + timedelta(days=i)).isoformat(): {"count": 0, "items": [], "linked": 0}
                 for i in range((last - first).days + 1)}
-        start = time.mktime(first.timetuple())
-        end = time.mktime((last + timedelta(days=1)).timetuple())
-        for e in events.query(user=name, since=start, limit=5000):
-            if e["action"] == "task_done" and e["ts"] < end:
-                key = date.fromtimestamp(e["ts"]).isoformat()
-                if key in days:
-                    days[key]["count"] += 1
-        seen: set[str] = set()
-        from sqlalchemy import and_ as _and, select as _select
-
-        from . import db as _db
-        with accounts.db.connect() as conn:
-            for r in conn.execute(_select(_db.tasks.c.id, _db.tasks.c.content, _db.tasks.c.done_at).where(_and(
-                    _db.tasks.c.owner == name, _db.tasks.c.done_at >= int(start), _db.tasks.c.done_at < int(end)))):
-                key = date.fromtimestamp(r.done_at).isoformat()
-                if key in days:
-                    days[key]["items"].append(r.content)
-                    seen.add(f"nb:{r.id}")
-        for rec in ctx.store.list_scans(1000, by=name, since=first.isoformat()):
-            key = rec.get("created_at", "")[:10]
-            if key not in days:
+        names: dict[tuple, str] = {}
+        rows = Wins(accounts.db, name).between(first.isoformat(), last.isoformat())
+        for scan_id in {r["scan_id"] for r in rows if r["scan_id"] and not r["content"]}:
+            rec = ctx.store.get_scan(scan_id) or {}
+            for a in rec.get("applied", []) + rec.get("needs_confirmation", []):
+                names[(scan_id, str(a.get("task_id")))] = a.get("content", "")
+        for r in rows:
+            if r["day"] not in days:
                 continue
-            done = [a for a in rec.get("applied", []) if a.get("mark") == "done"]
-            done += [a for a in rec.get("needs_confirmation", []) if a.get("mark") == "done" and a.get("status") == "applied"]
-            for a in done:
-                tid = str(a.get("task_id", ""))
-                if not is_local(tid):
-                    days[key]["count"] += 1  # My list ones were already counted by their event
-                if tid not in seen:
-                    seen.add(tid)
-                    days[key]["items"].append(a.get("content", ""))
+            day = days[r["day"]]
+            day["count"] += 1
+            label = r["content"] or names.get((r["scan_id"], r["task_id"]))
+            if label:
+                day["items"].append(label)
+            else:
+                day["linked"] += 1
         return days
 
     def wins_yesterday(name: str) -> int:
@@ -594,6 +598,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         _same_origin(request)
         accounts.end_session(_token(request))
         response.delete_cookie(COOKIE, path="/")
+        # Journal photos and tickets are sent no-store; this also clears anything an older version
+        # cached (browsers honour it on https and localhost).
+        response.headers["Clear-Site-Data"] = '"cache"'
         return {"ok": True}
 
     @app.get("/auth/me")
@@ -721,6 +728,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             "tickets": [{k: v for k, v in t.items() if k != "png"} for t in ctx.store.list_printed(10_000, by=caller.name)],
             "read_backs": ctx.store.list_scans(10_000, by=caller.name),
             "journal": Journal(accounts.db, caller.name).pages("0000-00-00", "9999-99-99"),  # photos: GET /journal/{id}/photo
+            "wins": Wins(accounts.db, caller.name).between("0000-00-00", "9999-99-99"),
             "devices": accounts.sessions_for(caller.name),
         }
         events.log(caller.name, "export_data", kind="auth")
@@ -914,7 +922,12 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 linked_error = f"{status.get('name', 'Your app')} didn't answer: {exc}"[:300]
         return {"tasks": tasks, "linked": linked, "linked_name": status.get("name") if status.get("connected") else None,
                 "linked_error": linked_error, "tags": Tags(accounts.db, caller.name).all(),
-                "one_thing": _one_thing(caller)}
+                "one_thing": _one_thing(caller),
+                "marks_waiting": sum(len(_waiting(r)) for r in ctx.store.list_scans(50, by=caller.name))}
+
+    def _waiting(rec: dict) -> list[dict]:
+        """Marks on a read-back still waiting for the person to confirm or skip."""
+        return [p for p in rec.get("needs_confirmation", []) if p.get("status") == "pending"]
 
     def _one_thing(caller: Caller):
         c = rctx(caller)
@@ -1040,14 +1053,20 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             _ensure_tag(caller, name)
         mine = my_list(caller)
         before = None
-        if fields.get("due_date"):
+        old_steps = None
+        if fields.get("due_date") or fields.get("steps"):
             try:
-                before = ((mine.get_task(_local_id(task_id)).get("due") or {}).get("date") or "")[:10]
+                had = mine.get_task(_local_id(task_id))
+                before = ((had.get("due") or {}).get("date") or "")[:10]
+                old_steps = [s["text"] for s in had.get("steps") or []]
             except Exception:
                 before = None
         result = run(caller, "list_edit", mine.update, _local_id(task_id), fields)
         if before and fields.get("due_date") and fields["due_date"] > before:
             Slides(accounts.db, caller.name).bump(task_id)  # moved to a later day
+        new_steps = [s["text"] for s in result.get("steps") or []]
+        if old_steps is not None and new_steps and new_steps != old_steps:
+            Slides(accounts.db, caller.name).clear(task_id)  # made smaller: a fresh start
         return result
 
     @app.post("/list/{task_id}/done")
@@ -1055,8 +1074,11 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         c = rctx(caller)
         run(caller, "list_done", c.tasks.close_task, task_id)
         Slides(accounts.db, caller.name).clear(task_id)
-        if not is_local(task_id):
-            events.log(caller.name, "task_done", detail={"source": "linked"}, household=caller.household)
+        if not is_local(task_id):  # My list counts its own wins; a linked app's task counts here
+            events.log(caller.name, "task_done", detail={"source": "linked", "task_id": task_id[:200]},
+                       household=caller.household)
+            Wins(accounts.db, caller.name, caller.household).add(task_id, ctx.today().isoformat(), "linked",
+                                                                 once_a_day=True)
         return {"ok": True}
 
     @app.post("/list/{task_id}/reopen")
@@ -1118,7 +1140,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         # People see their own tickets; the superadmin sees everyone's (everyone agreed, see DATA_NOTICE).
         if not rec or (rec.get("by") != acting_as(caller) and caller.role != "superadmin"):
             raise HTTPException(404)
-        return FileResponse(path, media_type="image/png")
+        return FileResponse(path, media_type="image/png", headers=PRIVATE)
 
     @app.get("/printed/{label_id}/pdf")
     def printed_pdf(label_id: str, paper: str = "", caller: Caller = Depends(auth)):
@@ -1144,7 +1166,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         data = paper_pdf.ticket_pdf(png, parts, size, code=label_id)
         events.log(caller.name, "print_paper", detail={"id": label_id, "paper": size})
         return Response(data, media_type="application/pdf",
-                        headers={"Content-Disposition": f'inline; filename="next-box-{label_id}.pdf"'})
+                        headers={"Content-Disposition": f'inline; filename="next-box-{label_id}.pdf"', **PRIVATE})
 
     @app.post("/scan")
     async def do_scan(photo: UploadFile = File(...), label_id: str | None = Form(default=None),
@@ -1159,7 +1181,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             chunks.append(chunk)
         data = b"".join(chunks)
         media_type = photo.content_type or "image/jpeg"
-        if media_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
+        if media_type in scan.HEIC_TYPES and not scan.heic_supported():
+            raise HTTPException(415, scan.HEIC_HELP)
+        if media_type not in {"image/jpeg", "image/png", "image/webp", "image/gif", *scan.HEIC_TYPES}:
             raise HTTPException(415, f"unsupported image type {media_type}")
         try:
             data, media_type = scan.prepare_photo(data)  # upright, resized JPEG
@@ -1169,13 +1193,22 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(400, str(exc)) from exc
         fn = vision or scan.claude_vision(ctx.settings)
         rec = run(caller, "scan", scan.scan_photo, rctx(caller), fn, data, media_type, label_id or None)
+        return _scan_reply(caller, rec)
+
+    def _scan_reply(caller: Caller, rec: dict) -> dict:
+        if rec.get("status") == "failed":  # the photo is kept; staff see why reading it failed
+            events.log(caller.name, "scan", ok=False, kind="error", error=rec.get("vision_error", ""),
+                       detail={"id": rec["id"]}, household=caller.household)
         if rec.get("journal_id"):  # the notes live only in the private journal page: show them back to its owner
             page = Journal(accounts.db, acting_as(caller)).get(rec["journal_id"])
-            rec = {**rec, "notes": page["notes"] if page else ""}
+            rec = {**rec, "notes": page["notes"] if page else "", "win": page["win"] if page else ""}
         return rec
 
     @app.get("/scans")
-    def scans(limit: int = Query(20, ge=1, le=500), caller: Caller = Depends(auth)):
+    def scans(limit: int = Query(20, ge=1, le=500), pending: bool = False, caller: Caller = Depends(auth)):
+        """Your read-backs, newest first. pending=true: only those with marks still waiting for you."""
+        if pending:
+            return [r for r in ctx.store.list_scans(50, by=acting_as(caller)) if _waiting(r)][:limit]
         return ctx.store.list_scans(limit, by=acting_as(caller))
 
     def _own_scan(scan_id: str, caller: Caller) -> dict:
@@ -1192,6 +1225,46 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def confirm_scan(scan_id: str, body: ConfirmBody, caller: Caller = Depends(auth)):
         _own_scan(scan_id, caller)
         return run(caller, "scan_confirm", scan.confirm, rctx(caller), scan_id, body.decisions)
+
+    @app.post("/scan/{scan_id}/label")
+    def relabel_scan(scan_id: str, body: ScanLabelBody, caller: Caller = Depends(auth)):
+        """Which ticket the photo shows, when the code couldn't be read or didn't match what was typed."""
+        _own_scan(scan_id, caller)
+        rec = run(caller, "scan_label", scan.relabel, rctx(caller), scan_id, body.label_id[:40])
+        return _scan_reply(caller, rec)
+
+    @app.post("/scan/{scan_id}/retry")
+    def retry_scan(scan_id: str, caller: Caller = Depends(auth)):
+        """Read a kept photo again after reading it failed. Only ever when the person taps Try again."""
+        rec = _own_scan(scan_id, caller)
+        if rec.get("status") != "failed":
+            return _scan_reply(caller, rec)
+        image = Journal(accounts.db, acting_as(caller)).photo(rec["journal_id"]) if rec.get("journal_id") else None
+        if not image:
+            raise HTTPException(409, "That photo wasn't kept, so snap it again.")
+        if not scan_window.allow(caller.name):
+            raise HTTPException(429, "That's a lot of photos this hour. Try again in a bit.")
+        fn = vision or scan.claude_vision(ctx.settings)
+        return _scan_reply(caller, run(caller, "scan_retry", scan.retry, rctx(caller), fn, scan_id, image))
+
+    @app.post("/scan/{scan_id}/undo")
+    def undo_scan(scan_id: str, body: UndoBody, caller: Caller = Depends(auth)):
+        """Reverse one mark the read-back applied (a misread ✓ or →)."""
+        _own_scan(scan_id, caller)
+        c = rctx(caller)
+
+        def go():
+            try:
+                return scan.undo(c, scan_id, body.row)
+            except scan.CantUndo as exc:
+                raise HTTPException(409, str(exc)) from exc
+        rec = dict(run(caller, "scan_undo", go))
+        undone = rec.pop("undone", None)  # only on the call that undid it, so a double tap takes back one
+        if undone and undone["mark"] == "tomorrow":
+            Slides(accounts.db, acting_as(caller)).unbump(undone["task_id"])
+        elif undone and not is_local(undone["task_id"]):  # My list took its own win back when it reopened
+            Wins(accounts.db, acting_as(caller)).remove_last(undone["task_id"], scan_id=scan_id)
+        return rec
 
     # ----------------------------------------------------------- journal, wins, slugs
     # Journal pages are private: only their owner can read them, not even a superadmin.
@@ -1216,22 +1289,36 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         first = last - timedelta(days=days - 1)
         pages = _journal(caller).pages(first.isoformat(), last.isoformat())
         wins = wins_by_day(caller.name, first, last)
+        today = ctx.today()
         out = []
         for i in range(days):
             day = (last - timedelta(days=i)).isoformat()
             mine = [p for p in pages if p["day"] == day]
             if mine or wins[day]["count"] or wins[day]["items"]:
-                out.append({"day": day, "pages": mine, "wins": wins[day]})
-        return {"days": out, "next_until": (first - timedelta(days=1)).isoformat(),
-                "total_pages": _journal(caller).count()}
+                # "Today" and "Yesterday" by this Next Box's clock, the one that files the pages.
+                out.append({"day": day, "pages": mine, "wins": wins[day], "is_today": day == today.isoformat(),
+                            "is_yesterday": day == (today - timedelta(days=1)).isoformat()})
+        # The next older day with anything on it, so "Older days" skips empty weeks and knows when to stop.
+        older = [d for d in (_journal(caller).newest_day_before(first.isoformat()),
+                             Wins(accounts.db, caller.name).newest_day_before(first.isoformat())) if d]
+        return {"days": out, "next_until": max(older) if older else (first - timedelta(days=1)).isoformat(),
+                "has_more": bool(older), "today": today.isoformat(), "total_pages": _journal(caller).count()}
 
     @app.get("/journal/wins")
     def journal_wins(days: int = 7, caller: Caller = Depends(person)):
         days = max(1, min(days, 60))
         last = ctx.today()
         wins = wins_by_day(caller.name, last - timedelta(days=days - 1), last)
-        series = [{"day": d, "count": w["count"]} for d, w in sorted(wins.items())]
+        series = [{"day": d, "count": w["count"], "is_today": d == last.isoformat()} for d, w in sorted(wins.items())]
         return {"series": series, "total": sum(x["count"] for x in series)}
+
+    @app.delete("/journal/slugs/{task_id:path}")
+    def not_a_slug(task_id: str, caller: Caller = Depends(person)):
+        """"Not a slug": off the slugs list until it's moved again."""
+        if not task_id.strip() or len(task_id) > 200:
+            raise HTTPException(404)
+        Slides(accounts.db, caller.name).dismiss(task_id)
+        return {"ok": True}
 
     @app.get("/journal/slugs")
     def journal_slugs(caller: Caller = Depends(person)):
@@ -1285,7 +1372,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         data = _journal(caller).photo(_page_id(page_id))
         if not data:
             raise HTTPException(404)
-        return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+        return Response(data, media_type="image/jpeg", headers=PRIVATE)
 
     # ----------------------------------------------------------- printers & label colors
     @app.get("/printing-options")

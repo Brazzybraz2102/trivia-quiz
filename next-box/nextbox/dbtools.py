@@ -38,11 +38,12 @@ TABLE_NOTES = {
     "feedback_identities": "Who sent each piece of feedback. The only place that link exists.",
     "tasks": "Everyone's built-in to-do list (My list). Linked apps' tasks are never stored here.",
     "tags": "Each person's tags and the label color for each.",
+    "wins": "What each person finished, by day (My list tasks by name; a linked app's by id only).",
 }
-MASKED_COLUMNS = {"hash", "salt", "token_hash", "notes", "photo"}  # notes/photo: private journal pages
+MASKED_COLUMNS = {"hash", "salt", "token_hash", "notes", "photo", "win"}  # notes/photo/win: private journal pages
 # The same columns by table. On SQLite they read as NULL whatever the query calls them
 # (`SELECT notes AS n`, `hash || ''`, `length(notes)`), so an alias can't get past the masking.
-UNREADABLE = {("journal", "notes"), ("journal", "photo"), ("users", "hash"), ("users", "salt"),
+UNREADABLE = {("journal", "notes"), ("journal", "photo"), ("journal", "win"), ("users", "hash"), ("users", "salt"),
               ("sessions", "token_hash")}
 
 
