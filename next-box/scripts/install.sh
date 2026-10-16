@@ -12,6 +12,22 @@ python3 -m venv .venv
 .venv/bin/pip install -q -c constraints.txt -e '.[dev,postgres]'
 .venv/bin/python -m pytest -q
 
+# Labels draw emoji, Chinese/Japanese and Hindi with these fonts. Without them those characters are
+# left off the label (never printed as empty boxes), so this only suggests; it doesn't install anything.
+if command -v fc-list >/dev/null; then
+  FONTS="$(fc-list 2>/dev/null || true)"
+  MISSING=""
+  grep -qi "DejaVu Sans" <<<"$FONTS" || MISSING="$MISSING fonts-dejavu-core"
+  grep -qiE "Noto Sans CJK|WenQuanYi|IPAGothic|Droid Sans Fallback" <<<"$FONTS" || MISSING="$MISSING fonts-noto-cjk"
+  grep -qiE "Noto Sans Devanagari|Lohit Devanagari" <<<"$FONTS" || MISSING="$MISSING fonts-noto-core"
+  grep -qiE "Symbola|Noto Emoji|Unifont Upper" <<<"$FONTS" || MISSING="$MISSING fonts-symbola"
+  if [[ -n "$MISSING" ]]; then
+    echo "For emoji, Chinese, Japanese and Hindi on labels, install these fonts:"
+    echo "  sudo apt install$MISSING"
+  fi
+  unset FONTS MISSING
+fi
+
 if [[ ! -f .env ]]; then
   cp .env.example .env
   echo "Created .env from .env.example."

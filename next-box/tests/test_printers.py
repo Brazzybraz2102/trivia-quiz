@@ -144,7 +144,7 @@ def test_overdue_goes_to_red_labels(two_printers):
     ctx, office, red = two_printers
     r = jobs.print_task(ctx, "3")  # SAMPLE task 3 is overdue
     assert r["reason"] == "overdue" and r["printer"] == {"id": red.id, "name": "Red roll", "color": "red"}
-    assert Image.open(r["png"]).width == 576  # fitted to the 80 mm receipt printer
+    assert Image.open(ctx.store.png_path(r["id"])).width == 576  # fitted to the 80 mm receipt printer
     assert jobs.print_task(ctx, "1")["printer"]["id"] == office.id  # urgent, no rule -> default
 
 
@@ -154,7 +154,7 @@ def test_split_overdue_prints_two_tickets(two_printers):
     r = jobs.print_today(ctx)
     assert r["printer"]["id"] == office.id and len(r["also"]) == 1
     extra = r["also"][0]
-    assert extra["title"] == "Overdue" and extra["printer"]["color"] == "red"
+    assert extra["title"] == "Waiting" and extra["printer"]["color"] == "red"  # gentle words are on by default
     assert [m["task_id"] for m in extra["manifest"]] == ["3"]
     assert "3" not in [m["task_id"] for m in r["manifest"]]
 
@@ -162,7 +162,7 @@ def test_split_overdue_prints_two_tickets(two_printers):
 def test_two_color_roll_prints_overdue_tags_in_red(two_printers):
     ctx, office, red = two_printers
     ctx = dataclasses.replace(ctx, prefs={**ctx.prefs, "color_rules": {}})  # everything to the QL
-    img = Image.open(jobs.print_today(ctx)["png"]).convert("RGB")
+    img = Image.open(ctx.store.png_path(jobs.print_today(ctx)["id"])).convert("RGB")
     raw = img.tobytes()
     reds = sum(1 for i in range(0, len(raw), 3) if raw[i:i + 3] == b"\xff\x00\x00")
     assert reds > 50

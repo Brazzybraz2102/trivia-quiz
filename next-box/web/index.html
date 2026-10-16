@@ -49,6 +49,13 @@
   .dry { font-size:14px; }
   .muted { color:var(--muted); font-size:14px; }
   .result img, .hist img { max-width:100%; border:1px solid var(--line); border-radius:6px; background:#fff; margin-top:8px; }
+  .result { scroll-margin-top:12px; scroll-margin-bottom:84px; }
+  .result h2:focus { outline:none; }
+  .fieldlabel { display:block; font-size:14px; font-weight:600; margin-bottom:4px; }
+  select.wide { width:100%; }
+  #dryWhy:not(:empty)::before { content:"· "; }
+  .paperrow select { padding:6px 8px; font-size:14px; }
+  .paperrow a.go { display:inline-block; background:var(--accent); color:#fff; border-radius:8px; padding:7px 12px; font-size:14px; }
   .pending { border-left:4px solid var(--warn); padding-left:10px; margin:10px 0; }
   .applied { color:var(--ok); }
   .hist .item { display:flex; justify-content:space-between; gap:8px; }
@@ -263,7 +270,8 @@
   <button data-tab="debug" data-min="superadmin" hidden>Debug</button>
 </nav>
 <main>
-  <label class="dry" id="dryRow"><input type="checkbox" id="dry" checked> Preview only (don't send to the printer)</label>
+  <label class="dry" id="dryRow"><input type="checkbox" id="dry" checked> Preview only (don't send to the printer)
+    <span class="muted" id="dryWhy"></span></label>
   <section id="mylist" class="on">
     <div class="card now" id="nowCard">
       <div class="muted">Just one thing</div>
@@ -305,25 +313,30 @@
         <button class="plain" id="showDone">Show done</button>
       </div>
     </div>
-    <div class="card result" id="listResult" hidden></div>
+    <div class="card result" id="listResult" role="status" aria-live="polite" hidden></div>
   </section>
 
   <section id="print">
     <div class="card"><h2>Today</h2>
-      <p class="muted">Today + overdue from <span class="appName">your to-do app</span>.</p>
+      <p class="muted">Today + overdue from <span class="todaySources">my list</span>.</p>
       <button class="go" data-act="today">Print today</button></div>
-    <div class="card"><h2>List from a filter</h2>
-      <input type="text" id="query" placeholder="#Groceries, p1, @errands, tomorrow…">
+    <form class="card" id="listForm"><h2>List from a filter</h2>
+      <label class="fieldlabel" for="query">Which tasks</label>
+      <input type="text" id="query" maxlength="200" placeholder="#errand, today, p1, milk…">
       <p class="muted" id="filterHelp"></p>
-      <div class="row"><button class="go" data-act="list">Print list</button></div></div>
+      <div class="chips" id="filterTags"></div>
+      <div class="row"><button class="go" data-act="list">Print list</button></div></form>
     <div class="card"><h2>Note or new task</h2>
-      <textarea id="text" placeholder="First line becomes the title if you add it to your to-do app"></textarea>
+      <label class="fieldlabel" for="text">What to print</label>
+      <textarea id="text" maxlength="4000" placeholder="First line becomes the title if you add it as a task"></textarea>
+      <p class="muted hint">Adding it as a task? The first line understands <code>tomorrow</code> <code>3pm</code> <code>#tag</code> <code>!</code> like Brain dump.</p>
       <div class="row"><button class="go" data-act="text">Print note</button>
-        <button class="plain" data-act="todo">Add to <span class="appName">my to-do app</span> + print</button></div></div>
+        <button class="plain" data-act="todo">Add to <span class="newTasksTo">my list</span> + print</button></div></div>
     <div class="card"><h2>One task</h2>
-      <input type="text" id="taskid" placeholder="Task ID">
+      <label class="fieldlabel" for="taskid">Task</label>
+      <select id="taskid" class="wide"><option value="">Pick a task…</option></select>
       <div class="row"><button class="go" data-act="task">Print task</button></div></div>
-    <div class="card result" id="printResult" hidden></div>
+    <div class="card result" id="printResult" role="status" aria-live="polite" hidden></div>
   </section>
 
   <section id="scan">
@@ -356,7 +369,13 @@
     <div class="row"><button class="plain" id="jOlder" hidden>Older days</button></div>
   </section>
 
-  <section id="printed"><div id="hist" class="hist"></div></section>
+  <section id="printed">
+    <div class="card"><h2>Printed</h2>
+      <p class="muted">Everything you've printed or previewed. Print any of them on paper, or print it again.</p>
+      <p class="muted" id="histMsg" role="status" aria-live="polite"></p></div>
+    <div id="hist" class="hist"></div>
+    <div class="row"><button class="plain" id="histOlder" hidden>Show older</button></div>
+  </section>
 
   <section id="board">
     <div class="card"><h2>What people are saying</h2>
@@ -482,6 +501,8 @@
     <div class="card" id="printCard"><h2>Printing</h2>
       <label class="setting"><div class="label"><b>Always preview only</b><span>Never send to the printer from my account. Good for testing.</span></div><input type="checkbox" data-pref="always_dry_run"></label>
       <label class="setting"><div class="label"><b>Show "Also waiting"</b><span>List the tasks that didn't fit at the bottom.</span></div><input type="checkbox" data-pref="show_waiting"></label>
+      <label class="setting"><div class="label"><b>Sticker size</b><span>Big text on stickers and tear-off strips, easier to read from across a room.</span></div>
+        <select data-pref="sticker_size" aria-label="Sticker size"><option value="normal">Normal</option><option value="big">Big</option></select></label>
       <label class="setting"><div class="label"><b>Paper size</b><span>For "Print on paper" on a regular printer.</span></div>
         <select data-pref="paper_size" aria-label="Paper size"><option value="letter">US Letter</option><option value="a4">A4</option><option value="a5">A5 journal page</option><option value="half_letter">Half letter journal page (5.5 × 8.5 in)</option></select></label>
       <label class="setting"><div class="label"><b>Default list filter</b><span>Pre-fills "List from a filter".</span></div><input type="text" style="max-width:220px" data-pref="default_filter" placeholder="#Groceries"></label>

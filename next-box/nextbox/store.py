@@ -134,8 +134,10 @@ class Store:
         return row[0] if row else None
 
     def list_printed(self, limit: int = 50, by: str | None = None, household: str | None = None,
-                     since: str | None = None) -> list[dict]:
+                     since: str | None = None, offset: int = 0) -> list[dict]:
         q = select(db.tickets.c.record).order_by(db.tickets.c.created_at.desc(), db.tickets.c.id.desc()).limit(limit)
+        if offset:
+            q = q.offset(offset)
         if by is not None:
             q = q.where(db.tickets.c.by == by)
         if household is not None:
@@ -143,7 +145,8 @@ class Store:
         if since is not None:
             q = q.where(db.tickets.c.created_at >= since)
         with self.db.connect() as conn:
-            return [r[0] for r in conn.execute(q)]
+            # Older records kept the image's file path on this computer: never hand that out.
+            return [{k: v for k, v in r[0].items() if k != "png"} for r in conn.execute(q)]
 
     # --- scans ------------------------------------------------------------
     def save_scan(self, record: dict) -> None:

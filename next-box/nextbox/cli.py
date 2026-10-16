@@ -28,13 +28,16 @@ def _notify(title: str, body: str) -> None:
         subprocess.run(["notify-send", "-a", "Next Box", title, body], check=False)
 
 
-def _show(result: dict) -> None:
+def _show(result: dict, store: Store | None = None) -> None:
     status = result.get("status", "")
     if status == "skipped":
         print(f"skipped: {result['reason']}")
         return
     print(f"{status}: {result.get('kind')} #{result.get('id')} ({len(result.get('manifest', []))} rows)")
-    print(f"png: {result.get('png')}")
+    if result.get("note"):
+        print(result["note"])
+    if store is not None and result.get("id"):
+        print(f"png: {store.png_path(result['id'])}")
 
 
 def _user(accounts: Accounts, action: str, username: str | None, role: str | None = None,
@@ -374,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "focus":
             result = jobs.print_focus(ctx, args.task_id, dry_run=dry)
         elif args.cmd == "clip":
-            text = jobs.read_clipboard().strip()
+            text = jobs.read_clipboard().strip()[:jobs.MAX_TEXT]  # a whole email copied: the label shows the start
             if not text:
                 _notify("Next Box", "Clipboard is empty")
                 return 1
@@ -389,7 +392,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    print(json.dumps(result, indent=2, ensure_ascii=False)) if args.json else _show(result)
+    print(json.dumps(result, indent=2, ensure_ascii=False)) if args.json else _show(result, ctx.store)
     return 0
 
 

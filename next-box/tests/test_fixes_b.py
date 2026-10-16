@@ -485,7 +485,8 @@ def test_gone_tasks_and_odd_inputs_get_plain_answers(ctx):
     r = sam.patch("/list/nb:99999999999999999999999", json={"content": "x"})
     assert r.status_code == 404 and "int" not in r.text
     assert sam.post("/list/12345/done").status_code == 409  # a linked app that isn't connected
-    assert sam.post("/print/task", json={"task_id": ""}).status_code == 404
+    r = sam.post("/print/task", json={"task_id": ""})  # nothing picked: say so (E-11), not "already removed"
+    assert r.status_code == 400 and r.json()["detail"] == "Pick a task from your list first."
     assert sam.post("/list", json={"content": "x", "steps": [1]}).status_code == 422
     steps = sam.post("/list", json={"content": "y", "steps": ["a", {"text": "b", "done": True}]}).json()["steps"]
     assert steps == [{"text": "a", "done": False}, {"text": "b", "done": True}]

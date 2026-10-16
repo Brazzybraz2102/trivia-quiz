@@ -15,7 +15,7 @@ async function api(path, opts = {}) {
 }
 const OFFLINE = "Can't reach Next Box. Check your connection.";
 const errText = (e) => (e.status ? e.message : OFFLINE);  // a fetch that never got an answer has no status
-const png = (id) => `/printed/${id}/png?t=${Date.now()}`;
+const png = (id) => `/printed/${encodeURIComponent(id)}/png`;  // a ticket never changes once made
 const when = (ts) => ts ? new Date(ts * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "never";
 
 let toastTimer;
@@ -92,7 +92,8 @@ function clearPerson() {
   for (const id of ["#scanResult", "#printResult", "#listResult", "#listBody", "#nowText", "#nowStep", "#todayEvents", "#guideSteps",
     "#jDays", "#slugList", "#winsChart", "#winsTotal", "#hist", "#boardList", "#tagList", "#calList", "#appStatus", "#provFields",
     "#calFields", "#sessions", "#pName", "#pFacts", "#pDeletePanel", "#mePanel", "#suTiles", "#suList", "#suNew", "#users",
-    "#activity", "#events", "#diag", "#nuOut", "#ivOut", "#ivList", "#printerList", "#uPeople", "#uTickets", "#udInfo", "#udTempOut"]) {
+    "#activity", "#events", "#diag", "#nuOut", "#ivOut", "#ivList", "#printerList", "#uPeople", "#uTickets", "#udInfo", "#udTempOut",
+    "#taskid", "#filterTags", "#histMsg"]) {
     const el = $(id); if (el) el.innerHTML = "";
   }
   for (const id of ["#printResult", "#listResult", "#todayCard", "#guideCard", "#slugCard", "#jNew", "#activityCard", "#uDetail"]) $(id).hidden = true;
@@ -302,8 +303,8 @@ async function loadConnection() {
   const ready = providers.filter((p) => p.status === "ready" || p.status === "oauth");
   renderGuide();  // the "Link your to-do app" step names only the apps on offer
   const spec = providers.find((p) => p.key === conn.provider);
-  $$(".appName").forEach((el) => el.textContent = conn.connected ? conn.name : "my list");
-  $("#filterHelp").textContent = spec?.filter_help || "";
+  setAppNames();
+  $("#filterHelp").textContent = spec?.filter_help || "Try: all, today, tomorrow, overdue, someday, p1–p4, #tag, or any word.";
   if (conn.connected) {
     $("#appStatus").innerHTML = `Connected to <b>${esc(conn.name)}</b>${conn.account ? ` as ${esc(conn.account)}` : ""}.
       ${conn.legacy ? `<div class="muted">Using the Todoist token in the server's .env. Connect here to use your own.</div>` : ""}
@@ -327,6 +328,13 @@ async function loadConnection() {
       providers.filter((p) => p.status !== "ready" && p.status !== "oauth").map((p) => `<p><b>${esc(p.name)}</b>: ${p.status === "needs_setup" ? "not switched on yet." : "not possible."} ${esc(p.reason)}</p>`).join("");
     renderProviderFields();
   }
+}
+
+// Where Print tab words point: new tasks go to My list unless Settings says the linked app.
+function setAppNames() {
+  const linked = conn?.connected ? conn.name : "";
+  $$(".newTasksTo").forEach((el) => el.textContent = linked && me?.prefs?.new_tasks_to === "linked" ? linked : "my list");
+  $$(".todaySources").forEach((el) => el.textContent = linked ? `my list and ${linked}` : "my list");
 }
 
 function renderProviderFields() {
@@ -382,7 +390,8 @@ $("#mcSignOut").onclick = () => signOut($("#mcMsg"));
 $("#logout").onclick = () => signOut();
 
 // ---------------------------------------------------------------- tabs
-const loaders = { mylist: () => { loadList(); loadToday(); loadGuide(); }, printed: loadHistory, profile: () => loadProfile(),
+const loaders = { mylist: () => { loadList(); loadToday(); loadGuide(); }, printed: () => loadHistory(), profile: () => loadProfile(),
+                  print: () => loadPrintTab(),
                   settings: () => { loadLabels(); loadTags(); loadCalendars(); }, admin: () => { loadAdmin(); loadPrinters(); loadInvites(); },
                   debug: loadDebug, board: () => loadBoard(), usage: () => loadUsage(), journal: () => loadJournal() };
 function markTab(tab) {  // which screen shows, without loading anything
@@ -390,7 +399,7 @@ function markTab(tab) {  // which screen shows, without loading anything
   $$(".bottombar [data-go]").forEach((x) => x.classList.toggle("on", x.dataset.go === tab));
   $("#moreBtn").classList.toggle("on", !["mylist", "print", "scan", "journal"].includes(tab));
   $$("section").forEach((s) => s.classList.toggle("on", s.id === tab));
-  $("#dryRow").hidden = !["mylist", "print"].includes(tab);  // only where things get printed
+  $("#dryRow").hidden = !["mylist", "print", "printed"].includes(tab);  // only where things get printed
 }
 $$("#topnav button").forEach((b) => b.onclick = () => {
   if (!me) return;  // nothing to open before signing in
@@ -399,42 +408,107 @@ $$("#topnav button").forEach((b) => b.onclick = () => {
   loaders[b.dataset.tab]?.();
 });
 
+let statusNow = null;
 async function refreshStatus() {
   try {
-    const s = await api("/status");
-    $("#status").textContent = `${s.printer || "printer"} ${s.printer_reachable ? "online" : "offline"}${s.dry_run_forced ? " · preview only" : ""}`;
+    const s = statusNow = await api("/status");
+    $("#status").textContent = !s.printer ? "Previews · print on paper"
+      : `${s.printer} ${s.printer_reachable ? "online" : "offline"}${s.dry_run_forced ? " · preview only" : ""}`;
   } catch (e) { $("#status").textContent = `server: ${e.message}`; }
+  applyDry();
+}
+// "Preview only" is ticked and locked, with the reason, whenever a real print can't happen anyway,
+// so nobody is asked "Send this to the printer?" for something that will only be a preview.
+function applyDry() {
+  const why = statusNow?.printing_paused ? "Printing is paused by an admin."
+    : me?.prefs?.always_dry_run ? "Always preview only is on in Settings."
+    : statusNow?.dry_run_forced ? "This Next Box makes previews only for now."
+    : statusNow && !statusNow.printer ? "No label printer yet: print previews on paper."
+    : "";
+  if (why) $("#dry").checked = true;
+  $("#dry").disabled = !!why;
+  $("#dryWhy").textContent = why;
 }
 
 // ---------------------------------------------------------------- print
-function showPrint(r) {
-  const box = $("#printResult");
+const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+// A result is shown where it can be seen: scrolled to, and its heading focused (and announced).
+function revealResult(box) {
   box.hidden = false;
-  if (r.status === "skipped") { box.innerHTML = `<b>Skipped</b> ${esc(r.reason)}`; return; }
-  const one = (t) => `<p><b>${t.status === "printed" ? "Printed" : "Preview"}</b> #${esc(t.id)} · ${t.manifest.length} rows
-    ${t.printer ? ` · ${sw(t.printer.color)}${esc(t.printer.name)}` : ""}</p>${t.note ? `<p class="muted">${esc(t.note)}</p>` : ""}
-    ${paperButton(t.id)}<img src="${png(t.id)}" alt="ticket preview">`;
-  box.innerHTML = [...(r.also || []), r].map(one).join("<hr>");
+  box.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" });
+  box.querySelector("h2")?.focus({ preventScroll: true });
+}
+function resultHeading(r) {
+  const all = [r, ...(r.also || [])];
+  return all.some((t) => t.status === "failed") ? "Didn't print" : all.some((t) => t.status === "printed") ? "Printed" : "Preview ready";
+}
+function ticketResult(t) {
+  const n = t.manifest.length;
+  const what = t.status === "printed" ? "Printed" : t.status === "failed" ? "Didn't print" : "Preview";
+  const size = n ? `${n} task${n === 1 ? "" : "s"}` : t.kind === "text" ? "note" : "no tasks";
+  return `<p><b>${what}</b> #${esc(t.id)} · ${size}${t.printer ? ` · ${sw(t.printer.color)}${esc(t.printer.name)}` : ""}</p>
+    ${t.note ? `<p class="${t.status === "failed" ? "err" : "muted"}">${esc(t.note)}</p>` : ""}
+    ${paperButton(t.id)}<img src="${png(t.id)}" alt="Preview of ticket #${esc(t.id)}">`;
+}
+function showResultError(box, msg) {
+  box.innerHTML = `<h2 tabindex="-1">Couldn't print</h2><p class="err">${esc(msg)}</p>`;
+  revealResult(box);
+}
+// While a print is on its way the button says so (and can't be pressed twice); returns "put it back".
+function busy(b, dry) {
+  const html = b.innerHTML;
+  b.disabled = true; b.setAttribute("aria-busy", "true");
+  b.textContent = dry ? "Making preview…" : "Printing…";
+  return () => { b.disabled = false; b.removeAttribute("aria-busy"); b.innerHTML = html; };
 }
 
-$$("[data-act]").forEach((b) => b.onclick = async () => {
-  const dry_run = $("#dry").checked;
+function showPrint(r) {
+  const box = $("#printResult");
+  if (r.status === "skipped") { box.innerHTML = `<h2 tabindex="-1">Skipped</h2><p>${esc(r.reason)}</p>`; return revealResult(box); }
+  box.innerHTML = `<h2 tabindex="-1">${resultHeading(r)}</h2>` + [...(r.also || []), r].map(ticketResult).join("<hr>");
+  revealResult(box);
+}
+
+async function printAct(b) {
   const act = b.dataset.act;
+  const text = $("#text").value, task_id = $("#taskid").value;
+  if (act === "task" && !task_id) return showResultError($("#printResult"), "Pick a task from your list first.");
+  if ((act === "text" || act === "todo") && !text.trim()) return showResultError($("#printResult"), "Type something to print first.");
+  const dry_run = $("#dry").checked;
   const routes = {
     today: ["/print/today", { source: "manual", dry_run }],
     list: ["/print/list", { query: $("#query").value, dry_run }],
-    text: ["/print/text", { text: $("#text").value, dry_run }],
-    todo: ["/print/text", { text: $("#text").value, todo: true, dry_run }],
-    task: ["/print/task", { task_id: $("#taskid").value, dry_run }],
+    text: ["/print/text", { text, dry_run }],
+    todo: ["/print/text", { text, todo: true, dry_run }],
+    task: ["/print/task", { task_id, dry_run }],
   };
   if (!dry_run && !confirm("Send this to the printer?")) return;
-  b.disabled = true;
-  try { showPrint(await api(routes[act][0], { method: "POST", json: routes[act][1] })); }
-  catch (e) {
-    $("#printResult").hidden = false; $("#printResult").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  const done = busy(b, dry_run);
+  try {
+    showPrint(await api(routes[act][0], { method: "POST", json: routes[act][1] }));
+    if (act === "todo") loadPrintTab();  // the new task can be picked under One task now
   }
-  finally { b.disabled = false; }
-});
+  catch (e) { showResultError($("#printResult"), errText(e)); }
+  finally { done(); }
+}
+$$("[data-act]").forEach((b) => b.onclick = (e) => { e.preventDefault(); printAct(b); });
+$("#listForm").onsubmit = (e) => e.preventDefault();  // Enter in the filter box presses Print list
+
+// The One task picker and the tag shortcuts come from your list, so nobody needs a task ID.
+async function loadPrintTab() {
+  let r;
+  try { r = await api("/list"); } catch { return; }
+  const all = [...(r.tasks || []), ...(r.linked || [])];
+  const keep = $("#taskid").value;
+  $("#taskid").innerHTML = `<option value="">${all.length ? "Pick a task…" : "Your list is empty"}</option>` +
+    all.map((t) => `<option value="${esc(t.id)}">${esc(t.content.length > 70 ? t.content.slice(0, 69) + "…" : t.content)}</option>`).join("");
+  if (all.some((t) => t.id === keep)) $("#taskid").value = keep;
+  $("#filterTags").innerHTML = (r.tags || []).map((g) => `<button type="button" data-filter-tag="#${esc(g.name)}">#${esc(g.name)}</button>`).join("");
+}
+$("#filterTags").onclick = (e) => {
+  const b = e.target.closest("[data-filter-tag]");
+  if (b) { $("#query").value = b.dataset.filterTag; $("#query").focus(); }
+};
 
 // ---------------------------------------------------------------- read back
 const VERB = { drop: "Delete", done: "Complete", tomorrow: "Move to tomorrow" };
@@ -477,15 +551,64 @@ $("#scanGo").onclick = async () => {
 };
 
 // ---------------------------------------------------------------- history
-async function loadHistory() {
-  try {
-    const items = await api("/printed?limit=30");
-    $("#hist").innerHTML = items.length ? items.map((r) => `<div class="card">
-      <div class="item"><b>${esc(r.title).slice(0, 50)}</b><span class="muted">#${esc(r.id)}</span></div>
-      <div class="muted">${esc(r.created_at.replace("T", " "))} · ${esc(r.kind)} · ${esc(r.by || r.source)}${r.dry_run ? " · preview" : ""}</div>
-      <img loading="lazy" src="${png(r.id)}" alt=""></div>`).join("") : `<p class="muted">Nothing printed yet.</p>`;
-  } catch (e) { $("#hist").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+const KIND_NAMES = { today: "Daily label", focus: "Just one thing", stickers: "Stickers", strips: "Tear-off strips",
+                     list: "List", task: "One task", text: "Note" };
+const HIST_PAGE = 30;
+let histItems = [];
+function ticketWhen(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const old = Date.now() - d.getTime() > 6 * 864e5;  // this week: "Thu 3:05 PM"; older: "Oct 2, 3:05 PM"
+  return d.toLocaleString([], old ? { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }
+                                  : { weekday: "short", hour: "numeric", minute: "2-digit" });
 }
+// What "Print again" sends: the same task(s) or note again, as a fresh ticket.
+function againRoute(r) {
+  const ids = (r.manifest || []).map((m) => m.task_id);
+  if ((r.kind === "task" || r.kind === "focus") && ids.length) return [`/print/${r.kind}`, { task_id: ids[0] }];
+  if ((r.kind === "stickers" || r.kind === "strips") && ids.length) return [`/print/${r.kind}`, { task_ids: ids }];
+  if (r.kind === "text" && r.text) return ["/print/text", { text: r.text, title: r.title }];
+  return null;
+}
+function histCard(r) {
+  const title = r.title.length > 50 ? r.title.slice(0, 49) + "…" : r.title;
+  const state = r.failed ? " · didn't print" : r.dry_run ? " · preview" : "";
+  return `<div class="card" data-id="${esc(r.id)}">
+    <div class="item"><b>${esc(title)}</b><span class="muted">#${esc(r.id)}</span></div>
+    <div class="muted">${esc(ticketWhen(r.created_at))} · ${esc(KIND_NAMES[r.kind] || r.kind)}${r.by && r.by !== me?.username ? ` · ${esc(r.by)}` : ""}${state}</div>
+    ${paperButton(r.id)}
+    ${againRoute(r) ? `<div class="row"><button class="plain small" data-again>Print again</button></div>` : ""}
+    <img loading="lazy" src="${png(r.id)}" alt="Ticket #${esc(r.id)}: ${esc(r.title)}"></div>`;
+}
+async function loadHistory(more = false) {
+  if (!more) { histItems = []; $("#histMsg").textContent = ""; }
+  try {
+    const items = await api(`/printed?limit=${HIST_PAGE}&offset=${histItems.length}`);
+    histItems.push(...items);
+    if (more) $("#hist").insertAdjacentHTML("beforeend", items.map(histCard).join(""));
+    else $("#hist").innerHTML = items.length ? items.map(histCard).join("")
+      : `<p class="muted">Nothing printed yet. Try Print → Print today, or My list → Stickers.</p>`;
+    $("#histOlder").hidden = items.length < HIST_PAGE;
+  } catch (e) { $("#histMsg").className = "err"; $("#histMsg").textContent = errText(e); }
+}
+$("#histOlder").onclick = () => loadHistory(true);
+$("#hist").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-again]");
+  if (!b) return;
+  const route = againRoute(histItems.find((x) => x.id === b.closest("[data-id]").dataset.id) || {});
+  if (!route) return;
+  const dry_run = $("#dry").checked;
+  if (!dry_run && !confirm("Send this to the printer?")) return;
+  const done = busy(b, dry_run);
+  try {
+    const t = await api(route[0], { method: "POST", json: { ...route[1], dry_run } });
+    await loadHistory();
+    window.scrollTo({ top: 0, behavior: reducedMotion() ? "auto" : "smooth" });
+    $("#histMsg").className = t.status === "failed" ? "err" : "muted";
+    $("#histMsg").textContent = t.status === "failed" ? t.note
+      : `${t.status === "printed" ? "Printed again" : "New preview made"}: #${t.id}, at the top.`;
+  } catch (err) { $("#histMsg").className = "err"; $("#histMsg").textContent = errText(err); done(); }
+});
 
 // ---------------------------------------------------------------- settings
 function confText(v) { $("#confLabel").textContent = `Marks below ${Math.round(v * 100)}% wait for you.`; }
@@ -497,7 +620,8 @@ function loadPrefs(prefs) {
   });
   confText(prefs.confidence);
   $("#dry").checked = true;
-  $("#dry").disabled = !!prefs.always_dry_run;
+  applyDry();
+  setAppNames();
   if (prefs.default_filter && !$("#query").value) $("#query").value = prefs.default_filter;
 }
 
@@ -511,6 +635,7 @@ $$("[data-pref]").forEach((el) => el.onchange = async () => {
     if (me) { me.prefs = prefs; applyLook(); }
     me.prefs = prefs;
     loadPrefs(prefs);
+    if (k === "always_dry_run") refreshStatus();  // the header and the Preview box follow it
     toast("Saved");
   } catch (e) { toast(e.message); loadPrefs(me.prefs); }
 });
@@ -941,24 +1066,22 @@ $("#nowPrint").onclick = () => printFrom("/print/focus", { task_id: $("#nowCard"
 async function printFrom(path, body, button) {
   const dry_run = $("#dry").checked;
   if (!dry_run && !confirm("Send this to the printer?")) return;
-  button.disabled = true;
+  const done = busy(button, dry_run);
   const box = $("#listResult");
   try {
     const r = await api(path, { method: "POST", json: { ...body, dry_run } });
-    box.hidden = false;
-    const one = (t) => `<p><b>${t.status === "printed" ? "Printed" : "Preview"}</b> #${esc(t.id)} · ${t.manifest.length} task${t.manifest.length === 1 ? "" : "s"}
-      ${t.printer ? ` · ${esc(t.printer.name)}` : ""}</p>${t.note ? `<p class="muted">${esc(t.note)}</p>` : ""}${paperButton(t.id)}<img src="${png(t.id)}" alt="label preview">`;
     const gone = (r.missing || []).length;
-    box.innerHTML = (gone ? `<p class="muted">${gone === 1 ? "1 task was" : `${gone} tasks were`} already removed, so ${gone === 1 ? "it isn't" : "they aren't"} on it.</p>` : "") +
-      [r, ...(r.also || [])].map(one).join("<hr>");
-    box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    box.innerHTML = `<h2 tabindex="-1">${resultHeading(r)}</h2>` +
+      (gone ? `<p class="muted">${gone === 1 ? "1 task was" : `${gone} tasks were`} already removed, so ${gone === 1 ? "it isn't" : "they aren't"} on it.</p>` : "") +
+      [r, ...(r.also || [])].map(ticketResult).join("<hr>");
+    revealResult(box);  // the top of the result, so the preview loading below doesn't push it under the tab bar
     loadGuide();
     if (gone) { for (const id of r.missing) picked.delete(id); loadList(); }
   } catch (e) {
-    box.hidden = false; box.innerHTML = `<span class="err">${esc(e.message)}</span>`;
+    showResultError(box, errText(e));
     if (/already removed/.test(e.message)) { picked.clear(); loadList(); }
   }
-  finally { button.disabled = false; }
+  finally { done(); }
 }
 $("#printStickers").onclick = () => printFrom("/print/stickers", picked.size ? { task_ids: [...picked] } : {}, $("#printStickers"));
 $("#printStrips").onclick = () => printFrom("/print/strips", picked.size ? { task_ids: [...picked] } : {}, $("#printStrips"));
@@ -1579,10 +1702,18 @@ $("#jSave").onclick = async () => {
 
 
 // ---------------------------------------------------------------- print on paper (any printer)
+const PAPERS = [["letter", "Letter"], ["a4", "A4"], ["a5", "A5"], ["half_letter", "Half letter"]];
 function paperButton(id) {
-  return `<div class="row"><a class="go small" style="text-decoration:none" href="/printed/${encodeURIComponent(id)}/pdf" target="_blank" rel="noopener">Print on paper</a>
+  const size = me?.prefs?.paper_size || "letter";
+  return `<div class="row paperrow"><a class="go small" style="text-decoration:none" data-paper-link href="/printed/${encodeURIComponent(id)}/pdf?paper=${size}" target="_blank" rel="noopener">Print on paper</a>
+    <select data-paper aria-label="Paper size">${PAPERS.map(([v, n]) => `<option value="${v}"${v === size ? " selected" : ""}>${n}</option>`).join("")}</select>
     <span class="muted">Any printer: opens a page, then use your phone's or computer's Print.</span></div>`;
 }
+document.addEventListener("change", (e) => {
+  if (!e.target.matches?.("select[data-paper]")) return;
+  const link = e.target.closest(".paperrow").querySelector("[data-paper-link]");
+  link.href = link.href.replace(/paper=[a-z_]+/, `paper=${e.target.value}`);
+});
 
 
 // ---------------------------------------------------------------- your account (top right)
