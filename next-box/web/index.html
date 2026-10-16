@@ -8,30 +8,40 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" href="icons/icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Next Box">
-<meta name="theme-color" content="#1f5eff">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#fafaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141414" media="(prefers-color-scheme: dark)">
 <style>
-  :root { --bg:#fafaf7; --fg:#1b1b1b; --muted:#6b6b6b; --line:#dcdcd4; --accent:#1f5eff; --warn:#b3261e; --ok:#1d7a3a; --card:#fff; --note:#fff6d6; --noteFg:#5a4300; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#141414; --fg:#eee; --muted:#a0a0a0; --line:#333; --accent:#7ea2ff; --warn:#ff8a80; --ok:#7bd88f; --card:#1d1d1d; --note:#3a3015; --noteFg:#f3dd9b; } }
-  :root[data-theme="dark"] { --bg:#141414; --fg:#eee; --muted:#a0a0a0; --line:#333; --accent:#7ea2ff; --warn:#ff8a80; --ok:#7bd88f; --card:#1d1d1d; --note:#3a3015; --noteFg:#f3dd9b; }
+  /* --onAccent: text on an --accent fill. --warnFill/--okFill: fills that white text stays readable on.
+     --fieldLine: where to type (3:1 against the card). Sizes are in rem so Settings → Text size reaches them. */
+  :root { color-scheme:light dark; --bg:#fafaf7; --fg:#1b1b1b; --muted:#6b6b6b; --line:#dcdcd4; --accent:#1f5eff; --warn:#b3261e; --ok:#1d7a3a; --card:#fff; --note:#fff6d6; --noteFg:#5a4300;
+          --onAccent:#fff; --warnFill:#b3261e; --okFill:#1d7a3a; --fieldLine:#8a8a84; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#141414; --fg:#eee; --muted:#a0a0a0; --line:#333; --accent:#7ea2ff; --warn:#ff8a80; --ok:#7bd88f; --card:#1d1d1d; --note:#3a3015; --noteFg:#f3dd9b;
+          --onAccent:#0b1530; --warnFill:#b3261e; --okFill:#1d7a3a; --fieldLine:#767676; } }
+  :root[data-theme="dark"] { color-scheme:dark; --bg:#141414; --fg:#eee; --muted:#a0a0a0; --line:#333; --accent:#7ea2ff; --warn:#ff8a80; --ok:#7bd88f; --card:#1d1d1d; --note:#3a3015; --noteFg:#f3dd9b;
+          --onAccent:#0b1530; --warnFill:#b3261e; --okFill:#1d7a3a; --fieldLine:#767676; }
+  :root[data-theme="light"] { color-scheme:light; }
+  :where(a, a:visited) { color:var(--accent); }
   * { box-sizing:border-box; }
   body { margin:0; font:16px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
   header { display:flex; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid var(--line); }
-  header h1 { font-size:20px; margin:0; }
-  #status { font-size:13px; color:var(--muted); margin-left:auto; text-align:right; }
-  .badge { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; padding:2px 7px; border-radius:99px; border:1px solid var(--line); color:var(--muted); }
-  .badge.hot { background:var(--accent); color:#fff; border-color:var(--accent); }
-  .badge.bad { background:var(--warn); color:#fff; border-color:var(--warn); }
-  .banner { background:var(--note); color:var(--noteFg); padding:10px 16px; font-size:14px; border-bottom:1px solid var(--line); }
-  nav { display:flex; gap:4px; padding:8px 16px; border-bottom:1px solid var(--line); overflow-x:auto; }
+  header h1 { font-size:1.25rem; margin:0; white-space:nowrap; }
+  #status { font-size:.8125rem; color:var(--muted); margin-left:auto; text-align:right; }
+  .badge { font-size:.6875rem; font-weight:600; text-transform:uppercase; letter-spacing:.04em; padding:2px 7px; border-radius:99px; border:1px solid var(--line); color:var(--muted); }
+  .badge.hot { background:var(--accent); color:var(--onAccent); border-color:var(--accent); }
+  .badge.bad { background:var(--warnFill); color:#fff; border-color:var(--warnFill); }
+  .banner { background:var(--note); color:var(--noteFg); padding:10px 16px; font-size:.875rem; border-bottom:1px solid var(--line); }
+  nav { display:flex; flex-wrap:wrap; gap:4px; padding:8px 16px; border-bottom:1px solid var(--line); }
   nav button { background:none; border:0; padding:8px 12px; border-radius:8px; color:var(--fg); font:inherit; cursor:pointer; white-space:nowrap; }
-  nav button.on { background:var(--accent); color:#fff; }
+  nav button.on { background:var(--accent); color:var(--onAccent); }
   main { max-width:820px; margin:0 auto; padding:16px; }
   section { display:none; } section.on { display:block; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
-  .card h2 { font-size:16px; margin:0 0 8px; }
-  .card h3 { font-size:14px; margin:14px 0 6px; }
-  input[type=text], input[type=password], input[type=email], input[type=number], textarea, select { width:100%; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  .card h2 { font-size:1.0625rem; margin:0 0 8px; }
+  .card h3 { font-size:1rem; margin:14px 0 6px; }
+  input[type=text], input[type=password], input[type=email], input[type=number], textarea, select { width:100%; padding:10px; border:1px solid var(--fieldLine); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
   input[type=number] { width:90px; }
   select { width:auto; }
   textarea { min-height:80px; }
@@ -39,23 +49,26 @@
   .setting { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 0; border-top:1px solid var(--line); }
   .setting:first-of-type { border-top:0; }
   .setting .label b { display:block; font-weight:600; }
-  .setting .label span { color:var(--muted); font-size:13px; }
+  .setting .label span { color:var(--muted); font-size:.8125rem; }
   .setting input[type=checkbox] { width:22px; height:22px; flex:none; }
-  button.go { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:10px 14px; font:inherit; cursor:pointer; }
-  button.go.warn { background:var(--warn); }
-  button.plain { background:none; border:1px solid var(--line); color:var(--fg); border-radius:8px; padding:9px 13px; font:inherit; cursor:pointer; }
-  button.small { padding:5px 9px; font-size:13px; }
-  button:disabled { opacity:.5; cursor:default; }
-  .dry { font-size:14px; }
-  .muted { color:var(--muted); font-size:14px; }
+  /* Buttons, and links that work like buttons (Print on paper, Download my data, Export CSV). */
+  .go { background:var(--accent); color:var(--onAccent); border:0; border-radius:8px; padding:10px 14px; font:inherit; cursor:pointer; }
+  .go.warn { background:var(--warnFill); color:#fff; }
+  .plain { background:none; border:1px solid var(--fieldLine); color:var(--fg); border-radius:8px; padding:9px 13px; font:inherit; cursor:pointer; }
+  .plain.warn { color:var(--warn); border-color:var(--warn); }
+  a.go, a.plain { display:inline-flex; align-items:center; text-decoration:none; line-height:1.4; }
+  button.small, a.small { padding:5px 9px; font-size:.8125rem; }
+  button:disabled, [aria-disabled="true"] { opacity:.5; cursor:default; }
+  .dry { font-size:.875rem; }
+  .muted { color:var(--muted); font-size:.875rem; }
   .result img, .hist img { max-width:100%; border:1px solid var(--line); border-radius:6px; background:#fff; margin-top:8px; }
   .result { scroll-margin-top:12px; scroll-margin-bottom:84px; }
   .result h2:focus { outline:none; }
-  .fieldlabel { display:block; font-size:14px; font-weight:600; margin-bottom:4px; }
+  .fieldlabel { display:block; font-size:.875rem; font-weight:600; margin-bottom:4px; }
   select.wide { width:100%; }
   #dryWhy:not(:empty)::before { content:"· "; }
-  .paperrow select { padding:6px 8px; font-size:14px; }
-  .paperrow a.go { display:inline-block; background:var(--accent); color:#fff; border-radius:8px; padding:7px 12px; font-size:14px; }
+  .paperrow select { padding:6px 8px; font-size:.875rem; }
+  .paperrow a.go { display:inline-flex; background:var(--accent); color:var(--onAccent); border-radius:8px; padding:7px 12px; font-size:.875rem; }
   .pending { border-left:4px solid var(--warn); padding-left:10px; margin:10px 0; }
   .applied { color:var(--ok); }
   .hist .item { display:flex; justify-content:space-between; gap:8px; }
@@ -65,29 +78,38 @@
   .user:first-child { border-top:0; }
   .user .top { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .user .top b { margin-right:4px; }
-  .ev { font:13px/1.4 ui-monospace, monospace; border-top:1px solid var(--line); padding:6px 0; cursor:pointer; word-break:break-word; }
-  .ev pre { white-space:pre-wrap; margin:6px 0 0; font-size:12px; background:var(--bg); padding:8px; border-radius:6px; max-height:320px; overflow:auto; cursor:text; }
-  .kv { display:grid; grid-template-columns:max-content 1fr; gap:4px 12px; font-size:14px; }
+  .ev { font:.8125rem/1.4 ui-monospace, monospace; border-top:1px solid var(--line); padding:6px 0; cursor:pointer; word-break:break-word; }
+  .ev pre { white-space:pre-wrap; margin:6px 0 0; font-size:.75rem; background:var(--bg); padding:8px; border-radius:6px; max-height:320px; overflow:auto; cursor:text; }
+  .kv { display:grid; grid-template-columns:max-content 1fr; gap:4px 12px; font-size:.875rem; }
   .kv dt { color:var(--muted); } .kv dd { margin:0; word-break:break-word; }
-  .secret { font:600 20px ui-monospace, monospace; letter-spacing:.05em; padding:10px; background:var(--bg); border-radius:8px; text-align:center; margin:8px 0; }
-  #toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); background:var(--fg); color:var(--bg); padding:8px 14px; border-radius:8px; font-size:14px; opacity:0; transition:opacity .2s; pointer-events:none; }
+  .secret { font:600 1.25rem ui-monospace, monospace; letter-spacing:.05em; padding:10px; background:var(--bg); border-radius:8px; text-align:center; margin:8px 0; }
+  /* Above the phone tab bar; inside an open dialog it's moved into the dialog (app.js toast()), above the dimmed backdrop. */
+  #toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); z-index:20; display:flex; align-items:center; gap:8px; width:max-content; max-width:calc(100vw - 32px);
+           background:var(--fg); color:var(--bg); padding:8px 14px; border-radius:8px; font-size:.9375rem; opacity:0; transition:opacity .2s; pointer-events:none; }
   #toast.show { opacity:1; }
-  #fb { position:fixed; right:16px; bottom:16px; }
+  #toast.err { background:var(--warnFill); color:#fff; }
+  #toast.show.err { pointer-events:auto; }  /* an error stays until it's read: hover or focus pauses it, × closes it */
+  #toast button { background:none; border:0; color:inherit; font:inherit; font-size:1.25rem; line-height:1; padding:4px 8px; margin:-4px -8px -4px 0; cursor:pointer; }
+  #toast button[hidden] { display:none; }
+  #fb { position:fixed; right:16px; bottom:16px; z-index:10; }
+  /* The floating button only where there's room beside the page. Narrower (phones, tablets), it covered
+     Done buttons and other controls on the right; Send feedback is in the account menu and Settings → Help. */
+  @media (max-width:1160px) { #fb { display:none; } }
   .warnbox { border-color:var(--warn); }
   .field { margin-top:8px; }
-  .field label { display:block; font-size:14px; font-weight:600; }
-  .field .muted { font-size:12px; }
+  .field label { display:block; font-size:.875rem; font-weight:600; }
+  .field .muted { font-size:.75rem; }
   dialog { border:1px solid var(--line); border-radius:14px; padding:18px; max-width:520px; width:calc(100% - 32px); background:var(--card); color:var(--fg); }
   dialog::backdrop { background:rgba(0,0,0,.4); }
-  dialog h2 { margin:0 0 6px; font-size:18px; }
+  dialog h2 { margin:0 0 6px; font-size:1.125rem; }
   .seg { display:flex; gap:4px; margin:10px 0; }
-  .seg button, .chips button { border:1px solid var(--line); background:none; color:var(--fg); border-radius:99px; padding:6px 12px; font:inherit; font-size:14px; cursor:pointer; }
-  .seg button.on, .chips button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .seg button, .chips button { border:1px solid var(--fieldLine); background:none; color:var(--fg); border-radius:99px; padding:6px 12px; font:inherit; font-size:.875rem; cursor:pointer; }
+  .seg button.on, .chips button.on { background:var(--accent); border-color:var(--accent); color:var(--onAccent); }
   .chips { display:flex; gap:6px; flex-wrap:wrap; margin-top:4px; }
   .linkish { background:none; border:0; color:var(--accent); font:inherit; cursor:pointer; padding:0; text-decoration:underline; }
-  .fbitem .q { color:var(--muted); font-size:13px; margin-top:6px; }
+  .fbitem .q { color:var(--muted); font-size:.8125rem; margin-top:6px; }
   .fbitem .reply { border-left:3px solid var(--accent); padding-left:10px; margin-top:8px; }
-  #revmark { text-align:center; font-size:11px; color:var(--muted); padding:18px 16px 70px; opacity:.8; }
+  #revmark { text-align:center; font-size:.75rem; color:var(--muted); padding:18px 16px 70px; }
   .bars { display:flex; align-items:flex-end; gap:3px; height:90px; margin-top:12px; }
   .bars div { flex:1; background:var(--accent); border-radius:3px 3px 0 0; min-height:2px; position:relative; }
   .swatch { display:inline-block; width:11px; height:11px; border-radius:3px; border:1px solid var(--line); vertical-align:-1px; margin-right:4px; }
@@ -96,12 +118,12 @@
   .tickets { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; }
   .tickets img { width:100%; border:1px solid var(--line); border-radius:6px; background:#fff; }
   .center { max-width:400px; margin:12vh auto 0; padding:0 16px; }
-  .center label { display:block; margin-top:10px; font-size:14px; }
+  .center label { display:block; margin-top:10px; font-size:.875rem; }
   .center input { margin-top:4px; }
-  .center .hint { display:block; font-size:13px; margin-top:3px; }
+  .center .hint { display:block; font-size:.8125rem; margin-top:3px; }
   .brand { text-align:center; margin:0 0 16px; }
   .brand img { display:block; margin:0 auto; border-radius:14px; }
-  .brand h1 { font-size:26px; margin:8px 0 4px; }
+  .brand h1 { font-size:1.625rem; margin:8px 0 4px; }
   .brand p { margin:0 auto; max-width:340px; }
   #login a, #mustChange a, #noticeDialog a { color:var(--accent); }  /* readable in dark mode too */
   .guidemini { display:block; width:100%; background:none; border:0; padding:0; font:inherit; font-weight:600; color:var(--fg); text-align:left; cursor:pointer; }
@@ -109,8 +131,8 @@
   /* Super admin: users */
   .tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(118px, 1fr)); gap:8px; }
   .tile { background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:10px; text-align:left; font:inherit; color:var(--fg); cursor:pointer; }
-  .tile b { display:block; font-size:22px; }
-  .tile span { font-size:12px; color:var(--muted); }
+  .tile b { display:block; font-size:1.375rem; }
+  .tile span { font-size:.75rem; color:var(--muted); }
   .tile.on { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
   .filters { display:grid; grid-template-columns:1fr auto auto auto; gap:8px; margin-top:12px; }
   @media (max-width:620px) { .filters { grid-template-columns:1fr 1fr; } .filters input { grid-column:1 / -1; } }
@@ -119,19 +141,19 @@
   .urow input[type=checkbox] { width:20px; height:20px; flex:none; margin-top:3px; }
   .urow .who { flex:1; min-width:0; }
   .urow .who .top { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
-  .urow .who .muted { font-size:13px; overflow-wrap:anywhere; }
+  .urow .who .muted { font-size:.8125rem; overflow-wrap:anywhere; }
   .bulkbar[hidden] { display:none; }
   .filters > * { min-width:0; width:100%; }
   .bulkbar { position:sticky; top:0; z-index:2; background:var(--note); color:var(--noteFg); border-radius:10px; padding:8px 10px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
   #userDialog { max-width:640px; }
-  #userDialog h3 { font-size:14px; margin:16px 0 6px; border-top:1px solid var(--line); padding-top:12px; }
-  .toggles label { display:flex; gap:8px; align-items:center; padding:4px 0; font-size:15px; }
+  #userDialog h3 { font-size:1rem; margin:16px 0 6px; border-top:1px solid var(--line); padding-top:12px; }
+  .toggles label { display:flex; gap:8px; align-items:center; padding:4px 0; font-size:.9375rem; }
   .toggles input { width:20px; height:20px; }
-  .mini { font-size:13px; border-top:1px solid var(--line); padding:5px 0; overflow-wrap:anywhere; }
+  .mini { font-size:.8125rem; border-top:1px solid var(--line); padding:5px 0; overflow-wrap:anywhere; }
   /* My list */
   .tc-red{--t:#d93025} .tc-orange{--t:#ef7d1a} .tc-yellow{--t:#e8b500} .tc-green{--t:#2e9d4f}
   .tc-blue{--t:#2a6ff0} .tc-pink{--t:#e0509b} .tc-purple{--t:#8a4fd8} .tc-white{--t:#9a9a92}
-  .tag { display:inline-block; font-size:12px; font-weight:600; padding:1px 8px; border-radius:99px; border:2px solid var(--t); color:var(--fg); margin-right:4px; }
+  .tag { display:inline-block; font-size:.75rem; font-weight:600; padding:1px 8px; border-radius:99px; border:2px solid var(--t); color:var(--fg); margin-right:4px; }
   .tag.solid { background:var(--t); color:#fff; }
   .now { border:2px solid var(--accent); }
   .now .big { font-size:26px; font-weight:700; line-height:1.2; margin:6px 0; overflow-wrap:anywhere; }
@@ -140,34 +162,37 @@
   .task:first-child { border-top:0; }
   .task .pick { width:22px; height:22px; flex:none; margin-top:2px; }
   .task .body { flex:1; min-width:0; }
-  .task .text { font-size:17px; overflow-wrap:anywhere; }
+  .task .text { font-size:1.0625rem; overflow-wrap:anywhere; }
   .task .text.urgent { font-weight:700; }
-  .task .meta { font-size:13px; color:var(--muted); margin-top:2px; }
+  .task .meta { font-size:.8125rem; color:var(--muted); margin-top:2px; }
   .task .acts { display:flex; gap:4px; flex:none; }
   .task button.done { border:2px solid var(--ok); color:var(--ok); background:none; border-radius:50%; width:36px; height:36px; font-size:18px; cursor:pointer; }
-  .group { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:14px 0 2px; }
+  .group { font-size:.8125rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:14px 0 2px; }
   .printbar { position:sticky; bottom:0; background:var(--bg); border-top:1px solid var(--line); padding:10px 0; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-  .hint code { background:var(--bg); padding:1px 5px; border-radius:4px; border:1px solid var(--line); font-size:13px; }
+  .hint code { background:var(--bg); padding:1px 5px; border-radius:4px; border:1px solid var(--line); font-size:.8125rem; }
   .guide .bar { height:8px; background:var(--line); border-radius:99px; overflow:hidden; margin:8px 0 4px; }
   .guide .bar div { height:100%; background:var(--ok); border-radius:99px; transition:width .3s; }
   .step { display:flex; gap:10px; padding:10px 0; border-top:1px solid var(--line); }
-  .step .mark { flex:none; width:26px; height:26px; border-radius:50%; border:2px solid var(--line); display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; }
-  .step.done .mark { background:var(--ok); border-color:var(--ok); color:#fff; }
+  .step .mark { flex:none; width:26px; height:26px; border-radius:50%; border:2px solid var(--line); display:flex; align-items:center; justify-content:center; font-size:.875rem; font-weight:700; }
+  .step.done .mark { background:var(--okFill); border-color:var(--okFill); color:#fff; }
   .step.done .title { color:var(--muted); text-decoration:line-through; }
   .step .title { font-weight:600; }
   .step.next { background:var(--note); color:var(--noteFg); margin:0 -14px; padding:10px 14px; border-radius:10px; border-top:0; }
   .step.next .muted { color:inherit; opacity:.85; }
-  .avatar { flex:none; width:38px; height:38px; border-radius:50%; border:0; background:var(--accent); color:#fff; font:700 16px system-ui, sans-serif; cursor:pointer; }
+  .avatar { flex:none; width:38px; height:38px; border-radius:50%; border:0; background:var(--accent); color:var(--onAccent); font:700 1rem system-ui, sans-serif; cursor:pointer; }
   #meDialog { max-width:420px; }
   .menu button, .menu a { display:flex; width:100%; align-items:center; gap:10px; background:none; border:0; border-top:1px solid var(--line); padding:12px 4px; font:inherit; color:var(--fg); text-align:left; cursor:pointer; text-decoration:none; }
   .menu button:first-child { border-top:0; }
   .menu .warn { color:var(--warn); }
   .pwrow { position:relative; display:block; }
   .pwrow input { padding-right:64px; }
-  .pwrow button { position:absolute; right:6px; top:50%; transform:translateY(-50%); background:none; border:0; color:var(--accent); font:inherit; font-size:14px; cursor:pointer; padding:6px; }
+  .pwrow button { position:absolute; right:6px; top:50%; transform:translateY(-50%); background:none; border:0; color:var(--accent); font:inherit; font-size:.875rem; cursor:pointer; padding:6px; }
   html[data-text="large"] { font-size:19px; } html[data-text="xlarge"] { font-size:22px; }
   html[data-text="large"] body { font-size:19px; } html[data-text="xlarge"] body { font-size:22px; }
-  #setJump button { font-size:13px; }
+  html[data-text] #nowText { font-size:1.625rem; } html[data-text] #nowStep { font-size:1rem; }
+  /* The phone tab bar grows with the text, so the sticky print bar sits a little higher. */
+  @media (max-width:720px) { html[data-text] .printbar { bottom:calc(24px + 2.3rem + env(safe-area-inset-bottom)); } }
+  #setJump button { font-size:.8125rem; }
   :focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
   #revmark a { color:var(--muted); }
   .bottombar { display:none; }
@@ -175,18 +200,17 @@
     #topnav { display:none; }
     .bottombar { display:flex; position:fixed; left:0; right:0; bottom:0; z-index:5; background:var(--card); border-top:1px solid var(--line);
                  padding:6px 4px calc(6px + env(safe-area-inset-bottom)); }
-    .bottombar button, .bottombar button.on { flex:1; background:none; border:0; border-radius:0; color:var(--muted); font:12px system-ui, sans-serif; display:flex; flex-direction:column; align-items:center; gap:2px; padding:4px; cursor:pointer; }
-    .bottombar button span { font-size:20px; line-height:1.1; }
+    .bottombar button, .bottombar button.on { flex:1; background:none; border:0; border-radius:0; color:var(--muted); font:.75rem system-ui, sans-serif; display:flex; flex-direction:column; align-items:center; gap:2px; padding:4px; cursor:pointer; }
+    .bottombar button span { font-size:1.25rem; line-height:1.1; }
     .bottombar button.on { color:var(--accent); font-weight:700; }
-    #fb { bottom:calc(76px + env(safe-area-inset-bottom)); width:46px; height:46px; padding:0; border-radius:50%; font-size:0; }
-    #fb::before { content:"💬"; font-size:20px; }
     #revmark { padding-bottom:110px; }
+    #toast { bottom:calc(4.75rem + env(safe-area-inset-bottom)); }
     .printbar { bottom:calc(64px + env(safe-area-inset-bottom)); }
   }
   .wins { display:flex; align-items:flex-end; gap:6px; height:88px; margin:6px 0 2px; }
-  .wins div { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; font-size:11px; color:var(--muted); }
+  .wins div { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; font-size:.6875rem; color:var(--muted); }
   .wins div i { display:block; width:100%; max-width:34px; background:var(--ok); border-radius:4px 4px 0 0; min-height:2px; }
-  .jday h3 { margin:0 0 6px; }
+  .jday h3 { margin:0 0 6px; font-size:1.125rem; }
   .jpage { border-top:1px solid var(--line); padding:10px 0; }
   .jpage img { max-width:100%; max-height:340px; border-radius:6px; border:1px solid var(--line); display:block; margin-bottom:8px; }
   .jpage textarea { min-height:90px; }
@@ -194,19 +218,19 @@
   .slug { display:flex; justify-content:space-between; gap:8px; align-items:center; padding:8px 0; border-top:1px solid var(--line); flex-wrap:wrap; }
   /* Snap and the journal */
   .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
-  .navcount { display:inline-block; min-width:18px; padding:0 5px; margin-left:5px; border-radius:99px; background:var(--warn); color:#fff; font:700 11px/18px system-ui, sans-serif; text-align:center; vertical-align:1px; }
+  .navcount { display:inline-block; min-width:1.125rem; padding:0 5px; margin-left:5px; border-radius:99px; background:var(--warnFill); color:#fff; font:700 .6875rem/1.125rem system-ui, sans-serif; text-align:center; vertical-align:1px; }
   .navcount[hidden] { display:none; }
   .bottombar button { position:relative; }
-  .bottombar button span.navcount { position:absolute; top:0; left:calc(50% + 6px); font-size:11px; line-height:18px; margin:0; }
+  .bottombar button span.navcount { position:absolute; top:0; left:calc(50% + 6px); font-size:.6875rem; line-height:1.125rem; margin:0; }
   #scanPreview { display:block; max-width:100%; max-height:260px; margin-top:10px; border-radius:8px; border:1px solid var(--line); background:#fff; }
   .spin { display:inline-block; width:16px; height:16px; margin-right:8px; vertical-align:-3px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:spin 1s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .spin { animation-duration:4s; } }
   .scanrec h2:focus { outline:none; }
   .scanrec .done-row { display:flex; justify-content:space-between; align-items:baseline; gap:8px; margin:6px 0; }
-  .scanrec .ignored { color:var(--muted); font-size:13px; margin:3px 0; }
-  .sectionhead { font-size:15px; margin:18px 0 8px; }
-  .tickets button { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:6px; color:var(--fg); font:inherit; font-size:13px; text-align:left; cursor:pointer; }
+  .scanrec .ignored { color:var(--muted); font-size:.8125rem; margin:3px 0; }
+  .sectionhead { font-size:1.0625rem; margin:18px 0 8px; }
+  .tickets button { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:6px; color:var(--fg); font:inherit; font-size:.8125rem; text-align:left; cursor:pointer; }
   .tickets button span { display:block; margin-top:4px; }
   .recent { display:flex; flex-wrap:wrap; gap:4px 8px; width:100%; background:none; border:0; border-top:1px solid var(--line); padding:10px 2px; color:var(--fg); font:inherit; text-align:left; cursor:pointer; }
   .recent:first-child { border-top:0; }
@@ -219,7 +243,7 @@
   .wins div.today span::after { content:""; display:block; width:6px; height:6px; margin:2px auto 0; border-radius:50%; background:var(--accent); }
   #photoDialog { max-width:920px; }
   #photoDialog img { display:block; max-width:100%; max-height:75vh; margin:0 auto; border-radius:6px; }
-  input[type=date] { padding:9px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  input[type=date], input[type=time] { padding:9px 10px; min-height:44px; border:1px solid var(--fieldLine); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
   :root[data-theme="dark"] input[type=date] { color-scheme:dark; }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) input[type=date] { color-scheme:dark; } }
   .tagrow { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
@@ -232,7 +256,7 @@
   }
   .setting[hidden], .menu [hidden] { display:none; }
   .setting .label .err { display:block; color:var(--warn); }
-  input[type=url] { width:100%; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  input[type=url] { width:100%; padding:10px; border:1px solid var(--fieldLine); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
   #mePanel a, #pDeletePanel a { color:var(--accent); }
   /* Settings: the jump bar stays at the top while you scroll, and a card's heading lands below it. */
   #setJump { position:sticky; top:0; z-index:4; background:var(--bg); padding:6px 0; }
@@ -244,8 +268,29 @@
   }
   .device { display:flex; gap:8px; align-items:center; padding:8px 0; border-top:1px solid var(--line); }
   .device:first-child { border-top:0; }
-  .device .muted { font-size:13px; overflow-wrap:anywhere; }
+  .device .muted { font-size:.8125rem; overflow-wrap:anywhere; }
   .calstatus:empty { display:none; }
+  .menu [aria-current="page"] { color:var(--accent); font-weight:700; }
+  /* What has focus is never hidden under the phone tab bar (or the top edge). */
+  html { scroll-padding-top:12px; scroll-padding-bottom:24px; }
+  /* Nothing pushes the page sideways: long lists (household names, paper sizes) shrink instead. */
+  select { max-width:100%; }
+  .setting > *, .row > *, .filters > * { min-width:0; }
+  /* Phones: everything you tap is at least 44px high. */
+  @media (max-width:720px) {
+    html { scroll-padding-bottom:calc(80px + env(safe-area-inset-bottom)); }
+    button.small, a.small, .linkish, summary { min-height:44px; padding:10px 12px; }
+    .avatar { width:44px; height:44px; }
+    #revmark a { display:inline-block; padding:10px 6px; }
+  }
+  /* Small phones: the title stays on one line; the printer status gets its own line. */
+  @media (max-width:400px) {
+    header { flex-wrap:wrap; row-gap:4px; }
+    header #status { order:5; flex-basis:100%; margin-left:0; text-align:left; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition:none !important; scroll-behavior:auto !important; }
+  }
 </style>
 </head>
 <body>
@@ -313,7 +358,7 @@
   <button data-tab="scan">Snap<span class="navcount" data-waiting hidden></span></button>
   <button data-tab="journal">Journal</button>
   <button data-tab="printed">Printed</button>
-  <button data-tab="board">Feedback</button>
+  <button data-tab="board">Feedback board</button>
   <button data-tab="profile">Profile</button>
   <button data-tab="settings">Settings</button>
   <button data-tab="admin" data-min="admin" hidden>Admin</button>
@@ -333,7 +378,7 @@
       <div class="step muted" id="nowStep"></div>
       <div class="row">
         <button class="go" id="nowDone">Done ✓</button>
-        <button class="plain" id="nowPrint">Print it big</button>
+        <button class="plain" id="nowPrint">Print just this</button>
         <button class="plain" id="nowSkip">Not now</button>
       </div>
     </div>
@@ -351,10 +396,10 @@
 
     <div class="card" id="todayCard" hidden><h2>Today's calendar</h2><div id="todayEvents"></div></div>
 
-    <div class="card"><h2>Brain dump</h2>
-      <textarea id="dumpText" placeholder="Everything on your mind, one per line. Don't sort it, just get it out."></textarea>
-      <p class="muted hint">Optional: <code>#errand</code> tag · <code>!</code> urgent · <code>tomorrow</code> <code>fri</code> · <code>3pm</code> · <code>~15m</code> how long · <code>every day</code></p>
-      <div class="row"><button class="go" id="dumpGo">Add to my list</button><span id="dumpMsg" class="muted"></span></div>
+    <div class="card"><h2 id="dumpHead">Brain dump</h2>
+      <textarea id="dumpText" aria-labelledby="dumpHead" aria-describedby="dumpHint" placeholder="Everything on your mind, one per line. Don't sort it, just get it out."></textarea>
+      <p class="muted hint" id="dumpHint">Optional: <code>#errand</code> tag · <code>!</code> urgent · <code>tomorrow</code> <code>fri</code> · <code>3pm</code> · <code>~15m</code> how long · <code>every day</code></p>
+      <div class="row"><button class="go" id="dumpGo">Add to my list</button><span id="dumpMsg" class="muted" role="status"></span></div>
     </div>
 
     <div class="card"><h2>My list</h2>
@@ -396,7 +441,8 @@
   <section id="scan">
     <div class="card"><h2>Snap your page</h2>
       <p class="muted">Mark the label ✓ done, → move, ✗ drop, then take a photo. In a journal, get both pages in the photo:
-        your handwritten notes are read too and saved to your Journal. Drops and anything uncertain wait for you here.</p>
+        your handwritten notes are read too and saved to your Journal. Drops and anything uncertain wait for you here.
+        Your photo is read by Claude (Anthropic).</p>
       <input type="file" id="photoCam" class="sr-only" accept="image/*" capture="environment" tabindex="-1" aria-hidden="true">
       <input type="file" id="photo" class="sr-only" accept="image/*" tabindex="-1" aria-hidden="true">
       <div class="row"><button class="go" id="snapCam" type="button">📷 Take a photo</button>
@@ -425,7 +471,7 @@
       <div class="row"><button class="go" id="jWrite">Write a note</button><button class="plain" data-go-tab="scan">Snap a page</button></div>
       <div id="jNew" hidden>
         <div class="row"><label for="jDay">For</label><input type="date" id="jDay"></div>
-        <label for="jText" class="sr-only">Your note</label>
+        <label for="jText" class="fieldlabel">Your note</label>
         <textarea id="jText" placeholder="How did today go? What helped? What got in the way?"></textarea>
         <div class="row"><button class="go" id="jSave">Save</button><button class="plain" id="jCancel">Cancel</button></div>
       </div>
@@ -480,9 +526,9 @@
 
     <div class="card"><h2>Password</h2>
       <form id="pwForm" autocomplete="on">
-        <div class="row"><span class="pwrow" style="flex:1"><input type="password" id="pwCur" placeholder="Current password" aria-label="Current password" autocomplete="current-password" required>
+        <div class="field"><label for="pwCur">Current password</label><span class="pwrow"><input type="password" id="pwCur" autocomplete="current-password" required>
           <button type="button" data-show="pwCur">Show</button></span></div>
-        <div class="row"><span class="pwrow" style="flex:1"><input type="password" id="pwNew" placeholder="New password (8+ characters)" aria-label="New password" autocomplete="new-password" minlength="8" required>
+        <div class="field"><label for="pwNew">New password (8+ characters)</label><span class="pwrow"><input type="password" id="pwNew" autocomplete="new-password" minlength="8" required>
           <button type="button" data-show="pwNew">Show</button></span></div>
         <div class="row"><button class="go" type="submit">Change password</button><span id="pwMsg" class="muted" role="alert"></span></div>
       </form>
@@ -499,7 +545,7 @@
       <p class="muted" id="noticeText"></p>
       <p class="muted" id="noticeWhen"></p>
       <p class="muted">Download my data saves one .zip file: your list, settings, journal pages and photos, and ticket images.</p>
-      <div class="row"><a class="plain" href="/auth/export?format=zip" style="text-decoration:none;color:inherit;border:1px solid var(--line);border-radius:8px;padding:9px 13px">Download my data</a>
+      <div class="row"><a class="plain" href="/auth/export?format=zip">Download my data</a>
         <button class="go warn" id="pDelete">Delete my account</button></div>
       <div id="pDeletePanel"></div>
     </div>
@@ -520,7 +566,7 @@
       <label class="setting"><div class="label"><b>Text size</b><span>Bigger text everywhere in the app.</span></div>
         <select data-pref="text_size" aria-label="Text size"><option value="normal">Normal</option><option value="large">Large</option><option value="xlarge">Extra large</option></select></label>
       <label class="setting"><div class="label"><b>Open to</b><span>The screen you see when Next Box opens.</span></div>
-        <select data-pref="start_tab" aria-label="Open to"><option value="mylist">My list</option><option value="print">Print</option><option value="journal">Journal</option></select></label>
+        <select data-pref="start_tab" aria-label="Open to"><option value="mylist">My list</option><option value="print">Print</option><option value="scan">Snap</option><option value="journal">Journal</option></select></label>
       <label class="setting"><div class="label"><b>24-hour times</b><span>19:00 instead of 7:00p.</span></div><input type="checkbox" data-pref="time_24h"></label>
       <label class="setting"><div class="label"><b>New tasks go to</b><span>When you have a linked to-do app.</span></div>
         <select data-pref="new_tasks_to" aria-label="New tasks go to"><option value="nextbox">My list</option><option value="linked">My linked app</option></select></label>
@@ -529,7 +575,8 @@
     <div class="card" id="tagCard"><h2>Tags &amp; colors</h2>
       <p class="muted">Each tag has a color. Stickers print on the roll loaded with that color, or with the tag's pattern on plain white labels.</p>
       <div id="tagList">…</div>
-      <form class="row" id="tagForm"><input type="text" id="newTag" placeholder="New tag, e.g. errand" style="max-width:200px" maxlength="24" aria-label="New tag name" autocapitalize="none">
+      <label class="fieldlabel" for="newTag" style="margin-top:10px">New tag</label>
+      <form class="row" id="tagForm" style="margin-top:0"><input type="text" id="newTag" placeholder="e.g. errand" style="max-width:200px" maxlength="24" autocapitalize="none">
         <select id="newTagColor" aria-label="Color"></select><button class="go" id="addTag" type="submit">Add tag</button></form>
     </div>
 
@@ -548,7 +595,7 @@
       <h3>Add a calendar</h3>
       <div class="row"><select id="calKind" aria-label="Kind of calendar"></select></div>
       <div id="calFields"></div>
-      <div class="row"><button class="go" id="calGo">Add calendar</button><span id="calMsg" class="err"></span></div>
+      <div class="row"><button class="go" id="calGo">Add calendar</button><span id="calMsg" class="err" role="status"></span></div>
       <details class="muted" style="margin-top:10px"><summary>Which calendars work?</summary><div id="calOther"></div></details>
       <label class="setting"><div class="label"><b>Print today's calendar</b><span>At the top of the daily ticket.</span></div><input type="checkbox" data-pref="show_calendar"></label>
     </div>
@@ -578,7 +625,7 @@
       <label class="setting"><div class="label"><b>Sticker size</b><span>Big text on stickers and tear-off strips, easier to read from across a room.</span></div>
         <select data-pref="sticker_size" aria-label="Sticker size"><option value="normal">Normal</option><option value="big">Big</option></select></label>
       <label class="setting"><div class="label"><b>Paper size</b><span>For "Print on paper" on a regular printer.</span></div>
-        <select data-pref="paper_size" aria-label="Paper size"><option value="letter">US Letter</option><option value="a4">A4</option><option value="a5">A5 journal page</option><option value="half_letter">Half letter journal page (5.5 × 8.5 in)</option></select></label>
+        <select data-pref="paper_size" aria-label="Paper size"><option value="letter">US Letter</option><option value="a4">A4</option><option value="a5">A5</option><option value="half_letter">Half letter (5.5×8.5 in)</option></select></label>
       <label class="setting"><div class="label"><b>Default list filter</b><span>Pre-fills "List from a filter".</span></div><input type="text" style="max-width:220px" data-pref="default_filter" placeholder="#Groceries" maxlength="200"></label>
     </div>
 
@@ -610,7 +657,7 @@
         <div class="field" id="npInkRow"><label><input type="checkbox" id="npInk"> Black + red roll (DK-22251): print overdue tags in red</label></div>
         <div class="field"><label for="npWidth">Print width (dots)</label><input type="number" id="npWidth" style="width:120px"> <span class="muted">58 mm ≈ 384, 80 mm ≈ 576, 62 mm QL = 696, 4 in @203 dpi = 812</span></div>
         <div class="field" id="npHeightRow"><label for="npHeight">Label height (mm, die-cut only)</label><input type="number" id="npHeight" style="width:120px" placeholder="0 = continuous"></div>
-        <div class="row"><button class="go" id="npGo">Add printer</button><button class="plain" id="npCancel" hidden>Cancel</button><span class="err" id="npMsg"></span></div>
+        <div class="row"><button class="go" id="npGo">Add printer</button><button class="plain" id="npCancel" hidden>Cancel</button><span class="err" id="npMsg" role="alert"></span></div>
       </details>
     </div>
     <div class="card"><h2>Invite people</h2>
@@ -633,7 +680,8 @@
       <div id="users">…</div>
     </div>
     <div class="card" id="addCard"><h2>Add someone</h2>
-      <div class="row"><input type="text" id="nuName" placeholder="username" aria-label="Username" autocapitalize="none" style="max-width:220px">
+      <label class="fieldlabel" for="nuName">Username</label>
+      <div class="row" style="margin-top:0"><input type="text" id="nuName" placeholder="e.g. sam" autocapitalize="none" style="max-width:220px">
         <select id="nuRole" aria-label="Role"><option value="user">user</option><option value="admin" data-min="superadmin">admin</option><option value="superadmin" data-min="superadmin">superadmin</option></select>
         <label class="muted"><input type="checkbox" id="nuBeta"> beta tester</label>
         <button class="go" id="nuGo">Create</button></div>
@@ -641,7 +689,7 @@
     </div>
     <div class="card" id="activityCard" hidden><h2>Activity: <span id="actUser"></span></h2>
       <div id="activity"></div></div>
-    <div class="card"><h2>Feedback</h2><p class="muted">Respond, set a status or hide posts on the <button class="linkish" data-goto="board">Feedback tab</button>. Names are never shown.</p></div>
+    <div class="card"><h2>Feedback</h2><p class="muted">Respond, set a status or hide posts on the <button class="linkish" data-goto="board">Feedback board</button>. Names are never shown.</p></div>
   </section>
 
   <section id="superusers">
@@ -657,7 +705,7 @@
       <div class="row">
         <button class="go" id="suAdd">Add a person</button>
         <button class="plain" id="suNewHome">New household</button>
-        <a class="plain" id="suCsv" href="/super/users.csv" style="text-decoration:none;color:inherit;border:1px solid var(--line);border-radius:8px;padding:9px 13px">Export CSV</a>
+        <a class="plain" id="suCsv" href="/super/users.csv">Export CSV</a>
         <span class="muted" id="suCount"></span>
       </div>
       <div id="suNew"></div>
@@ -700,20 +748,20 @@
     <div class="card"><h2>Server switches</h2>
       <label class="setting"><div class="label"><b>Pause all printing</b><span>Kill switch: every print becomes a preview, for everyone.</span></div><input type="checkbox" data-server="printing_paused"></label>
       <label class="setting"><div class="label"><b>Home Assistant auto print</b><span>The once-a-day print when you walk into the office.</span></div><input type="checkbox" data-server="auto_print_enabled"></label>
-      <h3>Announcement banner</h3>
-      <div class="row"><input type="text" id="announceText" maxlength="300" placeholder="Shown to everyone who's signed in. Leave blank for none."></div>
+      <h3 id="announceHead">Announcement banner</h3>
+      <div class="row"><input type="text" id="announceText" maxlength="300" aria-labelledby="announceHead" placeholder="Shown to everyone who's signed in. Leave blank for none."></div>
       <div class="row"><button class="go" id="announceGo">Save banner</button></div>
     </div>
     <div class="card"><h2>Event log</h2>
       <div class="row"><input type="text" id="evUser" placeholder="person" title="What they did, and what admins did to their account" aria-label="Person" style="max-width:160px" autocapitalize="none">
-        <select id="evKind"><option value="">all kinds</option><option>activity</option><option>error</option><option>audit</option><option>auth</option></select>
+        <select id="evKind" aria-label="Kind"><option value="">all kinds</option><option>activity</option><option>error</option><option>audit</option><option>auth</option></select>
         <label class="muted"><input type="checkbox" id="evErr"> failures only</label>
         <button class="plain" id="evGo">Load</button></div>
       <div id="events"></div>
     </div>
   </section>
 </main>
-<button class="go" id="fb" data-feedback>Feedback</button>
+<button class="go" id="fb" data-feedback>Send feedback</button>
 <nav class="bottombar" aria-label="Main (phone)">
   <button data-go="mylist" class="on"><span aria-hidden="true">✓</span>My list</button>
   <button data-go="print"><span aria-hidden="true">🖨</span>Print</button>
@@ -724,10 +772,10 @@
 <dialog id="moreDialog" aria-label="More">
   <div class="menu" id="moreMenu"></div>
   <div class="menu" style="margin-top:6px">
-    <a href="guide.html" target="_blank" rel="noopener">❓ Help and quick start</a>
-    <a href="about.html" target="_blank" rel="noopener">ℹ️ About and contact</a>
-    <a href="privacy.html" target="_blank" rel="noopener">🔒 Privacy Policy</a>
-    <a href="terms.html" target="_blank" rel="noopener">📄 Terms of Use</a>
+    <a href="guide.html" target="_blank" rel="noopener"><span aria-hidden="true">❓</span> Help and quick start</a>
+    <a href="about.html" target="_blank" rel="noopener"><span aria-hidden="true">ℹ️</span> About and contact</a>
+    <a href="privacy.html" target="_blank" rel="noopener"><span aria-hidden="true">🔒</span> Privacy Policy</a>
+    <a href="terms.html" target="_blank" rel="noopener"><span aria-hidden="true">📄</span> Terms of Use</a>
   </div>
   <div class="row" style="justify-content:flex-end"><button class="plain" id="moreClose">Close</button></div>
 </dialog>
@@ -737,7 +785,7 @@
 </dialog>
 </div>
 
-<dialog id="noticeDialog" aria-labelledby="noticeTitle">
+<dialog id="noticeDialog" aria-labelledby="noticeTitle" aria-describedby="noticeBody">
   <h2 id="noticeTitle">Before you start</h2>
   <p class="muted" id="noticeChanged" hidden>This changed since you last agreed. Have a quick look before you carry on.</p>
   <p id="noticeBody"></p>
@@ -752,18 +800,18 @@
   <form method="dialog" id="fbForm">
     <h2 id="fbTitle">Send feedback</h2>
     <p class="muted">Posted for everyone to see, <b>without your name</b>. Emails, phone numbers, links and names are removed. Please leave out other personal details.</p>
-    <div class="seg" role="tablist">
-      <button type="button" class="on" data-mode="guided" role="tab">Guided</button>
-      <button type="button" data-mode="open" role="tab">Just tell us</button>
+    <div class="seg" role="group" aria-label="How to tell us">
+      <button type="button" class="on" data-mode="guided" aria-pressed="true">Guided</button>
+      <button type="button" data-mode="open" aria-pressed="false">Just tell us</button>
     </div>
     <div id="fbGuided">
-      <div class="field"><label>What kind?</label>
-        <div class="chips" id="fbType">
-          <button type="button" data-v="bug" class="on">Something broke</button><button type="button" data-v="confusing">Confusing</button>
-          <button type="button" data-v="idea">Idea</button><button type="button" data-v="praise">Love it</button><button type="button" data-v="other">Other</button>
+      <div class="field"><span class="fieldlabel" id="fbTypeLabel">What kind?</span>
+        <div class="chips" id="fbType" role="group" aria-labelledby="fbTypeLabel">
+          <button type="button" data-v="bug" class="on" aria-pressed="true">Something broke</button><button type="button" data-v="confusing" aria-pressed="false">Confusing</button>
+          <button type="button" data-v="idea" aria-pressed="false">Idea</button><button type="button" data-v="praise" aria-pressed="false">Love it</button><button type="button" data-v="other" aria-pressed="false">Other</button>
         </div></div>
-      <div class="field"><label>How's Next Box working for you? (optional)</label>
-        <div class="chips" id="fbRating"><button type="button" data-v="1">1</button><button type="button" data-v="2">2</button><button type="button" data-v="3">3</button><button type="button" data-v="4">4</button><button type="button" data-v="5">5</button></div></div>
+      <div class="field"><span class="fieldlabel" id="fbRatingLabel">How's Next Box working for you? (optional, 1 to 5)</span>
+        <div class="chips" id="fbRating" role="group" aria-labelledby="fbRatingLabel"><button type="button" data-v="1" aria-pressed="false">1</button><button type="button" data-v="2" aria-pressed="false">2</button><button type="button" data-v="3" aria-pressed="false">3</button><button type="button" data-v="4" aria-pressed="false">4</button><button type="button" data-v="5" aria-pressed="false">5</button></div></div>
       <div class="field"><label for="fbTrying">What were you trying to do?</label><textarea id="fbTrying" rows="2"></textarea></div>
       <div class="field"><label for="fbHappened">What happened?</label><textarea id="fbHappened" rows="2"></textarea></div>
       <div class="field"><label for="fbExpected">What did you expect?</label><textarea id="fbExpected" rows="2"></textarea></div>
@@ -772,31 +820,31 @@
       <div class="field"><label for="fbMessage">Tell us anything</label><textarea id="fbMessage" rows="5"></textarea></div>
     </div>
     <label class="muted" id="fbDebugRow"><input type="checkbox" id="fbDebug"> Attach my recent errors. This stays private and is only used to fix the problem.</label>
-    <p class="err" id="fbErr"></p>
+    <p class="err" id="fbErr" role="alert"></p>
     <div id="fbDone" hidden></div>
     <div class="row"><button class="go" type="button" id="fbSend">Post anonymously</button><button class="plain" type="button" id="fbClose">Close</button></div>
   </form>
 </dialog>
-<dialog id="meDialog">
+<dialog id="meDialog" aria-labelledby="meName">
   <div style="display:flex;gap:12px;align-items:center">
-    <div class="avatar" id="meAvatar" style="width:52px;height:52px;font-size:22px;display:flex;align-items:center;justify-content:center"></div>
+    <div class="avatar" id="meAvatar" aria-hidden="true" style="width:52px;height:52px;font-size:1.375rem;display:flex;align-items:center;justify-content:center"></div>
     <div><h2 id="meName" style="margin:0"></h2><div class="muted" id="meSub"></div></div>
   </div>
   <div id="meUpdate" class="muted" style="margin-top:8px"></div>
   <div class="menu" style="margin-top:10px">
-    <button data-me="profile">👤 My profile</button>
-    <button data-me="settings">⚙️ Settings</button>
-    <a href="guide.html" target="_blank" rel="noopener">❓ Help and quick start</a>
-    <button data-me="feedback">💬 Send feedback</button>
-    <button data-me="refresh">🔄 Refresh the app</button>
-    <button data-me="export">⬇️ Download my data</button>
-    <button data-me="signout">🚪 Sign out</button>
-    <button data-me="delete" class="warn">🗑️ Delete my account</button>
+    <button data-me="profile"><span aria-hidden="true">👤</span> My profile</button>
+    <button data-me="settings"><span aria-hidden="true">⚙️</span> Settings</button>
+    <a href="guide.html" target="_blank" rel="noopener"><span aria-hidden="true">❓</span> Help and quick start</a>
+    <button data-me="feedback"><span aria-hidden="true">💬</span> Send feedback</button>
+    <button data-me="refresh"><span aria-hidden="true">🔄</span> Refresh the app</button>
+    <button data-me="export"><span aria-hidden="true">⬇️</span> Download my data</button>
+    <button data-me="signout"><span aria-hidden="true">🚪</span> Sign out</button>
+    <button data-me="delete" class="warn"><span aria-hidden="true">🗑️</span> Delete my account</button>
   </div>
   <div id="mePanel"></div>
   <div class="row" style="justify-content:flex-end"><button class="plain" id="meClose">Close</button></div>
 </dialog>
-<dialog id="userDialog">
+<dialog id="userDialog" aria-labelledby="udName">
   <h2 id="udName" tabindex="-1">…</h2>
   <div class="muted" id="udSub"></div>
   <h3>Profile</h3>
@@ -811,14 +859,14 @@
     <label><input type="checkbox" id="udDebug"> Debug mode (records details of every action)</label>
     <label><input type="checkbox" id="udTemp"> Must pick a new password at next sign-in</label>
   </div>
-  <div class="row"><button class="go" id="udSave">Save changes</button><span class="err" id="udMsg"></span></div>
+  <div class="row"><button class="go" id="udSave">Save changes</button><span class="err" id="udMsg" role="alert"></span></div>
   <h3>Help them</h3>
   <div class="row">
     <button class="plain small" id="udReset">Reset password</button>
     <button class="plain small" id="udSignout">Sign out all devices</button>
     <button class="plain small" id="udPrefs">Reset their settings</button>
     <button class="plain small" id="udUnlink">Unlink to-do app</button>
-    <a class="plain small" id="udBundle" style="text-decoration:none;color:inherit;border:1px solid var(--line);border-radius:8px;padding:5px 9px;font-size:13px">Debug bundle</a>
+    <a class="plain small" id="udBundle">Debug bundle</a>
   </div>
   <div id="udTempOut"></div>
   <h3>What's going on</h3>
@@ -829,7 +877,7 @@
     <button class="go warn" id="udDelete" disabled>Delete account</button></div>
   <div class="row" style="justify-content:flex-end"><button class="plain" id="udClose">Close</button></div>
 </dialog>
-<dialog id="taskDialog">
+<dialog id="taskDialog" aria-labelledby="tdTitle">
   <form method="dialog" id="taskForm">
     <h2 id="tdTitle">Task</h2>
     <div class="field"><label for="tdContent">What</label><input type="text" id="tdContent" maxlength="500" required></div>
@@ -847,14 +895,14 @@
       <textarea id="tdSteps" placeholder="Find the bill&#10;Open the website&#10;Pay"></textarea></div>
     <div class="row">
       <button class="go" id="tdSave" value="save">Save</button>
-      <button class="plain" id="tdFocus" value="focus" type="button">Print as one thing</button>
+      <button class="plain" id="tdFocus" value="focus" type="button">Print just this</button>
       <button class="plain" id="tdCancel" value="cancel" formnovalidate>Cancel</button>
       <button class="go warn" id="tdDelete" type="button" style="margin-left:auto">Delete</button>
     </div>
   </form>
 </dialog>
 <footer id="revmark" aria-label="About this app"><a href="about.html">About</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="guide.html">Help</a><br><span id="revText"></span></footer>
-<div id="toast"></div>
+<div id="toast"><span id="toastText" role="status" aria-live="polite" aria-atomic="true"></span><button type="button" id="toastClose" aria-label="Dismiss" hidden>×</button></div>
 <script src="app.js"></script>
 </body>
 </html>

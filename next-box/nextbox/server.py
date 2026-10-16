@@ -264,7 +264,10 @@ class SignupBody(BaseModel):
     agree: bool = False  # the Terms of Use and Privacy Policy
 
 
-TERMS_VERSION = 1  # bump when terms.html or privacy.html change in a way people should re-read
+TERMS_VERSION = 2  # bump when terms.html or privacy.html change in a way people should re-read
+#   2: the Privacy Policy covers the Journal (photos and handwriting kept, private to you) and says
+#      Claude (Anthropic) reads your handwriting as well as your marks.
+DB_NAMES = {"sqlite": "SQLite", "postgresql": "PostgreSQL"}  # for the About page
 
 
 class InviteBody(BaseModel):
@@ -674,7 +677,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return {"name": "Next Box", "version": _version(), "build": build,
                 "operator": os.environ.get("NEXTBOX_OPERATOR", "").strip() or "Braznarkel",
                 "contact": os.environ.get("NEXTBOX_CONTACT", "").strip(),
-                "retention_days": ctx.settings.retention_days, "terms_version": TERMS_VERSION}
+                "retention_days": ctx.settings.retention_days, "terms_version": TERMS_VERSION,
+                # What this copy really runs on, so the pages never name a database or host it doesn't use.
+                "database": DB_NAMES.get(accounts.db.dialect.name, accounts.db.dialect.name),
+                "hosting": os.environ.get("NEXTBOX_HOSTING", "").strip()[:80]}
 
     @app.get("/version")
     def version():

@@ -6,12 +6,13 @@
 <title>Privacy Policy · Next Box</title>
 <link rel="icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="pages.css">
+<script src="pages.js"></script>
 </head>
 <body>
 <header><img src="icons/icon-192.png" alt=""><a href="/app/">Next Box</a></header>
 <main>
 <h1>Privacy Policy</h1>
-<p class="muted">Effective October 15, 2026 · Plain language, no fine print.</p>
+<p class="muted">Effective October 16, 2026 · Plain language, no fine print.</p>
 <div class="box"><b>The short version.</b> Next Box keeps what it needs to run your to-do list and labels, on a
 computer run by <span data-operator>Braznarkel</span>. There are no ads, no trackers and nothing is sold. You can download
 everything or delete your account any time from your Profile.</div>
@@ -24,7 +25,11 @@ everything or delete your account any time from your Profile.</div>
   <li><b>Your account:</b> username, optional email and display name, your settings. Your password is stored only as a scrambled one-way hash; nobody can read it.</li>
   <li><b>Your list:</b> tasks, tiny steps and tags you add to Next Box's own list.</li>
   <li><b>What you print:</b> each ticket's text and image, so a photo of it can be matched back to your tasks.</li>
-  <li><b>Read-backs:</b> what was read from your photo (which boxes you marked). The photo itself is not kept.</li>
+  <li><b>Read-backs:</b> which boxes you marked on a photo. With Journal mode on (it's on unless you turn it off), the photo
+    and the handwriting read from it are kept as a page in your private Journal. With it off, the photo isn't kept.</li>
+  <li><b>Your journal:</b> page photos, and notes you type or that were read from your handwriting. Only you can see them:
+    there's no admin view, and admin tools hide them. They stay until you delete the page or your account (the
+    <span data-retention>90</span>-day limit below doesn't apply).</li>
   <li><b>Sign-ins and activity:</b> your signed-in devices (device type and network address) and a log of actions, used to fix problems.</li>
   <li><b>Connections:</b> if you link a to-do app or calendar, its access key, locked with encryption. Tasks and events from linked apps are read when needed and not stored, except what ends up on a ticket you print.</li>
   <li><b>Feedback:</b> shown to everyone without your name. Who sent what is kept separately and only the admin can look it up.</li>
@@ -33,12 +38,13 @@ everything or delete your account any time from your Profile.</div>
 <h2>Who can see it</h2>
 <p>You see your own things. The admin of this Next Box can see how you use it: your printed tickets, read-backs, settings,
 activity, devices and how many tasks are on your list (not what they say). You were shown this when you first signed in.
-Your password and linked-app keys are never visible to anyone.</p>
+Your journal, your password and linked-app keys are never visible to anyone else.</p>
 
 <h2>Services Next Box uses</h2>
 <ul>
-  <li><b>Cloudflare</b> carries traffic between your phone and Next Box (secure https).</li>
-  <li><b>Anthropic (Claude)</b> reads the marks on a photo when you use photo read-back. The photo is sent for that one job.</li>
+  <li data-needs="hosting" hidden><b data-hosting></b> carries traffic between your phone and Next Box (secure https).</li>
+  <li><b>Anthropic (Claude)</b> reads the marks and transcribes your handwritten notes on a photo when you use Snap.
+    The photo is sent for that one job.</li>
   <li><b>Apps you choose to link</b> (for example Todoist, Google, Microsoft, Notion): Next Box talks to them only for you.</li>
 </ul>
 
@@ -47,12 +53,13 @@ Your password and linked-app keys are never visible to anyone.</p>
 
 <h2>How long things are kept</h2>
 <p>Printed tickets and read-backs are deleted after <span data-retention>90</span> days. The activity log is deleted after 180 days.
-Your account and list stay until you delete them.</p>
+Your account, list and journal stay until you delete them.</p>
 
 <h2>Your choices</h2>
 <ul>
-  <li><b>Download your data:</b> Profile → Download my data.</li>
-  <li><b>Delete your account:</b> Profile → Delete my account. This removes your account, list, tags, tickets and history.</li>
+  <li><b>Download your data:</b> Profile → Download my data. One .zip file with your list, settings, journal pages and their photos, and ticket images.</li>
+  <li><b>Delete your account:</b> Profile → Delete my account. This removes your account, list, tags, journal pages and photos, tickets and history.</li>
+  <li><b>Delete a journal page</b> any time in Journal. Turn off <b>Journal mode</b> in Settings → Focus to stop keeping photos.</li>
   <li><b>Unlink an app or calendar</b> any time in Settings.</li>
 </ul>
 
@@ -63,6 +70,5 @@ Your account and list stay until you delete them.</p>
 <p>If this policy changes in a way that matters, you'll be told in the app before it applies to you.</p>
 </main>
 <footer><a href="/app/">Open Next Box</a><a href="about.html">About</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="guide.html">Help</a><br>Next Box <span data-version></span> · run by <span data-operator>Braznarkel</span></footer>
-<script src="pages.js"></script>
 </body>
 </html>

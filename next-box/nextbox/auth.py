@@ -47,7 +47,7 @@ PREFS = {
     "slug_after": (3, lambda v: type(v) is int and 2 <= v <= 10),  # moves before a task counts as a slug
     "display_name": ("", lambda v: isinstance(v, str) and len(v.strip()) <= 40),
     "text_size": ("normal", lambda v: v in ("normal", "large", "xlarge")),
-    "start_tab": ("mylist", lambda v: v in ("mylist", "print", "journal")),
+    "start_tab": ("mylist", lambda v: v in ("mylist", "print", "scan", "journal")),
     "new_tasks_to": ("nextbox", lambda v: v in ("nextbox", "linked")),  # where new tasks go
     "sticker_size": ("normal", lambda v: v in ("normal", "big")),
     "show_waiting": (True, lambda v: isinstance(v, bool)),
