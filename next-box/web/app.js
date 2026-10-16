@@ -58,11 +58,11 @@ function placeToast() {
   t.style.bottom = both ? `${Math.round(innerHeight - s.getBoundingClientRect().top + 8)}px` : "";
 }
 // The phone tab bar and the print bar (while picked tasks keep it at the bottom), measured for the CSS:
-// messages at the bottom sit above both, at any text size or screen width.
+// messages at the bottom sit above both, at any text size or screen width (the CSS uses --barH only
+// while My list shows with the bar stuck).
 function placeBars() {
   const bar = $(".printbar"), tabs = $(".bottombar");
-  const stuck = bar.classList.contains("sticky") && $("#mylist").classList.contains("on");
-  document.body.style.setProperty("--barH", `${stuck ? bar.offsetHeight : 0}px`);
+  document.body.style.setProperty("--barH", `${bar.classList.contains("sticky") ? bar.offsetHeight : 0}px`);
   if (tabs?.offsetHeight) document.body.style.setProperty("--tabH", `${tabs.offsetHeight}px`);
   else document.body.style.removeProperty("--tabH");
   placeToast();
@@ -157,7 +157,20 @@ async function signOut(box) {
   try { await api("/auth/logout", { method: "POST" }); }
   catch { return say(failed); }  // still signed in: don't pretend otherwise
   forgetDraft();  // an unsent Brain dump stays on this device only while you're signed in
+  forgetMyKeysHere();  // and so do your search words and List/Schedule pick
   startOver("Signed out.");
+}
+// What this device keeps per person that says something about them: an unsent Brain dump, the search
+// words, List or Schedule. Signing out takes the person's own; anyone signing in here takes everyone
+// else's (a session that ended without Sign out left them behind).
+const PERSON_KEYS = /^nb\.(dumpDraft|listFilter|listView):/;
+function forgetMyKeysHere() {
+  try { for (const k of [filterKey(), myListViewKey()]) if (k) localStorage.removeItem(k); } catch {}
+}
+function forgetOthersHere(name) {
+  try {
+    for (const k of Object.keys(localStorage)) if (PERSON_KEYS.test(k) && k.slice(k.indexOf(":") + 1) !== name) localStorage.removeItem(k);
+  } catch {}
 }
 // Belt and braces for the reload above: wipe what's on screen right away.
 function clearPerson() {
@@ -208,6 +221,7 @@ async function boot() {
   applyLook();
   if (!boot.started) {  // just signed in: open where they asked to
     boot.started = true;
+    forgetOthersHere(me.username);  // a shared phone: nobody else's draft or search words stay behind
     const start = me.prefs.start_tab || "mylist";
     if (signinMsg) { toast(signinMsg, 4000); signinMsg = ""; goto("settings"); }
     else if (start === "mylist") markTab("mylist");
@@ -242,6 +256,10 @@ async function boot() {
   if (!me.consented || me.terms_ok === false) {  // new, or the notice or Terms changed since they agreed
     $("#noticeBody").textContent = me.data_notice;
     $("#noticeChanged").hidden = !me.notice_changed;
+    // What's new in the Privacy Policy (TERMS_VERSION 3), when that's what changed.
+    $("#noticeChanged").textContent = "This changed since you last agreed. " + (me.terms_ok === false
+      ? "The Privacy Policy now says just what the AI helpers (Break it down and Look back on my week) send to Anthropic, and that they only do it when you tap them. " : "")
+      + "Have a quick look before you carry on.";
     $("#noticeMsg").textContent = "";
     if (!$("#noticeDialog").open) $("#noticeDialog").showModal();
   }
@@ -1693,6 +1711,7 @@ function renderNow() {
   $("#nowDone").className = step && !asking ? "plain" : "go";
   $("#nowDone").textContent = asking ? "Yes, finish it ✓" : step ? "Whole task done" : "Done ✓";
   $("#nowNotYet").hidden = !asking;
+  $("#nowBreak").hidden = !aiOn() || !t || asking;  // "Finish the task?" is a yes/no question: nothing else beside it
   $("#nowRepeatSkip").hidden = !t || asking || !String(t.id).startsWith("nb:") || !t.repeat || !t.due;
   if (t?.due && t.due.date.slice(0, 10) > today()) $("#nowTomorrow").hidden = true;  // never moves it sooner
   $("#nowAgain").hidden = !!t || !setAside;
@@ -1922,7 +1941,8 @@ document.addEventListener("click", (e) => { if (snackHide?.waits && !e.target.cl
 document.addEventListener("keydown", (e) => {
   if (!snackHide || e.defaultPrevented || $$("dialog[open]").length) return;
   if (e.key === "Escape") return snackHide(true);
-  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "z" && snackUndo && !keysTyping(e.target)) {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "z" && snackUndo && !keysTyping(e.target)
+      && $("#mylist").classList.contains("on")) {  // only an Undo you can see
     e.preventDefault();
     snackUndo();
   }
@@ -2106,14 +2126,26 @@ $("#showDone").onclick = () => {
   loadList();
 };
 
-// Brain dump. An unsent draft is kept on this device for the person who typed it (until it's added
-// or they sign out), so a phone that drops the page in the background doesn't lose it.
+// Brain dump. An unsent draft is kept on this device for the person who typed it (until it's added,
+// they sign out, someone else signs in here, or a day goes by), so a phone that drops the page in the
+// background, or a session that ends, doesn't lose it.
 const draftKey = () => (me ? `nb.dumpDraft:${me.username}` : "");
+const DRAFT_KEEP = 24 * 3600 * 1000;
 function saveDraft() {
-  try { const v = $("#dumpText").value; if (draftKey()) v.trim() ? localStorage.setItem(draftKey(), v) : localStorage.removeItem(draftKey()); } catch {}
+  try {
+    const v = $("#dumpText").value;
+    if (draftKey()) v.trim() ? localStorage.setItem(draftKey(), JSON.stringify({ text: v, at: Date.now() })) : localStorage.removeItem(draftKey());
+  } catch {}
 }
 function restoreDraft() {
-  try { const v = draftKey() && localStorage.getItem(draftKey()); if (v && !$("#dumpText").value.trim()) { $("#dumpText").value = v; runPreview(); } } catch {}
+  try {
+    const raw = draftKey() && localStorage.getItem(draftKey());
+    if (!raw) return;
+    let v = raw;  // older copies kept the words only
+    if (raw.startsWith("{")) { try { const d = JSON.parse(raw); v = Date.now() - (+d.at || 0) < DRAFT_KEEP ? String(d.text || "") : ""; } catch {} }
+    if (!v) return forgetDraft();  // a day old: gone
+    if (!$("#dumpText").value.trim()) { $("#dumpText").value = v; runPreview(); }
+  } catch {}
 }
 function forgetDraft() {
   try { if (draftKey()) localStorage.removeItem(draftKey()); } catch {}
@@ -2958,7 +2990,7 @@ async function loadToday() {
 
 // ---------------------------------------------------------------- My list: List | Schedule
 // Schedule puts today in one column by time: calendar events (read-only), timed tasks and the routine's
-// "Plan your day" and "Look back", with a Now line and "Next: … in 20 min". Tasks without a time follow
+// "Plan your day" and "Snap your pages", with a Now line and "Next: … in 20 min". Tasks without a time follow
 // under "Any time today" in the order today's label prints them. Anyone can pick it; "Same words every
 // time" (routine_mode) makes it the view My list opens on. The pick is kept on this device.
 let todayCal = null;   // GET /calendars/today as last loaded, { failed: true } if it couldn't load, null before
@@ -4051,7 +4083,12 @@ function applyAi(on = aiOn()) {
   $("#lookNoKey").hidden = ready; $("#lookAsk").hidden = !ready;
 }  // loadPrefs calls it, so it follows the setting once it's saved (or put back if saving failed)
 
-const BREAK_SENT = "This sends the task's name and steps to Anthropic's AI. Nothing is kept unless you save the steps.";
+// Exactly what coach.breakdown_message sends (privacy.html says the same).
+const BREAK_SENT = "This sends the task's name, how long it takes, its day, its steps and anything you type in “What makes it hard?” to Anthropic's AI. Nothing is kept unless you save the steps.";
+// The first time on this device it says that before anything is sent, and asks only on "Suggest steps".
+const breakSeenKey = () => (me ? `nb.breakSeen:${me.username}` : "");
+function breakSeen() { try { return localStorage.getItem(breakSeenKey()) === "1"; } catch { return false; } }
+function breakSeenNow() { try { localStorage.setItem(breakSeenKey(), "1"); } catch {} }
 let brk = null;  // the sheet that's open: { id, content, from: edit|now|slug, opener, task, steps, replace, hint, ctl, changed }
 
 // The Edit dialog's tiny steps: the one place this sheet reads or changes that dialog.
@@ -4069,6 +4106,7 @@ function openBreak(id, content, from, opener) {
   $("#breakTask").textContent = content || "";
   if (!$("#breakDialog").open) $("#breakDialog").showModal();
   if (!me?.ai_ready) return drawBreak("nokey");
+  if (!breakSeen()) return drawBreak("intro");  // first time: what's sent, before it's sent
   askBreak();
 }
 
@@ -4142,8 +4180,12 @@ function drawBreak(state, info = "") {
   if (state === "nokey") {
     body.innerHTML = `<p>Break it down uses an AI helper to suggest tiny first steps.</p><p class="muted">Ask your Next Box owner to add an AI key.</p>`;
     acts.innerHTML = close("OK", "go");
+  } else if (state === "intro") {
+    body.innerHTML = `<p>Break it down asks an AI helper (Claude, by Anthropic) for a few tiny first steps. You pick the ones to keep.</p>
+      <p class="muted">${esc(BREAK_SENT)}</p><p class="muted">You can turn the AI helpers off in Settings → Focus.</p>`;
+    acts.innerHTML = `<button class="go" data-b="ask">Suggest steps</button>${close("Not now")}`;
   } else if (state === "loading") {
-    body.innerHTML = `<p role="status"><span class="spin" aria-hidden="true"></span>Thinking of tiny first steps…</p><p class="muted">${BREAK_SENT}</p>`;
+    body.innerHTML = `<p role="status"><span class="spin" aria-hidden="true"></span>Thinking of tiny first steps…</p><p class="muted">${esc(BREAK_SENT)}</p>`;
     acts.innerHTML = close("Cancel");
   } else if (state === "error") {
     body.innerHTML = `<p class="err" role="alert">${esc(info)}</p>`;
@@ -4240,6 +4282,7 @@ $("#breakDialog").addEventListener("click", (e) => {
   if (!button || !b) return;
   const what = button.dataset.b;
   if (what === "close") $("#breakDialog").close();
+  else if (what === "ask") { breakSeenNow(); askBreak(); }
   else if (what === "retry") askBreak(b.hint);
   else if (what === "again") askBreak($("#bHint").value.trim());
   else if (what === "add") {
@@ -4303,14 +4346,17 @@ $("#nowBreak").onclick = () => {
 $("#tdBreak").onclick = async () => {
   if (!editing || tdBusy()) return;
   if (!$("#tdContent").value.trim()) return $("#taskForm").reportValidity();
+  let said = "";
   if (!editing.id || tdDirty()) {
     const creating = !editing.id;
     try { await tdHold(saveEditing); } catch (err) { return listError(err, editing?.id); }
     if (creating) { $("#tdTitle").textContent = "Edit task"; $("#tdDelete").hidden = false; }
     focusLabel();
     loadList();
+    said = creating ? "Added to My list" : "Your changes are saved";
   }
   openBreak(editing.id, editing.content, "edit", $("#tdBreak"));
+  if (said) toast(said);  // said in the sheet, so it's seen
 };
 $("#slugList").addEventListener("click", (e) => {
   const b = e.target.closest("[data-slug-break]"), s = b?.closest("[data-task]");

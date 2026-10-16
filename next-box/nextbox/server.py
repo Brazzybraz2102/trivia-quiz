@@ -299,9 +299,10 @@ class SignupBody(BaseModel):
     agree: bool = False  # the Terms of Use and Privacy Policy
 
 
-TERMS_VERSION = 2  # bump when terms.html or privacy.html change in a way people should re-read
+TERMS_VERSION = 3  # bump when terms.html or privacy.html change in a way people should re-read
 #   2: the Privacy Policy covers the Journal (photos and handwriting kept, private to you) and says
 #      Claude (Anthropic) reads your handwriting as well as your marks.
+#   3: it says what the AI helpers (Break it down, Look back on my week) send, only when tapped.
 DB_NAMES = {"sqlite": "SQLite", "postgresql": "PostgreSQL"}  # for the About page
 
 
