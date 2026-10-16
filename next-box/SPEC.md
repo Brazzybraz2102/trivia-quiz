@@ -338,7 +338,9 @@ journal (§25), wins (§25) and task_slides (§25). `nextbox db diagram` draws t
   of fake households, people, tickets and events.
 - `nextbox db sql "..."` is read-only on the real database. Writes need `--practice --write`.
   Without `--write` it runs one statement at a time (SQLite refuses a second one; on PostgreSQL the query
-  is sent as one prepared statement, so `SELECT 1; COMMIT; UPDATE ...` is refused before any of it runs).
+  is sent with the extended protocol, in a psycopg pipeline, so `SELECT 1; COMMIT; UPDATE ...` is refused
+  before any of it runs, whatever psycopg's `prepare_threshold` is: None for PgBouncer turns preparing off.
+  Without pipelines (libpq before 14) it's a prepared statement, and with preparing off too nothing runs).
 - Output always hides password hashes, salts, session hashes and to-do app secrets.
 - `nextbox db backup` makes an online copy in `<data dir>/backups/` (600).
 
@@ -350,6 +352,10 @@ Repeating tasks (daily, weekdays, weekly, monthly) jump to the next date after t
 they never pile up as overdue. The app's Done sends the day the screen showed (`POST /list/{id}/done
 {due}`): a repeat that has moved on since (Done on another device) isn't done again, so it never skips
 its next day or counts a second win. Without `due` (the CLI, Home Assistant) Done finishes the current day.
+A Done that changes nothing (done, skipped or moved on another device since that screen loaded) replies
+`{undo: null, stale: true}`: the app says "That changed on another device. Here's your list now." and
+draws the list again, never "Done ✓", and bulk Done counts only the ones it finished ("Done 1 ✓ · 1 changed
+on another device").
 
 **Brain dump**: one task per line. Understands `#tag`, `!` / `!1` `!2` `!3`, `today` `tomorrow`
 `fri` `2026-10-09`, `3pm` `15:30`, `~15m` `~1h`, `every day|weekday|week|month`.

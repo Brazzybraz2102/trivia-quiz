@@ -1380,13 +1380,15 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         """Done. `undo` is what /reopen needs to put it back (a repeat's day and ticked steps), or
         None when it was finished already (a double tap counts once) or its app can't reopen it.
         body.due: the day the screen showed, so a My list repeat that has moved on since (Done on
-        another device) isn't finished a second time."""
+        another device) isn't finished a second time. `stale`: nothing was done because the task
+        changed since that screen loaded (done, skipped or moved on another device), so the app says
+        so and shows the list as it is now instead of "Done ✓"."""
         c = rctx(caller)
         seen = ((body.due if body else None) or "")[:10]
         undo = run(caller, "list_done", c.tasks.close_task, task_id,
                    **({"seen_due": seen} if seen and is_local(task_id) else {}))
-        if undo is None and is_local(task_id):
-            return {"ok": True, "undo": None}  # done already: nothing changed, its slide count included
+        if undo is None and is_local(task_id):  # nothing changed, its slide count included
+            return {"ok": True, "undo": None, "stale": True}
         slides = Slides(accounts.db, caller.name)
         slid = slides.counts().get(task_id)
         slides.clear(task_id)

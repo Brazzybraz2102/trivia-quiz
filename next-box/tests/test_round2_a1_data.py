@@ -2,8 +2,9 @@
 accounts, Done from a device that still shows a repeat's old day, the starter tags seeded twice at once,
 CalDAV moves of a DUE stored in another zone, and the join messages.
 
-The browser half of the stale-device Done (every Done sends the day it showed) was checked in a real
-browser; the last test pins it."""
+The browser half of the stale-device Done (every Done sends the day it showed, and a Done that changed
+nothing says so instead of "Done ✓") was checked in a real browser; the last tests pin it. db sql's
+one-statement guard holds whatever psycopg's prepare_threshold is (None for PgBouncer)."""
 import dataclasses
 import datetime as dt
 import os
@@ -94,6 +95,71 @@ def test_db_sql_never_runs_a_second_statement(tmp_path, monkeypatch, capsys):
     assert _state(tmp_path) == before
 
 
+@pytest.fixture
+def psycopg_set_to(monkeypatch):
+    """Connections opened from here on use this prepare_threshold (None is the usual PgBouncer
+    setting), with or without pipelines (libpq before 14 has none)."""
+    hooked = []
+
+    def use(engine, threshold, pipeline=True):
+        import psycopg
+        monkeypatch.setattr(psycopg.Pipeline, "is_supported", classmethod(lambda cls: pipeline))
+
+        def _connect(dbapi, _record):
+            dbapi.prepare_threshold = threshold
+        event.listen(engine, "connect", _connect)
+        hooked.append((engine, _connect))
+        engine.dispose()  # pooled connections were opened without it
+    yield use
+    for engine, hook in hooked:
+        event.remove(engine, "connect", hook)
+        engine.dispose()
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS leak"))
+
+
+@pytest.mark.skipif(not POSTGRES, reason="PostgreSQL only")
+@pytest.mark.parametrize("threshold, pipeline", [(None, True), (None, False), (5, False), (0, True)])
+def test_db_sql_runs_one_statement_whatever_psycopg_is_set_to(tmp_path, psycopg_set_to, threshold, pipeline):
+    """psycopg ignores prepare=True when the connection's prepare_threshold is None and sends the
+    simple protocol: the guard's EXPLAIN of `SELECT 1; COMMIT; CREATE TABLE leak ...` ran all of it.
+    A pipeline always sends the extended protocol; without one (and without preparing) nothing is sent."""
+    a = Accounts(tmp_path)
+    a.create("sam", "sam password")
+    a.create_session("sam")
+    Journal(db.database(tmp_path), "sam").add(FRI.isoformat(), "PGSECRETNOTE saw my therapist")
+    before = _state(tmp_path)
+    psycopg_set_to(db.database(tmp_path), threshold, pipeline)
+    for sql in SNEAKY + ("SELECT 1; COMMIT; CREATE TABLE leak AS SELECT 1 AS x",):
+        with pytest.raises(PermissionError, match="one query at a time"):
+            dbtools.run_sql(tmp_path, sql)
+        assert _state(tmp_path) == before, sql
+    if threshold is None and not pipeline:  # no safe way to send it: refused, not run
+        with pytest.raises(PermissionError, match="one query at a time"):
+            dbtools.run_sql(tmp_path, "SELECT username FROM users")
+        return
+    # One statement works as before: text results (pg_typeof reads "integer", not bytes), a %, masking.
+    assert dbtools.run_sql(tmp_path, "SELECT pg_typeof(1) AS t, 'a%' LIKE 'a%' AS l")[1] == [["integer", True]]
+    assert dbtools.run_sql(tmp_path, "SELECT username FROM users WHERE username LIKE 's%';")[1] == [["sam"]]
+    assert dbtools.run_sql(tmp_path, "SELECT notes FROM journal")[1] == [["•••• (hidden)"]]
+    with pytest.raises(PermissionError):
+        dbtools.run_sql(tmp_path, "SELECT notes AS n FROM journal")
+    assert _state(tmp_path) == before
+
+
+@pytest.mark.skipif(not POSTGRES, reason="PostgreSQL only")
+def test_db_sql_practice_runs_one_statement_with_preparing_off(tmp_path, psycopg_set_to):
+    data_dir = tmp_path / "d"
+    dbtools.build_practice(data_dir)
+    url = dbtools.practice_url(data_dir)
+    count = dbtools.run_sql(url, "SELECT COUNT(*) FROM users")[1]
+    psycopg_set_to(db.database(url), None)
+    with pytest.raises(PermissionError, match="one query at a time"):
+        dbtools.run_sql(data_dir, "SELECT 1; COMMIT; DELETE FROM users", practice=True)
+    assert dbtools.run_sql(data_dir, "SELECT COUNT(*) FROM users", practice=True)[1] == count
+    assert dbtools.run_sql(data_dir, "SHOW TimeZone", practice=True)[0] == ["TimeZone"]
+
+
 @pytest.mark.skipif(not POSTGRES, reason="PostgreSQL only")
 def test_db_sql_practice_without_write_runs_one_statement_too(tmp_path):
     data_dir = tmp_path / "d"
@@ -177,7 +243,8 @@ def test_done_from_a_device_that_still_shows_the_old_day_counts_once(ctx):
         {"content": "Stretch", "due_date": shown, "repeat": "daily"})
     assert phone.post(f"/list/{stretch['id']}/move", json={"to": "tomorrow"}).json()["moved"]
     wins = _wins(laptop)
-    assert laptop.post(f"/list/{stretch['id']}/done", json={"due": shown}).json() == {"ok": True, "undo": None}
+    assert laptop.post(f"/list/{stretch['id']}/done", json={"due": shown}).json() == {"ok": True, "undo": None,
+                                                                                       "stale": True}
     assert Slides(a.db, "sam").counts().get(stretch["id"]) == 1 and _wins(laptop) == wins
     assert LocalTasks(a.db, "sam").get_task(stretch["id"])["due"]["date"] == "2026-10-17"
 
@@ -208,6 +275,32 @@ def test_close_task_checks_the_day_it_was_shown(tmp_path):
     assert mine.get_task(bins["id"])["due"]["date"] == "2026-10-20"
     with pytest.raises(ValueError, match="2026-10-16"):
         mine.close_task(bins["id"], seen_due="Tuesday")
+
+
+def test_a_done_that_changed_nothing_says_the_screen_was_out_of_date(ctx):
+    """The reply was {undo: None} whether the Done was a repeat ticked twice or a screen out of date,
+    so the app said "Nice. ✓" for a chore nobody did. `stale` tells it nothing was done here."""
+    ctx, a, app, login = site(ctx, today=lambda: FRI)
+    phone, laptop = login("sam", "sam password"), login("sam", "sam password")
+    mine = LocalTasks(a.db, "sam", today=lambda: FRI)
+    water = mine.create({"content": "Water the plants", "due_date": FRI.isoformat(), "repeat": "daily"})
+    done = lambda c, t, due: c.post(f"/list/{t['id']}/done", json={"due": due}).json()  # noqa: E731
+    # → Tomorrow on the phone, the laptop loads it (tomorrow), then the phone puts it back on today.
+    assert phone.post(f"/list/{water['id']}/move", json={"to": "tomorrow"}).json()["moved"]
+    assert phone.post(f"/list/{water['id']}/move", json={"to": "today"}).json()["moved"]
+    assert done(laptop, water, "2026-10-17") == {"ok": True, "undo": None, "stale": True}
+    assert mine.get_task(water["id"])["due"]["date"] == FRI.isoformat() and _wins(laptop) == 0  # still to do
+    # A skip (→ Tomorrow) on the phone, Done on the laptop that still shows today: the skip stays.
+    assert phone.post(f"/list/{water['id']}/move", json={"to": "tomorrow"}).json()["moved"]
+    assert done(laptop, water, FRI.isoformat())["stale"] is True
+    assert mine.get_task(water["id"])["due"]["date"] == "2026-10-17" and _wins(laptop) == 0
+    # A one-off finished on the phone.
+    letter = mine.create({"content": "Post the letter", "due_date": FRI.isoformat()})
+    assert "stale" not in done(phone, letter, FRI.isoformat())
+    assert done(laptop, letter, FRI.isoformat())["stale"] is True and _wins(laptop) == 1
+    # A Done that did something isn't stale: the screen showed tomorrow, and it's done early.
+    r = done(laptop, water, "2026-10-17")
+    assert "stale" not in r and r["undo"]["prev_due"] == "2026-10-17" and _wins(laptop) == 2
 
 
 # ------------------------------------------------------------------ W5-03: starter tags seeded once
@@ -320,3 +413,21 @@ def test_every_done_sends_the_day_it_showed():
     sends = [line for line in js.splitlines() if "/done`, {" in line and "/list/" in line]
     assert len(sends) == 4, sends  # a row's ✓ (and Just one thing), bulk Done, the timer's Done, a reminder's Done
     assert all("json: { due: t" in line and "due?.date?.slice(0, 10) }" in line for line in sends), sends
+
+
+def test_a_done_that_changed_nothing_never_says_done():
+    """Checked in a real browser (row ✓, bulk Done, the timer's Done, a reminder's Done): a stale
+    Done says DONE_STALE and draws the list again, and bulk Done counts only the ones done."""
+    js = (WEB / "app.js").read_text()
+    assert "const DONE_STALE = \"That changed on another device. Here's your list now.\";" in js
+    lines = js.splitlines()
+    sends = [i for i, line in enumerate(lines) if "/done`, {" in line and "/list/" in line]
+    assert len(sends) == 4
+    for i in sends:
+        after = "\n".join(lines[i + 1:i + 6])
+        assert "r.stale" in after and ("DONE_STALE" in after or "changed on another device" in after), after
+    assert "snack(`Done ${done.length} ✓${stale ? ` · ${stale} changed on another device` : \"\"}" in js
+    assert "Done ${ok.length}" not in js
+    for done_path in ("toast(DONE_STALE); await loadList(); return;", "timerTell(DONE_STALE); await loadList(); return;",
+                      "if (r.stale) remindNote(DONE_STALE, null, id);"):
+        assert done_path in js, done_path
