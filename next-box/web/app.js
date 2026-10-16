@@ -93,10 +93,13 @@ function clearPerson() {
     "#jDays", "#slugList", "#winsChart", "#winsTotal", "#hist", "#boardList", "#tagList", "#calList", "#appStatus", "#provFields",
     "#calFields", "#sessions", "#pName", "#pFacts", "#pDeletePanel", "#mePanel", "#suTiles", "#suList", "#suNew", "#users",
     "#activity", "#events", "#diag", "#nuOut", "#ivOut", "#ivList", "#printerList", "#uPeople", "#uTickets", "#udInfo", "#udTempOut",
-    "#taskid", "#filterTags", "#histMsg", "#scanPending", "#scanRecentList", "#slugResult"]) {
+    "#taskid", "#filterTags", "#histMsg", "#scanPending", "#scanRecentList", "#slugResult",
+    "#jFoundList", "#jFoundHead", "#jSearchStatus", "#jBackText", "#linesBody", "#linesMsg", "#jxSummary"]) {
     const el = $(id); if (el) el.innerHTML = "";
   }
-  for (const id of ["#printResult", "#listResult", "#todayCard", "#guideCard", "#slugCard", "#slugResult", "#jNew", "#activityCard", "#uDetail"]) $(id).hidden = true;
+  for (const id of ["#printResult", "#listResult", "#todayCard", "#guideCard", "#slugCard", "#slugResult", "#jNew", "#activityCard", "#uDetail",
+    "#jFound", "#jBack"]) $(id).hidden = true;
+  $("#journal").classList.remove("searching"); jData.clear(); lines = { items: [], opener: null };
   listData = { tasks: [], linked: [], tags: [] }; picked = new Set(); skipped = new Set(); guide = null; showingDone = false;
   conn = null; printOpts = null; update = null; editing = null; suRows = []; suPicked = new Set(); suOpen = null;
   markTab("mylist");
@@ -679,7 +682,8 @@ function scanCard(rec) {
   (rec.ignored || []).forEach((i) => h += `<p class="ignored">${esc(ignoredLine(i))}</p>`);
   if (rec.message) h += `<p class="applied">${esc(rec.message)}</p>`;
   if (kept.win) h += `<p class="jwin"><b>Your win:</b> ${esc(kept.win)}</p>`;
-  if (kept.notes) h += `<h3>Your notes</h3><p style="white-space:pre-wrap">${esc(kept.notes)}</p>`;
+  if (kept.notes) h += `<h3>Your notes</h3><p style="white-space:pre-wrap">${esc(kept.notes)}</p>
+      <div class="row"><button class="plain small" data-lines>Add lines to my list</button></div>`;
   if (rec.journal_id) h += `<p class="muted">Saved to your journal. <button class="linkish" data-go-tab="journal">Open Journal</button></p>`;
   if (!rec.applied.length && !rec.needs_confirmation.length && !rec.errors.length && !rec.journal_id && !(rec.ignored || []).length) h += `<p class="muted">No marks found.</p>`;
   return h + `<p class="err" data-msg role="alert"></p></div>`;
@@ -715,6 +719,7 @@ function wireScanCard(card, rec) {
     card.querySelector("[data-msg]").innerHTML = `<span class="muted"><span class="spin" aria-hidden="true"></span>Reading your page again…</span>`;
     act(e.target, "retry");
   });
+  card.querySelector("[data-lines]")?.addEventListener("click", (e) => openLines(scanNotes[rec.id]?.notes || "", e.currentTarget));
   const code = card.querySelector("[data-code-input]");
   card.querySelector("[data-code-go]")?.addEventListener("click", (e) => code.value.trim() && act(e.target, "label", { label_id: code.value.trim() }));
   code?.addEventListener("keydown", (e) => { if (e.key === "Enter") card.querySelector("[data-code-go]").click(); });
@@ -2046,18 +2051,35 @@ document.addEventListener("click", (e) => {
 const dayName = (iso, d = {}) => d.is_today ? "Today" : d.is_yesterday ? "Yesterday"
   : new Date(iso + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
 let jUntil = "", jToday = "";
-const NO_JOURNAL = `<div class="card"><p class="muted">Nothing here yet. Print today's label, paste it in your journal,
+const jData = new Map();                  // day -> that day as drawn, so a page can move between days in place
+const jRange = { newest: "", oldest: "" };  // the days the list covers now (empty ones included)
+const addDays = (iso, n) => { const d = new Date(iso + "T12:00:00"); d.setDate(d.getDate() + n); return d.toLocaleDateString("en-CA"); };
+const dayFlags = (iso) => ({ is_today: iso === jToday, is_yesterday: !!jToday && iso === addDays(jToday, -1) });
+const NO_JOURNAL =`<div class="card"><p class="muted">Nothing here yet. Print today's label, paste it in your journal,
       write on the right page tonight, then Snap both pages.</p></div>`;
 
-async function loadJournal(more = false) {
+// `from`: show that day and older (a search result was opened), with "Back to today" above.
+async function loadJournal(more = false, from = "") {
   await flushJournal();  // an edit still being typed is saved before the pages are drawn again
-  if (!more) { jUntil = ""; $("#jDays").innerHTML = `<p class="muted">Loading…</p>`; $("#jEnd").hidden = true; loadWins(); loadSlugs(); }
+  if (!more) {
+    jUntil = from; jData.clear(); $("#jDays").innerHTML = `<p class="muted">Loading…</p>`; $("#jEnd").hidden = true;
+    $("#jBack").hidden = true;
+    if (!from) { loadWins(); loadSlugs(); }
+  }
   try {
     const r = await api(`/journal?days=14${jUntil ? "&until=" + jUntil : ""}`);
     jToday = r.today;
-    const html = r.days.map(dayCard).join("");
+    const asked = jUntil || r.today;
+    r.days.forEach((d) => jData.set(d.day, d));
+    if (!more) jRange.newest = asked;
+    jRange.oldest = addDays(asked, -13);
+    const html = r.days.map((d) => dayCard(d)).join("");
     if (!more) $("#jDays").innerHTML = html || NO_JOURNAL;
     else $("#jDays").insertAdjacentHTML("beforeend", html);
+    if (from && from !== r.today) {
+      $("#jBackText").textContent = `Showing ${dayName(from, dayFlags(from))} and earlier.`;
+      $("#jBack").hidden = false;
+    }
     jUntil = r.next_until;
     $("#jOlder").hidden = !r.has_more;
     $("#jEnd").hidden = !(more && !r.has_more);
@@ -2080,17 +2102,53 @@ function pageHtml(p, d) {
   const local = `${made.getFullYear()}-${String(made.getMonth() + 1).padStart(2, "0")}-${String(made.getDate()).padStart(2, "0")}`;
   const time = made.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   const when = local === d.day ? time : `written ${made.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
-  return `<div class="jpage" data-page="${esc(p.id)}" data-photo="${p.has_photo ? "1" : ""}">
-      ${p.has_photo ? `<button class="jphoto" data-jphoto aria-label="Open the photo of this page"><img loading="lazy" src="/journal/${esc(p.id)}/photo" alt=""></button>` : ""}
-      <label class="sr-only" for="jn-${esc(p.id)}">Notes for ${esc(dayName(d.day, d))}, ${esc(when)}</label>
-      <textarea id="jn-${esc(p.id)}" placeholder="${p.has_photo ? "No handwritten notes were found. Type some if you like." : ""}">${esc(p.notes)}</textarea>
-      <div class="row"><span class="muted" data-jstate>${esc(when)}</span>
-        <button class="plain small warn" data-jdel>${p.has_photo ? "Delete page" : "Delete note"}</button></div></div>`;
+  const id = esc(p.id);
+  return `<div class="jpage" data-page="${id}" data-photo="${p.has_photo ? "1" : ""}">
+      ${p.has_photo ? `<button class="jphoto" data-jphoto aria-label="Open the photo of this page"><img loading="lazy" src="/journal/${id}/photo" alt=""></button>` : ""}
+      <label class="sr-only" for="jn-${id}">Notes for ${esc(dayName(d.day, d))}, ${esc(when)}</label>
+      <textarea id="jn-${id}" placeholder="${p.has_photo ? "No handwritten notes were found. Type some if you like." : ""}">${esc(p.notes)}</textarea>
+      <div class="jacts"><span class="muted jstate" data-jstate>${esc(when)}</span>
+        <button class="plain small" data-jlines${p.notes.trim() ? "" : " hidden"}>Add lines to my list</button>
+        <button class="plain small" data-jmove aria-expanded="false" aria-controls="jm-${id}">Move to another day</button>
+        <button class="plain small warn" data-jdel>${p.has_photo ? "Delete page" : "Delete note"}</button></div>
+      <div class="jmove" id="jm-${id}" hidden>
+        <label for="jmd-${id}">Move this ${p.has_photo ? "page" : "note"} to</label>
+        <input type="date" id="jmd-${id}" value="${esc(d.day)}" max="${esc(jToday)}">
+        <button class="go small" data-jmove-go>Move</button><button class="plain small" data-jmove-cancel>Cancel</button>
+        <span class="err" data-jmove-msg role="alert"></span></div></div>`;
 }
 
-function dayCard(d) {
+// `moved`: a page just moved from this day to another, with Undo.
+function dayCard(d, moved = null) {
   const written = d.pages.filter((p) => p.win).map((p) => `<p class="jwin"><b>Your win:</b> ${esc(p.win)}</p>`).join("");
-  return `<div class="card jday"><h3>${esc(dayName(d.day, d))}</h3>${written}${winsHtml(d.wins)}${d.pages.map((p) => pageHtml(p, d)).join("")}</div>`;
+  const name = dayName(d.day, d);
+  const print = d.pages.length || d.wins.count
+    ? `<a class="btnlink plain small" href="/journal/export?format=pdf&amp;day=${esc(d.day)}" target="_blank" rel="noopener"
+         aria-label="Print my journal page for ${esc(name)}">Print my journal page</a>` : "";
+  const note = moved ? `<p class="jmoved" tabindex="-1">Moved a page to ${esc(dayName(moved.to, dayFlags(moved.to)))}.
+      <button class="linkish" data-jundo="${esc(moved.id)}" data-from="${esc(moved.from)}" data-to="${esc(moved.to)}">Undo</button></p>` : "";
+  return `<div class="card jday" data-day="${esc(d.day)}"><div class="jhead"><h3 tabindex="-1">${esc(name)}</h3>${print}</div>
+    ${note}${ticketHtml(d)}${written}${winsHtml(d.wins)}${changesHtml(d.changes)}${d.pages.map((p) => pageHtml(p, d)).join("")}</div>`;
+}
+
+// What read-back changed that day (the finished ones are the day's wins, above).
+function changesHtml(c) {
+  if (!c) return "";
+  return [["Moved", c.moved], ["Dropped", c.dropped]].filter(([, names]) => names?.length)
+    .map(([what, names]) => `<p class="jchanges">${what}: ${esc(names.join(", "))}</p>`).join("");
+}
+
+// That day's ticket: small, with Print on paper. Tap it to see all of it.
+function ticketHtml(d) {
+  const t = d.ticket;
+  if (!t) return "";
+  const what = t.kind === "today" ? "Daily ticket" : KIND_NAMES[t.kind] || "Ticket";
+  const size = me?.prefs?.paper_size || "letter";
+  return `<div class="jticket"><button type="button" data-jticket="${esc(t.id)}" aria-label="Open ${esc(what.toLowerCase())} #${esc(t.id)}">
+      <img src="${png(t.id)}" alt="" loading="lazy"></button>
+    <div><span class="muted">${esc(what)} #${esc(t.id)}${t.dry_run ? " (preview)" : ""}</span>
+      <a class="btnlink plain small" href="/printed/${encodeURIComponent(t.id)}/pdf?paper=${esc(size)}" target="_blank" rel="noopener"
+         aria-label="Print ticket #${esc(t.id)} on paper">Print on paper</a></div></div>`;
 }
 
 function fitText(t) { t.style.height = "auto"; t.style.height = (t.scrollHeight + 4) + "px"; }
@@ -2128,9 +2186,10 @@ function wireJournal() {
     clearTimeout(jPending.get(id)?.timer); jPending.delete(id);
     try {
       await api(`/journal/${id}?confirm=true`, { method: "DELETE" });
-      const day = page.closest(".jday");
+      const day = page.closest(".jday"), kept = jData.get(day?.dataset.day);
+      if (kept) kept.pages = kept.pages.filter((p) => p.id !== id);
       page.remove();
-      if (day && !day.querySelector(".jpage, [data-wins], .jwin")) day.remove();
+      if (day && !day.querySelector(".jpage, [data-wins], .jwin, .jchanges")) day.remove();
       if (!$("#jDays .jday")) $("#jDays").innerHTML = NO_JOURNAL;
       toast("Deleted");
     } catch (e) { toast(errText(e)); }
@@ -2231,6 +2290,342 @@ $("#jSave").onclick = async () => {
   } catch (e) { toast(errText(e)); }
 };
 
+// ---------------------------------------------------------------- journal: move a page to another day
+// The page moves in place: out of its day (which says "Moved … Undo"), into the new day if it's on screen.
+const dayHasMore = (d) => d.pages.length || d.wins.count || d.wins.items.length || d.changes;
+function drawDay(day, moved = null) {
+  const d = jData.get(day), old = $(`#jDays .jday[data-day="${CSS.escape(day)}"]`);
+  if (!d || (!dayHasMore(d) && !moved)) {
+    old?.remove();
+    if (!$("#jDays .jday")) $("#jDays").innerHTML = NO_JOURNAL;
+    return null;
+  }
+  const box = document.createElement("div");
+  box.innerHTML = dayCard(d, moved);
+  const card = box.firstElementChild;
+  if (old) old.replaceWith(card);
+  else {
+    $("#jDays > .card:not(.jday)")?.remove();  // "Nothing here yet"
+    const after = $$("#jDays .jday").find((c) => c.dataset.day < day);  // newest first
+    after ? after.before(card) : $("#jDays").append(card);
+  }
+  return card;
+}
+function keepTyping(day) {  // what's typed on screen is what's drawn again
+  const d = jData.get(day);
+  $$(`#jDays .jday[data-day="${CSS.escape(day)}"] [data-page]`).forEach((el) => {
+    const p = d?.pages.find((x) => x.id === el.dataset.page);
+    if (p) p.notes = el.querySelector("textarea").value;
+  });
+}
+async function movePage(id, from, to, undoing = false) {
+  await flushJournal();
+  const page = await api(`/journal/${id}`, { method: "PATCH", json: { day: to } });
+  keepTyping(from);
+  const src = jData.get(from);
+  const moving = { ...(src?.pages.find((p) => p.id === id) || {}), ...page };
+  if (src) src.pages = src.pages.filter((p) => p.id !== id);
+  if (to >= jRange.oldest && to <= jRange.newest) {  // on screen: show it there too
+    keepTyping(to);
+    const dst = jData.get(to) || { day: to, pages: [], wins: { count: 0, items: [], linked: 0 }, ticket: null, changes: null, ...dayFlags(to) };
+    dst.pages = [...dst.pages.filter((p) => p.id !== id), moving].sort((a, b) => a.created - b.created);
+    jData.set(to, dst);
+    drawDay(to);
+  }
+  const card = drawDay(from, undoing ? null : { id, from, to });
+  wireJournal();
+  return card;
+}
+$("#jDays").addEventListener("click", async (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  const page = b.closest("[data-page]"), form = page?.querySelector(".jmove");
+  if (b.matches("[data-jmove]")) {
+    form.hidden = !form.hidden;
+    b.setAttribute("aria-expanded", String(!form.hidden));
+    if (!form.hidden) form.querySelector("input").focus();
+  } else if (b.matches("[data-jmove-cancel]")) {
+    form.hidden = true;
+    page.querySelector("[data-jmove]").setAttribute("aria-expanded", "false");
+    page.querySelector("[data-jmove]").focus();
+  } else if (b.matches("[data-jmove-go]")) {
+    const from = page.closest(".jday").dataset.day, to = form.querySelector("input").value, msg = form.querySelector("[data-jmove-msg]");
+    msg.textContent = !to ? "Pick a day." : to > jToday ? "That day hasn't happened yet." : to === from ? "It's already on that day." : "";
+    if (msg.textContent) return;
+    b.disabled = true;
+    try {
+      const card = await movePage(page.dataset.page, from, to);
+      card?.querySelector(".jmoved")?.focus();
+    } catch (err) { msg.textContent = errText(err); b.disabled = false; }
+  } else if (b.matches("[data-jundo]")) {
+    b.disabled = true;
+    try {
+      await movePage(b.dataset.jundo, b.dataset.to, b.dataset.from, true);
+      $(`#jDays [data-page="${CSS.escape(b.dataset.jundo)}"] [data-jmove]`)?.focus();
+      toast("Moved back");
+    } catch (err) { b.disabled = false; toast(errText(err)); }
+  } else if (b.matches("[data-jlines]")) {
+    openLines(page.querySelector("textarea").value, b);
+  } else if (b.matches("[data-jticket]")) {
+    $("#photoBig").src = b.querySelector("img").src;
+    $("#photoBig").alt = `Ticket #${b.dataset.jticket}`;
+    $("#photoDialog").setAttribute("aria-label", "Ticket");
+    $("#photoDialog").showModal();
+  }
+});
+$("#jDays").addEventListener("keydown", (e) => {  // Enter in the date box moves it
+  if (e.key === "Enter" && e.target.matches(".jmove input")) { e.preventDefault(); e.target.closest(".jmove").querySelector("[data-jmove-go]").click(); }
+});
+$("#jDays").addEventListener("input", (e) => {  // "Add lines to my list" once a page has notes
+  const page = e.target.matches("textarea") && e.target.closest("[data-page]");
+  if (page) page.querySelector("[data-jlines]").hidden = !e.target.value.trim();
+});
+$("#jDays").addEventListener("error", (e) => {  // a ticket image that's gone (kept 90 days): no empty box
+  if (e.target.matches?.(".jticket img")) e.target.closest("button").hidden = true;
+}, true);
+$("#photoDialog").addEventListener("close", () => {
+  $("#photoDialog").setAttribute("aria-label", "Journal page photo"); $("#photoBig").alt = "Your journal page";
+});
+
+// ---------------------------------------------------------------- journal: search
+let jSearchTimer = null, jSearchN = 0;
+function searching(on) {
+  $("#journal").classList.toggle("searching", on);
+  $("#jFound").hidden = !on;
+}
+function endSearch(clear = true) {
+  clearTimeout(jSearchTimer); jSearchN++;
+  if (clear) $("#jQuery").value = "";
+  searching(false);
+  $("#jFoundList").innerHTML = ""; $("#jSearchStatus").textContent = "";
+}
+const longDay = (iso) => {
+  const f = dayFlags(iso);
+  if (f.is_today || f.is_yesterday) return dayName(iso, f);
+  return new Date(iso + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric",
+    ...(iso.slice(0, 4) !== (jToday || today()).slice(0, 4) ? { year: "numeric" } : {}) });
+};
+const hitHtml = (h) => `<button class="jhit" data-hit-day="${esc(h.day)}" data-hit-page="${esc(h.id)}">
+    <span class="when"><b>${esc(longDay(h.day))}</b> · ${esc(new Date(h.created * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))}${h.has_photo ? " · photo" : ""}</span>
+    <span class="snip">${h.parts.map((p) => p.m ? `<mark>${esc(p.t)}</mark>` : esc(p.t)).join("")}</span></button>`;
+async function runSearch() {
+  clearTimeout(jSearchTimer);
+  const q = $("#jQuery").value.trim().replace(/\s+/g, " ");
+  if (!q) return endSearch(false);
+  searching(true);
+  const n = ++jSearchN, head = $("#jFoundHead");
+  if (q.length < 2) { head.textContent = "Type at least 2 letters."; $("#jFoundList").innerHTML = ""; return; }
+  head.textContent = "Searching…";
+  try {
+    const r = await api(`/journal/search?q=${encodeURIComponent(q)}`);
+    if (n !== jSearchN) return;  // they kept typing: a newer search is on its way
+    const said = r.total ? `${r.total} ${r.total === 1 ? "page matches" : "pages match"} “${q}”`
+      + (r.total > r.results.length ? `. Here are the newest ${r.results.length}.` : "")
+      : `Nothing in your journal matches “${q}”.`;
+    head.textContent = said;
+    $("#jSearchStatus").textContent = said;
+    $("#jFoundList").innerHTML = r.results.map(hitHtml).join("")
+      || `<p class="muted">Check the spelling, or try fewer words.</p>`;
+  } catch (e) { if (n === jSearchN) { head.textContent = errText(e); $("#jFoundList").innerHTML = ""; } }
+}
+$("#jQuery").addEventListener("input", () => { clearTimeout(jSearchTimer); jSearchTimer = setTimeout(runSearch, 350); });
+$("#jQuery").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); runSearch(); }
+  if (e.key === "Escape" && $("#jQuery").value) { e.preventDefault(); endSearch(); }
+});
+$("#jFoundClear").onclick = () => { endSearch(); $("#jQuery").focus(); };
+$("#jFoundList").onclick = async (e) => {  // open the page: that day and older, the page outlined
+  const b = e.target.closest("[data-hit-day]");
+  if (!b) return;
+  const { hitDay, hitPage } = b.dataset;
+  endSearch(false);
+  await loadJournal(false, hitDay);
+  const page = $(`#jDays [data-page="${CSS.escape(hitPage)}"]`);
+  if (!page) return;
+  page.classList.add("jfound");
+  page.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
+  page.closest(".jday").querySelector("h3").focus({ preventScroll: true });
+};
+$("#jBackGo").onclick = () => { loadJournal(); window.scrollTo(0, 0); };
+
+// ---------------------------------------------------------------- journal: notes -> tasks
+// "Add lines to my list" on a journal page or a Snap result: the lines that look like to-dos are
+// ticked, each with what Brain dump will make of it. Only the ticked lines are sent to the list.
+let lines = { items: [], opener: null };
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+function lineChips(x) {
+  const t = x.task || {}, c = [];
+  if (x.state === "added") c.push(["ok", "added ✓"]);
+  if (x.on_list) c.push(["", "already on your list"]);
+  if (x.done) c.push(["", "looks done"]);
+  if (x.unclear) c.push(["warn", "a word couldn't be read: edit it first"]);
+  if (t.problem) c.push(["warn", t.problem]);
+  if (t.due_date) c.push(["", "📅 " + whenText({ due: { date: t.due_date + (t.due_time ? "T" + t.due_time : "") } })]);
+  if (t.repeat) c.push(["", "↻ " + t.repeat]);
+  if (t.minutes) c.push(["", `~${t.minutes}m`]);
+  if (t.priority >= 3) c.push(["", "! urgent"]);
+  return c.map(([k, s]) => `<span class="pchip ${k}">${esc(s)}</span>`).join("") + (t.tags || []).map(tagChip).join("");
+}
+function lineHtml(x, i) {
+  const shown = x.task?.content || x.text, added = x.state === "added";
+  const body = x.editing
+    ? `<input type="text" data-ledit-input value="${esc(x.text)}" aria-label="Line ${i + 1}" maxlength="500">`
+    : `<label class="ltext" for="ln-${i}">${esc(shown)}</label>`;
+  const chips = x.editing ? "" : lineChips(x);
+  const btn = added ? "" : x.editing ? `<button class="linkish" data-ldone>Done</button>`
+    : `<button class="linkish" data-ledit aria-label="Edit ${esc(shown)}">Edit</button>`;
+  return `<li data-i="${i}" class="${added ? "added" : ""}"><div class="lrow">
+      <input type="checkbox" id="ln-${i}" ${x.pick ? "checked" : ""} ${added ? "disabled" : ""} ${x.editing ? `aria-label="Add line ${i + 1}"` : ""}>
+      <div class="lbody">${body}${chips ? `<div class="pchips">${chips}</div>` : ""}</div>${btn}</div></li>`;
+}
+function drawLines(focus = null) {
+  if (!lines.items.length) {
+    $("#linesBody").innerHTML = `<p class="muted">No lines to add. Put each to-do on its own line, like “- call the dentist”.</p>`;
+  } else {
+    $("#linesBody").innerHTML = `<div class="row lall" style="margin:0"><button class="linkish" data-lines-all>Tick all</button>
+        <button class="linkish" data-lines-none>Untick all</button></div><ul class="lines">${lines.items.map(lineHtml).join("")}</ul>`;
+  }
+  countLines();
+  if (focus) $(`#linesBody li[data-i="${focus.i}"] ${focus.sel}`)?.focus();
+}
+function countLines() {
+  const n = lines.items.filter((x) => x.pick && x.state !== "added").length;
+  $("#linesAdd").disabled = !n;
+  $("#linesAddN").textContent = n ? `Add ${n}` : "Add";
+}
+async function openLines(text, opener) {
+  lines = { items: [], opener };
+  $("#linesMsg").textContent = ""; $("#linesMsg").className = "";
+  $("#linesAdd").disabled = true; $("#linesAddN").textContent = "Add";
+  if (!$("#linesDialog").open) $("#linesDialog").showModal();
+  if (!text.trim()) { $("#linesBody").innerHTML = `<p class="muted">This page has no notes yet.</p>`; return; }
+  $("#linesBody").innerHTML = `<p class="muted"><span class="spin" aria-hidden="true"></span>Reading the lines…</p>`;
+  try {
+    const r = await api("/journal/lines", { method: "POST", json: { text } });
+    lines.items = r.lines.map((x) => ({ ...x, pick: x.suggest, state: "" }));
+    drawLines();
+    $("#linesBody input[type=checkbox]")?.focus();  // straight to the first line, not Close
+  } catch (e) {
+    $("#linesBody").innerHTML = `<p class="err">${esc(errText(e))}</p><div class="row"><button class="plain small" data-lines-retry>Try again</button></div>`;
+    $("#linesBody [data-lines-retry]").onclick = () => openLines(text, opener);
+  }
+}
+async function finishEdit(i) {
+  const x = lines.items[i], input = $(`#linesBody li[data-i="${i}"] [data-ledit-input]`);
+  const text = (input?.value || "").trim();
+  x.editing = false;
+  if (text && text !== x.text) {
+    x.text = text; x.pick = true;  // they fixed it so it can go on the list
+    try {
+      const [fresh] = (await api("/journal/lines", { method: "POST", json: { text: "- " + text } })).lines;
+      if (fresh) Object.assign(x, { text: fresh.text, task: fresh.task, unclear: fresh.unclear, on_list: fresh.on_list, done: false });
+    } catch { x.task = null; }
+  }
+  drawLines({ i, sel: "[data-ledit]" });
+}
+$("#linesBody").addEventListener("change", (e) => {
+  const li = e.target.closest("li[data-i]");
+  if (!li || e.target.type !== "checkbox") return;
+  lines.items[li.dataset.i].pick = e.target.checked;
+  countLines();
+});
+$("#linesBody").addEventListener("click", (e) => {
+  const b = e.target.closest("button"), li = b?.closest("li[data-i]");
+  if (!b) return;
+  if (b.matches("[data-lines-all], [data-lines-none]")) {
+    const on = b.matches("[data-lines-all]");
+    lines.items.forEach((x, i) => {
+      if (x.state === "added") return;
+      x.pick = on;
+      const box = $(`#ln-${i}`);
+      if (box) box.checked = on;
+    });
+    countLines();
+  } else if (b.matches("[data-ledit]")) {
+    lines.items[li.dataset.i].editing = true;
+    drawLines({ i: li.dataset.i, sel: "[data-ledit-input]" });
+  } else if (b.matches("[data-ldone]")) finishEdit(Number(li.dataset.i));
+});
+$("#linesBody").addEventListener("keydown", (e) => {
+  if (!e.target.matches("[data-ledit-input]")) return;
+  const i = Number(e.target.closest("li").dataset.i);
+  if (e.key === "Enter") { e.preventDefault(); finishEdit(i); }
+  if (e.key === "Escape") { e.preventDefault(); lines.items[i].editing = false; drawLines({ i, sel: "[data-ledit]" }); }
+});
+$("#linesAdd").onclick = async () => {
+  for (const [i, x] of lines.items.entries()) if (x.editing) await finishEdit(i);  // what's typed counts
+  const chosen = lines.items.filter((x) => x.pick && x.state !== "added");
+  if (!chosen.length) return;
+  const msg = $("#linesMsg");
+  $("#linesAdd").disabled = true; msg.className = "muted"; msg.textContent = "Adding…";
+  try {
+    const r = await api("/list/dump", { method: "POST", json: { text: chosen.map((x) => x.text).join("\n") } });
+    chosen.forEach((x) => { x.state = "added"; x.pick = false; });
+    drawLines();
+    msg.className = "ok";
+    msg.innerHTML = `Added ${esc(plural(r.added?.length ?? chosen.length, "task"))} to ${esc(r.to || "your list")}. ✓
+      <button class="linkish" data-go-tab="mylist">Open My list</button>`;
+    loadList();
+  } catch (e) {
+    msg.className = "err";
+    msg.textContent = e.status && typeof e.message === "string" && e.message !== "[object Object]" ? e.message
+      : e.status ? "Some lines couldn't be added. Check them and try again." : OFFLINE;
+    drawLines();
+  }
+};
+$("#linesClose").onclick = () => $("#linesDialog").close();
+$("#linesDialog").addEventListener("click", (e) => { if (e.target.closest("[data-go-tab]")) $("#linesDialog").close(); });
+$("#linesDialog").addEventListener("close", () => { if (lines.opener?.isConnected) lines.opener.focus(); });
+
+// ---------------------------------------------------------------- download my journal
+// From the Journal tab, Profile and the delete-account panel. The summary says what's in it (and
+// whether a download is allowed right now) before the browser downloads the file itself.
+let jxN = 0;
+function jxParams() {
+  const p = new URLSearchParams({ format: document.querySelector("input[name=jxFormat]:checked").value });
+  if ($("#jxRange").value) p.set("since", addDays(jToday || today(), -(Number($("#jxRange").value) - 1)));
+  if (p.get("format") === "pdf") p.set("paper", $("#jxPaper").value);
+  return p;
+}
+const shortDate = (iso) => new Date(iso + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+async function jxSummary() {
+  const n = ++jxN, p = jxParams(), go = $("#jxGo"), out = $("#jxSummary"), pdf = p.get("format") === "pdf";
+  $("#jxPaperField").hidden = !pdf;
+  go.textContent = pdf ? "Download PDF" : "Download .zip";
+  go.removeAttribute("href"); go.setAttribute("aria-disabled", "true");
+  out.className = "muted"; out.textContent = "Looking at your journal…";
+  try {
+    const s = await api("/journal/export/summary" + (p.get("since") ? `?since=${p.get("since")}` : ""));
+    if (n !== jxN) return;
+    if (!s.days) {
+      out.textContent = p.get("since") ? "Nothing in your journal for these days yet." : "Nothing in your journal yet. Snap a page or write a note first.";
+      return;
+    }
+    if (!s.can_download) { out.className = "err"; out.textContent = "That's a lot of downloads this hour. Try again in a bit."; return; }
+    const range = s.first === s.last ? shortDate(s.first) : `${shortDate(s.first)} to ${shortDate(s.last)}`;
+    const bits = [plural(s.days, "day"), plural(s.photos, "photo"), s.wins ? plural(s.wins, "win") : ""].filter(Boolean).join(", ");
+    const size = !pdf && s.bytes > 1_000_000 ? ` About ${Math.round(s.bytes / 1_000_000)} MB.` : "";
+    out.textContent = `${range}: ${bits}.${size}`;
+    go.href = `/journal/export?${p}`; go.removeAttribute("aria-disabled");
+  } catch (e) { if (n === jxN) { out.className = "err"; out.textContent = errText(e); } }
+}
+function openJournalExport() {
+  $("#jxPaper").value = me?.prefs?.paper_size || "letter";
+  if (!$("#jxDialog").open) $("#jxDialog").showModal();
+  jxSummary();
+}
+document.addEventListener("click", (e) => {
+  if (e.target.closest("[data-journal-export]")) { e.preventDefault(); openJournalExport(); }
+});
+$("#jxDialog").addEventListener("change", jxSummary);
+$("#jxGo").addEventListener("click", (e) => {
+  if (!$("#jxGo").href) return e.preventDefault();
+  $("#jxSummary").className = "muted";
+  $("#jxSummary").textContent = "Your download is starting. A big journal can take a moment to put together.";
+});
+$("#jxClose").onclick = () => $("#jxDialog").close();
+closeOnBackdrop($("#jxDialog"));
+
 
 // ---------------------------------------------------------------- print on paper (any printer)
 const PAPERS = [["letter", "Letter"], ["a4", "A4"], ["a5", "A5"], ["half_letter", "Half letter"]];
@@ -2289,7 +2684,8 @@ closeOnBackdrop($("#moreDialog"));
 closeOnBackdrop($("#fbDialog"), () => !$("#fbDone").hidden || !$$("#fbDialog textarea").some((t) => t.value.trim()));  // nothing typed is lost
 // What deleting your account removes, and how to keep a copy first.
 const DELETE_WARNING = `<p class="err">This deletes your account, your list, tags, journal pages and journal photos, tickets and history from Next Box. It can't be undone. Apps you linked (like Todoist) aren't touched.</p>
-  <p class="muted">Want a copy first? <a href="/auth/export?format=zip">Download my data</a>: one .zip file with your list, settings, journal pages and photos, and ticket images.</p>`;
+  <p class="muted">Want a copy first? <a href="/auth/export?format=zip">Download my data</a>: one .zip file with your list, settings, journal pages and photos, and ticket images.</p>
+  <p class="muted"><button class="linkish" data-journal-export>Download your journal first</button>: a folder for each day, or a PDF you can print.</p>`;
 $("#meDialog").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-me]");
   if (!b) return;

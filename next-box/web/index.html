@@ -219,6 +219,69 @@
   .wins div.today span::after { content:""; display:block; width:6px; height:6px; margin:2px auto 0; border-radius:50%; background:var(--accent); }
   #photoDialog { max-width:920px; }
   #photoDialog img { display:block; max-width:100%; max-height:75vh; margin:0 auto; border-radius:6px; }
+  /* The journal loop: search, each day's ticket, moving pages, notes -> tasks, downloads */
+  :root { --mark:#ffe08a; --markFg:#1b1b1b; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --mark:#7a5d00; --markFg:#fff; } }
+  :root[data-theme="dark"] { --mark:#7a5d00; --markFg:#fff; }
+  input[type=search] { width:100%; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  .jsearch { margin-top:12px; }
+  mark { background:var(--mark); color:var(--markFg); border-radius:3px; padding:0 1px; }
+  .jfoundhead { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
+  .jfoundhead p { margin:0; font-weight:600; }
+  .jhit { display:block; width:100%; text-align:left; background:none; border:0; border-top:1px solid var(--line); padding:10px 2px; color:var(--fg); font:inherit; cursor:pointer; }
+  .jhit:first-child { border-top:0; margin-top:6px; }
+  .jhit .when { display:block; font-size:.875em; color:var(--muted); }
+  .jhit .snip { display:block; margin-top:2px; overflow-wrap:anywhere; }
+  #journal.searching #slugCard, #journal.searching #jDays, #journal.searching #jMore, #journal.searching #jBack { display:none; }
+  .jback { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; background:var(--note); color:var(--noteFg); border-radius:10px; padding:8px 12px; margin-bottom:12px; }
+  .jback[hidden] { display:none; }
+  .jhead { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:wrap; margin-bottom:4px; }
+  .jhead h3 { margin:4px 0; }
+  .jchanges { font-size:.875em; color:var(--muted); margin:6px 0; overflow-wrap:anywhere; }
+  .jticket { display:flex; gap:12px; align-items:center; margin:8px 0; }
+  .jticket button { flex:none; width:64px; height:84px; padding:0; overflow:hidden; border:1px solid var(--line); border-radius:6px; background:#fff; cursor:zoom-in; }
+  .jticket button[hidden] { display:none; }
+  .jticket img { display:block; width:100%; height:100%; object-fit:cover; object-position:top; }
+  .jticket .muted { display:block; margin-bottom:4px; }
+  a.btnlink { display:inline-flex; align-items:center; justify-content:center; text-decoration:none; border-radius:8px; font:inherit; cursor:pointer; }
+  a.btnlink.plain { border:1px solid var(--line); color:var(--fg); padding:9px 13px; }
+  a.btnlink.small { padding:5px 9px; font-size:13px; }
+  a.btnlink.go { background:var(--accent); color:#fff; padding:10px 14px; }
+  a.btnlink:not([href]) { opacity:.5; cursor:default; }
+  .jacts { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:8px; }
+  .jacts .jstate { flex:1 1 100%; }
+  .jacts button[hidden] { display:none; }
+  .jmove { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px; padding:10px; border-radius:8px; background:var(--bg); }
+  .jmove[hidden] { display:none; }
+  .jmove .err:empty { display:none; }
+  .jmoved { background:var(--note); color:var(--noteFg); border-radius:8px; padding:8px 10px; margin:6px 0; }
+  .jmoved .linkish { color:inherit; font-weight:600; }
+  .jpage.jfound { outline:3px solid var(--accent); outline-offset:4px; border-radius:6px; }
+  #linesDialog { max-width:560px; }
+  .lines { list-style:none; margin:8px 0 0; padding:0; max-height:55vh; overflow:auto; }
+  .lines li { border-top:1px solid var(--line); padding:8px 0; }
+  .lines li:first-child { border-top:0; }
+  .lrow { display:flex; gap:10px; align-items:flex-start; }
+  .lrow input[type=checkbox] { width:22px; height:22px; flex:none; margin-top:2px; }
+  .lrow .lbody { flex:1; min-width:0; }
+  .lrow .ltext { display:block; cursor:pointer; overflow-wrap:anywhere; }
+  .lrow input[type=text] { padding:6px 8px; }
+  .lines li.added .ltext { color:var(--muted); }
+  .pchips { display:flex; flex-wrap:wrap; gap:4px; margin-top:3px; }
+  .pchip { display:inline-block; font-size:.8em; padding:1px 7px; border-radius:99px; border:1px solid var(--line); color:var(--muted); }
+  .pchip.warn { border-color:var(--warn); color:var(--warn); }
+  .pchip.ok { border-color:var(--ok); color:var(--ok); }
+  #linesMsg:empty, #jxSummary:empty { display:none; }
+  fieldset.jxopts { border:0; padding:0; margin:8px 0 0; }
+  .jxopt { display:flex; gap:10px; align-items:flex-start; padding:10px; border:1px solid var(--line); border-radius:10px; margin-top:8px; cursor:pointer; }
+  .jxopt:has(input:checked) { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+  .jxopt input { width:20px; height:20px; flex:none; margin-top:2px; }
+  .jxopt b, .jxopt .muted { display:block; }
+  @media (max-width:720px) {
+    .jacts button, .jhead a.btnlink, .jticket a.btnlink, .jmove button, .jmove input, .jback button, #jFoundClear,
+    .lrow .linkish, .lall .linkish, .jmoved .linkish, #linesAdd, #linesClose, #jxGo, #jxClose { min-height:44px; }
+    .lrow .linkish, .lall .linkish { padding:0 6px; }
+  }
   input[type=date] { padding:9px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
   :root[data-theme="dark"] input[type=date] { color-scheme:dark; }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) input[type=date] { color-scheme:dark; } }
@@ -422,21 +485,32 @@
         Only you can read your journal.</p>
       <div class="wins" id="winsChart" role="img" aria-label="Wins this week"></div>
       <p class="muted" id="winsTotal"></p>
-      <div class="row"><button class="go" id="jWrite">Write a note</button><button class="plain" data-go-tab="scan">Snap a page</button></div>
+      <div class="row"><button class="go" id="jWrite">Write a note</button><button class="plain" data-go-tab="scan">Snap a page</button>
+        <button class="plain" data-journal-export>Download my journal</button></div>
       <div id="jNew" hidden>
         <div class="row"><label for="jDay">For</label><input type="date" id="jDay"></div>
         <label for="jText" class="sr-only">Your note</label>
         <textarea id="jText" placeholder="How did today go? What helped? What got in the way?"></textarea>
         <div class="row"><button class="go" id="jSave">Save</button><button class="plain" id="jCancel">Cancel</button></div>
       </div>
+      <div class="jsearch" role="search">
+        <label for="jQuery" class="sr-only">Search your journal</label>
+        <input type="search" id="jQuery" placeholder="Search your journal" autocomplete="off" enterkeyhint="search" maxlength="200">
+      </div>
+      <p class="sr-only" id="jSearchStatus" role="status" aria-live="polite"></p>
+    </div>
+    <div class="card" id="jFound" hidden>
+      <div class="jfoundhead"><p id="jFoundHead"></p><button class="plain small" id="jFoundClear">Clear search</button></div>
+      <div id="jFoundList"></div>
     </div>
     <div class="card" id="slugCard" hidden><h2>Slugs: things that keep sliding</h2>
       <p class="muted">No judgment. A task that keeps moving is usually too big or unclear. Make it smaller, print it alone, or let it go.</p>
       <div id="slugList"></div>
       <div class="result" id="slugResult" hidden aria-live="polite"></div>
     </div>
+    <div class="jback" id="jBack" hidden><span id="jBackText"></span><button class="plain small" id="jBackGo">Back to today</button></div>
     <div id="jDays"></div>
-    <div class="row"><button class="plain" id="jOlder" hidden>Older days</button><span class="muted" id="jEnd" hidden>That's everything.</span></div>
+    <div class="row" id="jMore"><button class="plain" id="jOlder" hidden>Older days</button><span class="muted" id="jEnd" hidden>That's everything.</span></div>
   </section>
 
   <section id="printed">
@@ -498,8 +572,10 @@
       <h3>What the admin can see</h3>
       <p class="muted" id="noticeText"></p>
       <p class="muted" id="noticeWhen"></p>
-      <p class="muted">Download my data saves one .zip file: your list, settings, journal pages and photos, and ticket images.</p>
+      <p class="muted">Download my data saves one .zip file: your list, settings, journal pages and photos, and ticket images.
+        Download my journal saves just your journal, a folder for each day or a PDF to print.</p>
       <div class="row"><a class="plain" href="/auth/export?format=zip" style="text-decoration:none;color:inherit;border:1px solid var(--line);border-radius:8px;padding:9px 13px">Download my data</a>
+        <button class="plain" data-journal-export>Download my journal</button>
         <button class="go warn" id="pDelete">Delete my account</button></div>
       <div id="pDeletePanel"></div>
     </div>
@@ -734,6 +810,33 @@
 <dialog id="photoDialog" aria-label="Journal page photo">
   <img id="photoBig" alt="Your journal page">
   <div class="row" style="justify-content:flex-end"><button class="plain" id="photoClose">Close</button></div>
+</dialog>
+<dialog id="linesDialog" aria-labelledby="linesTitle" aria-describedby="linesHint">
+  <h2 id="linesTitle">Add lines to <span class="newTasksTo">my list</span></h2>
+  <p class="muted" id="linesHint">Tick the lines that are things to do. Dates, times and #tags work like Brain dump.</p>
+  <div id="linesBody"></div>
+  <p id="linesMsg" role="status" aria-live="polite"></p>
+  <div class="row"><button class="go" id="linesAdd" disabled><span id="linesAddN">Add</span> to <span class="newTasksTo">my list</span></button>
+    <button class="plain" id="linesClose">Close</button></div>
+</dialog>
+<dialog id="jxDialog" aria-labelledby="jxTitle">
+  <h2 id="jxTitle">Download my journal</h2>
+  <p class="muted">Keep a copy, print it, or share it with someone you trust. Only you can download your journal.</p>
+  <fieldset class="jxopts"><legend class="sr-only">What to download</legend>
+    <label class="jxopt"><input type="radio" name="jxFormat" value="zip" checked>
+      <span><b>Photos and notes</b><span class="muted">A .zip file with a folder for each day: your photos, notes.txt and wins.txt.</span></span></label>
+    <label class="jxopt"><input type="radio" name="jxFormat" value="pdf">
+      <span><b>Printable PDF</b><span class="muted">A page for each day with the photo, your typed notes and wins.</span></span></label>
+  </fieldset>
+  <div class="row">
+    <div class="field"><label for="jxRange">Which days</label>
+      <select id="jxRange"><option value="">Everything</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option>
+        <option value="90">Last 3 months</option><option value="365">Last year</option></select></div>
+    <div class="field" id="jxPaperField" hidden><label for="jxPaper">Paper</label>
+      <select id="jxPaper"><option value="letter">Letter</option><option value="a4">A4</option><option value="a5">A5</option><option value="half_letter">Half letter</option></select></div>
+  </div>
+  <p id="jxSummary" class="muted" role="status" aria-live="polite"></p>
+  <div class="row"><a class="go btnlink" id="jxGo" download aria-disabled="true">Download .zip</a><button class="plain" id="jxClose">Close</button></div>
 </dialog>
 </div>
 

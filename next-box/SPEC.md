@@ -483,3 +483,37 @@ one photo of both pages at night.
   `POST /journal` (typed note), `PATCH|DELETE /journal/{id}`, `GET /journal/{id}/photo`.
 - Family Mode (later) reuses all of this per person; sharing a page will be an explicit choice.
 
+## 26. FB: the journal loop (notes → tasks, download, search, moving pages)
+Everything here is the owner's own journal: owner-scoped, never in events, admin screens or debug bundles.
+- **Notes → tasks**: "Add lines to my list" on a Snap result and on each journal page. `POST /journal/lines
+  {text}` (the notes as on screen; nothing saved or logged) returns each line (`journal.note_lines`) with
+  `task` (what `parse_line` makes of it), `kind`, `done`, `unclear`, `on_list` and `suggest`. Suggested
+  (pre-ticked): bullets (`-` `*` `•`), boxes (`[ ]` `□` `☐`), `todo:` lines and lines under a "To do:"
+  heading. Not suggested: ticked lines (`[x]`, `☑`, a trailing ✓), lines already open on My list, lines with
+  `[unclear]` (edit them first) and long prose. The sheet shows the parsed date/time/#tags, lets each line be
+  edited, and "Add N" sends the ticked lines to `POST /list/dump` (so `new_tasks_to` applies). The vision
+  prompt writes a hand-drawn box at the start of a note line as `[ ] ` (`[x] ` when ticked).
+- **Moving pages**: `PATCH /journal/{id} {day}` (notes optional) moves a page to another day: a real date,
+  today or earlier (not before 2000). The page's "Move to another day" opens a date field; the old day says
+  "Moved a page to … Undo".
+- **Search**: `GET /journal/search?q=` (2+ letters): pages whose notes or win hold every word, ignoring case
+  and accents, newest first (the newest 5,000 pages are searched; 50 shown, with the total). Each result has
+  a short snippet as `parts` `[{t, m}]` with the matches marked. Opening one shows that day and older, with
+  "Back to today".
+- **Each day** in `GET /journal` also has `ticket` ({id, kind, title, dry_run}: the ticket a page that day
+  was read back from, else that day's daily ticket, a real print before a preview) shown as a thumbnail with
+  Print on paper, and `changes` ({moved, dropped}: task names read-back moved or dropped that day, undone ones
+  left out). A day with only changes is listed too.
+- **Download my journal**: `GET /journal/export?format=zip|pdf&since=&until=&paper=`. zip: a
+  `next-box-journal-<date>/` folder with README.txt and a folder per day holding notes.txt (win, then each
+  page with when it was snapped or written), photo-N.jpg and wins.txt. pdf: a page per day (more if long:
+  "(continued)", "2 of 3") with the win, each photo, the typed notes and the wins, drawn with Pillow at 200 dpi
+  on the `paper_size` paper (`paper.journal_pdf`; `paper.JpegPdf` writes one page at a time, so a long
+  journal never sits in memory). `GET /journal/export/summary` says days, pages, photos, wins, the date range,
+  about how big, and whether a download is allowed now. 10 downloads an hour; like Download my data, they wait
+  3 days after an admin set a one-time password. Linked from the Journal tab, Profile and the delete-account
+  panel ("Download your journal first").
+- **Print my journal page**: `GET /journal/export?format=pdf&day=YYYY-MM-DD` opens that day's PDF (inline, 60
+  an hour, no reset wait: it shows nothing the Journal tab doesn't).
+- `Store.list_printed(until=)` bounds tickets by day, like `list_scans`.
+

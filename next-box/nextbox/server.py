@@ -37,7 +37,7 @@ from .connections import Builder, Connections, NotConnected
 from .events import Events, ServerSettings
 from .feedback import Feedback, FeedbackError
 from .jobs import Context, print_text
-from .journal import Journal, Slides, Wins, slugs as find_slugs
+from .journal import Journal, Slides, Wins, journal_zip, note_lines, slugs as find_slugs
 from .mylist import TAG_COLORS, LocalTasks, TagExists, Tags, is_local, parse_dump
 from .printer import COLORS, DRIVERS
 from .printers import REASONS, PrinterError, Printers
@@ -188,8 +188,12 @@ class PickBody(BaseModel):
 
 
 class JournalBody(BaseModel):
-    notes: str
+    notes: str | None = None  # PATCH: left out keeps the notes (moving a page to another day)
     day: str | None = None
+
+
+class LinesBody(BaseModel):
+    text: str = Field(max_length=20_000)  # a journal page's notes, as on screen
 
 
 class FocusBody(BaseModel):
@@ -328,6 +332,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     upkeep.run_startup_fixes(accounts.db, ctx.store)
     # In memory, per person: photo read-backs cost money; calendar and app checks reach other servers.
     scan_window, calendar_window, connect_window = _Window(30, 3600), _Window(20, 3600), _Window(20, 3600)
+    # Downloading the whole journal builds a big file: 10 an hour. One day's page to print: 60.
+    journal_window, journal_day_window = _Window(10, 3600), _Window(60, 3600)
     connections = Connections(ctx.settings, accounts, vault, **({"builder": builder} if builder else {}),
                               **({"calendar_builder": calendar_builder} if calendar_builder else {}))
 
@@ -1367,15 +1373,18 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         first = last - timedelta(days=days - 1)
         pages = _journal(caller).pages(first.isoformat(), last.isoformat())
         wins = wins_by_day(caller.name, first, last)
+        tickets = _day_tickets(caller.name, first, last, pages)
+        changes = _readback_changes(caller.name, first, last)
         today = ctx.today()
         out = []
         for i in range(days):
             day = (last - timedelta(days=i)).isoformat()
             mine = [p for p in pages if p["day"] == day]
-            if mine or wins[day]["count"] or wins[day]["items"]:
+            if mine or wins[day]["count"] or wins[day]["items"] or day in changes:
                 # "Today" and "Yesterday" by this Next Box's clock, the one that files the pages.
                 out.append({"day": day, "pages": mine, "wins": wins[day], "is_today": day == today.isoformat(),
-                            "is_yesterday": day == (today - timedelta(days=1)).isoformat()})
+                            "is_yesterday": day == (today - timedelta(days=1)).isoformat(),
+                            "ticket": tickets.get(day), "changes": changes.get(day)})
         # The next older day with anything on it, so "Older days" skips empty weeks and knows when to stop.
         older = [d for d in (_journal(caller).newest_day_before(first.isoformat()),
                              Wins(accounts.db, caller.name).newest_day_before(first.isoformat())) if d]
@@ -1427,12 +1436,174 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.patch("/journal/{page_id}")
     def journal_edit(page_id: str, body: JournalBody, caller: Caller = Depends(person)):
+        """Change a page's notes, or move it to another day (`day`: today or earlier)."""
+        day = _past_day(body.day) if body.day is not None else None
         try:
-            return _journal(caller).update(_page_id(page_id), body.notes)
+            return _journal(caller).update(_page_id(page_id), body.notes, day)
         except KeyError:
             raise HTTPException(404) from None
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+
+    def _past_day(value: str) -> str:
+        try:
+            day = date.fromisoformat(value)
+        except ValueError:
+            raise HTTPException(400, "day looks like 2026-10-16") from None
+        if day > ctx.today():
+            raise HTTPException(400, "That day hasn't happened yet. Pick today or an earlier day.")
+        if day < date(2000, 1, 1):
+            raise HTTPException(400, "Pick a day after 2000.")
+        return day.isoformat()
+
+    # What else each journal day shows: its ticket and what read-back changed.
+    def _day_tickets(name: str, first: date, last: date, pages: list[dict]) -> dict[str, dict]:
+        """The ticket to show with each day: the one a page of that day was read back from, else that
+        day's daily ticket (a real print before a preview, then the latest)."""
+        def short(rec: dict) -> dict:
+            return {"id": rec["id"], "kind": rec.get("kind", ""), "title": rec.get("title", ""),
+                    "dry_run": bool(rec.get("dry_run"))}
+        out: dict[str, dict] = {}
+        for p in pages:
+            if p["day"] in out or not p.get("label_id"):
+                continue
+            rec = ctx.store.get_printed(p["label_id"])
+            if rec and rec.get("by") == name and not rec.get("failed"):
+                out[p["day"]] = short(rec)
+        recs = ctx.store.list_printed(500, by=name, since=first.isoformat(),
+                                      until=(last + timedelta(days=1)).isoformat())
+        daily: dict[str, list[dict]] = {}
+        for rec in recs:
+            if rec.get("kind") == "today" and not rec.get("failed"):
+                daily.setdefault(rec["created_at"][:10], []).append(rec)
+        for day, found in daily.items():
+            if day not in out:
+                out[day] = short(max(found, key=lambda r: (not r.get("dry_run"), r["created_at"])))
+        return out
+
+    def _readback_changes(name: str, first: date, last: date) -> dict[str, dict]:
+        """What photo read-backs moved or dropped on each day (finished tasks are the day's wins)."""
+        lo, hi = first.isoformat(), last.isoformat()
+        out: dict[str, dict] = {}
+        recs = ctx.store.list_scans(500, by=name, since=lo, until=(last + timedelta(days=2)).isoformat())
+        for rec in reversed(recs):  # oldest first
+            day = rec.get("day") or ""
+            if not lo <= day <= hi or rec.get("status") == "failed":
+                continue
+            seen = out.setdefault(day, {"moved": [], "dropped": []})
+            done = [a for a in rec.get("applied", []) if a.get("status") != "undone"]
+            done += [p for p in rec.get("needs_confirmation", []) if p.get("status") == "applied"]
+            for entry in done:
+                what = {"tomorrow": "moved", "drop": "dropped"}.get(entry.get("mark"))
+                if what and entry.get("content") and entry["content"] not in seen[what]:
+                    seen[what].append(entry["content"])
+        return {d: c for d, c in out.items() if c["moved"] or c["dropped"]}
+
+    @app.post("/journal/lines")
+    def journal_lines(body: LinesBody, caller: Caller = Depends(person)):
+        """"Add lines to my list": a page's lines as possible tasks, with what Brain dump would make of
+        each. Nothing is saved or logged here; adding goes through /list/dump."""
+        try:
+            listed = {t["content"].casefold() for t in my_list(caller).all_open()}
+        except Exception:  # noqa: BLE001 - only for "already on your list"
+            listed = set()
+        return {"lines": note_lines(body.text, ctx.today(), listed)}
+
+    @app.get("/journal/search")
+    def journal_search(q: str = Query("", max_length=200), caller: Caller = Depends(person)):
+        """Your pages whose notes hold every word, newest first, with the matches marked. Not logged."""
+        q = " ".join(q.split())
+        if len(q) < 2:
+            raise HTTPException(400, "Type at least 2 letters to search.")
+        found, total = _journal(caller).search(q)
+        return {"q": q, "results": found, "total": total}
+
+    # ----------------------------------------------------------- download my journal
+    # Only ever the owner's own pages. Not in events, admin screens or debug bundles.
+    def _export_days(caller: Caller, since: str = "", until: str = "") -> list[dict]:
+        """The days to download, oldest first: {day, pages, wins}, only days with something on them."""
+        def bound(value: str, name: str) -> date | None:
+            try:
+                return date.fromisoformat(value) if value else None
+            except ValueError:
+                raise HTTPException(400, f"{name} looks like 2026-10-16") from None
+        lo, hi = bound(since, "since"), bound(until, "until")
+        journal = _journal(caller)
+        spans = [s for s in (journal.span(), Wins(accounts.db, caller.name).span()) if s[0]]
+        if not spans:
+            return []
+        first = max(date.fromisoformat(min(s[0] for s in spans)), lo or date.min)
+        last = min(date.fromisoformat(max(s[1] for s in spans)), hi or date.max)
+        if first > last:
+            return []
+        by_day: dict[str, list[dict]] = {}
+        for p in journal.pages(first.isoformat(), last.isoformat()):
+            by_day.setdefault(p["day"], []).append(p)
+        wins = wins_by_day(caller.name, first, last)
+        days = sorted(set(by_day) | {d for d, w in wins.items() if w["count"]})
+        return [{"day": d, "pages": by_day.get(d, []), "wins": wins[d]} for d in days]
+
+    @app.get("/journal/export/summary")
+    def journal_export_summary(since: str = "", until: str = "", caller: Caller = Depends(person)):
+        """What "Download my journal" would hold, before downloading: days, pages, photos, about how big."""
+        _reset_hold(caller)
+        days = _export_days(caller, since, until)
+        size = _journal(caller).stats(days[0]["day"], days[-1]["day"])["bytes"] if days else 0
+        return {"days": len(days), "pages": sum(len(d["pages"]) for d in days),
+                "photos": sum(1 for d in days for p in d["pages"] if p["has_photo"]),
+                "wins": sum(d["wins"]["count"] for d in days),
+                "first": days[0]["day"] if days else None, "last": days[-1]["day"] if days else None,
+                "bytes": size, "paper": caller.prefs.get("paper_size", "letter"),
+                "can_download": not journal_window.full(caller.name)}
+
+    @app.get("/journal/export")
+    def journal_export(format: str = "zip", day: str = "", since: str = "", until: str = "", paper: str = "",
+                       caller: Caller = Depends(person)):
+        """Download my journal. format=zip: a folder for each day with notes.txt, the photos and
+        wins.txt. format=pdf: a page for each day (photo, typed notes, wins) on the `paper_size` paper.
+        day=YYYY-MM-DD: just that day, as a PDF to print ("Print my journal page")."""
+        import tempfile
+
+        from fastapi.responses import StreamingResponse
+
+        from . import paper as paper_pdf
+        if format not in ("zip", "pdf"):
+            raise HTTPException(400, "format is zip or pdf")
+        size = paper or caller.prefs.get("paper_size", "letter")
+        if size not in paper_pdf.POINTS:
+            raise HTTPException(400, "paper is letter, a4, a5 or half_letter")
+        if day:
+            since = until = _past_day(day)
+        else:  # the whole journal (or a stretch of it) waits out an admin's password reset, like Download my data
+            _reset_hold(caller)
+        days = _export_days(caller, since, until)
+        if not days:
+            raise HTTPException(404, "Nothing in your journal on that day." if day
+                                else "Nothing in your journal for those days yet.")
+        if not (journal_day_window if day else journal_window).allow(caller.name):
+            raise HTTPException(429, "That's a lot of downloads this hour. Try again in a bit.")
+        journal = _journal(caller)
+        out = tempfile.SpooledTemporaryFile(max_size=32 * 1024 * 1024)
+        stamp = day or ctx.today().isoformat()
+        if format == "zip":
+            journal_zip(days, journal.photo, out, root=f"next-box-journal-{stamp}")
+            media, name = "application/zip", f"next-box-journal-{stamp}.zip"
+        else:
+            title = f"Next Box journal, {paper_pdf.day_title(day)}" if day else "Next Box journal"
+            paper_pdf.journal_pdf(days, size, out, journal.photo, title=title)
+            media, name = "application/pdf", f"next-box-journal-{stamp}.pdf"
+        length = out.tell()
+        out.seek(0)
+
+        def chunks():
+            try:
+                while block := out.read(256 * 1024):
+                    yield block
+            finally:
+                out.close()
+        how = "inline" if day and format == "pdf" else "attachment"  # one day opens, ready to print
+        return StreamingResponse(chunks(), media_type=media, headers={
+            "Content-Disposition": f'{how}; filename="{name}"', "Content-Length": str(length), **PRIVATE})
 
     @app.delete("/journal/{page_id}")
     def journal_delete(page_id: str, confirm: bool = False, caller: Caller = Depends(person)):
@@ -2397,6 +2568,12 @@ class _Window:
                 return False
             self._hits[key] = recent + [now]
             return True
+
+    def full(self, key: str) -> bool:
+        """Would the next try be refused? Asking doesn't count as a try."""
+        now = time.time()
+        with self._lock:
+            return len([t for t in self._hits.get(key, []) if now - t < self.seconds]) >= self.limit
 
 
 class _BodyLimit:
