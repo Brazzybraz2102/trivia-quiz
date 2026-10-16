@@ -329,8 +329,8 @@ Every ticket, sticker set and card has a **Print on paper** button. It opens a P
 Letter, A4, or a journal page size, A5 or half letter (Settings → Printing), that people print the normal way from their phone or computer.
 Stickers keep their real label size in a grid with cut lines, so full-sheet sticker paper (Avery
 5165 / L7167 or similar) becomes a sheet of stickers. Lists and cards print 3.5 inches wide and
-continue on the next page if they're long. Next Box never sends these to a printer itself: the
-person prints them.
+continue on the next page if they're long, breaking between tasks so each task stays with its box.
+Next Box never sends these to a printer itself: the person prints them.
 
 ## The journal (the daily routine)
 Print today's label, stick it on the **left page** of a paper journal, work the list, and write
@@ -359,7 +359,8 @@ Closing the loop:
 - **Print my journal page** on a day makes a PDF of that day (photos, notes, wins) for any printer.
 - **Download my journal** (Journal tab, Profile, or before deleting your account): a .zip with a folder
   for each day (notes.txt, the photos, wins.txt) or one printable PDF, for everything or the last
-  7/30/90/365 days.
+  7/30/90/365 days. Each page says when it was snapped or written, with the date when that was another
+  day (a label snapped the next morning).
 
 ## Getting new people started
 - **Quick start page:** `https://nextbox.braznarkel.com/app/guide.html` explains everything in 11 short

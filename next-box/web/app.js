@@ -1769,7 +1769,8 @@ $("#nowStart").onclick = () => { $("#dumpText").scrollIntoView({ behavior: reduc
 
 let lastLoad = { at: 0, day: "" };
 async function loadList() {
-  try { listData = await api("/list" + (showingDone ? "?include_done=true" : "")); }
+  // `since`: the routine day's start, so the routine card's "You finished N" counts that day (done_since), across midnight too
+  try { listData = await api(`/list?since=${encodeURIComponent(routineDay().since)}` + (showingDone ? "&include_done=true" : "")); }
   catch (e) { $("#listBody").textContent = e.message; return; }
   if (lastLoad.day && lastLoad.day !== today()) skipped.clear();  // "Not now" means today
   lastLoad = { at: Date.now(), day: today() };
@@ -4793,9 +4794,10 @@ function routineView() {
     head: "How did today go?",
     sub: journal ? "Tick your label, write a few notes, then take one photo of both pages." : "Tick your label with a pen, then take a photo of it.",
     acts: `<button class="go" data-routine="snap">Snap my pages</button><button class="plain" data-routine="hide">Not today</button>` };
-  const n = listData.done_today || 0;
+  // Finished this routine day (a night owl's day crosses midnight), the snap's own ✓ marks included.
+  const n = listData.done_since ?? listData.done_today ?? 0;
   return { state, kick: "Snap your pages", head: n ? `You finished ${n} today ✓` : "Pages snapped ✓",
-    sub: snap.journal_id ? "Today's page is in your journal." : "",
+    sub: snap.journal_id ? (snap.day && snap.day !== today() ? "Your page is in your journal." : "Today's page is in your journal.") : "",
     acts: `${journal ? `<button class="plain" data-go-tab="journal">Open Journal</button>` : ""}<button class="plain" data-routine="hide">Hide</button>` };
 }
 function routineRender() {

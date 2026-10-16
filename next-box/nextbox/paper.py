@@ -71,12 +71,37 @@ def sticker_sheets(stickers: list[Image.Image], paper: str = "letter") -> list[I
     return pages
 
 
+_INK = bytes(ord("#") if v < 160 else ord(".") for v in range(256))  # a row of pixels as ink (#) and paper (.)
+
+
+def _is_rule(row: bytes) -> bool:
+    """A line between rows: ink from near the left edge to near the right with only small gaps (the
+    dotted line under each row of a list, the dashes between strips, a solid rule). A task's own lines
+    never are: there's always a wide gap between the time column and the text, and before the checkbox."""
+    width = len(row)
+    edge, gap = width // 10, max(8, width // 50)
+    marks = row.translate(_INK)
+    first, last = marks.find(b"#"), marks.rfind(b"#")
+    return 0 <= first <= edge and last >= width - 1 - edge and b"." * gap not in marks[first:last + 1]
+
+
 def _break_at(img: Image.Image, top: int, usable: int) -> int:
-    """Where this page's piece should end: a blank row of pixels near the bottom, so a page never
-    cuts through a line of text or a checkbox. Falls back to a straight cut if there's none."""
+    """Where this page's piece should end: just below the last line between rows that fits, so one
+    task never starts on one page and ends on the next (a list's checkbox stays with its text). With
+    no such line (a note, a card), a blank row of pixels near the bottom, so a page never cuts through
+    a line of text or a checkbox. Falls back to a straight cut if there's neither. `img` is grayscale ("L")."""
     end = top + usable
     if end >= img.height:
         return img.height
+
+    def row(y: int) -> bytes:
+        return img.crop((0, y, img.width, y + 1)).tobytes()
+    white = None  # the nearest clean white below the row looked at (past the faint edge resizing leaves under a line)
+    for y in range(end - 2, top + usable // 2, -1):
+        if min(row(y + 1)) >= 250 and min(row(y + 2)) >= 250:
+            white = y + 1
+        if white is not None and _is_rule(row(y)):
+            return white + 1
     px = img.load()
     for y in range(end, max(top + usable // 2, end - 300), -1):
         if all(px[x, y] >= 250 for x in range(0, img.width, 2)):
@@ -198,6 +223,17 @@ def day_title(day: str) -> str:
 
 def clock(ts: int) -> str:
     return time.strftime("%I:%M %p", time.localtime(ts)).lstrip("0")
+
+
+def made_when(ts: int, day: str) -> str:
+    """When a journal page was snapped or written, after "Snapped"/"Written": "at 7:30 AM" on the page's
+    own day, else with its date, as the Journal tab shows it ("Oct 28, 7:30 AM"): a label snapped the next
+    morning, or a note written for yesterday, doesn't read as made on the day it's filed under."""
+    made = date.fromtimestamp(ts)
+    if made.isoformat() == day:
+        return f"at {clock(ts)}"
+    year = f", {made.year}" if str(made.year) != day[:4] else ""
+    return f"{made:%b} {made.day}{year}, {clock(ts)}"
 
 
 class _JournalLayout:
@@ -339,7 +375,7 @@ def journal_day_sheets(day: dict, paper: str, photo) -> list[Image.Image]:
         image = photo(p["id"]) if p.get("has_photo") else None
         notes = (p.get("notes") or "").strip()
         out.room(out.line * 2)
-        out.text(("Snapped at " if image else "Written at ") + clock(p["created"]), font=out.small, fill=SOFT)
+        out.text(("Snapped " if image else "Written ") + made_when(p["created"], day["day"]), font=out.small, fill=SOFT)
         if image:
             try:
                 out.photo(image, notes_follow=bool(notes))

@@ -18,7 +18,7 @@ from .printers import Printers, choose, choose_color
 from .render import (DayRow, Row, Sticker, finalize, reading_font, render_day, render_focus, render_label,
                      render_sticker, render_strips, stack_with_cuts)
 from .journal import SLUG_MOVES
-from .mylist import LocalTasks, Tags, parse_line
+from .mylist import MAX_STEPS, LocalTasks, Tags, parse_line
 from .store import Store
 from .providers import TaskProvider
 
@@ -372,11 +372,12 @@ def _when(task: dict, today: date, h24: bool, gentle: bool) -> str:
         return ""
     day = date.fromisoformat(due["date"][:10])
     late = (today - day).days
+    repeats = " ↻" if due.get("is_recurring") else ""  # as on the daily label: this one comes back
     if late > 0:
-        return f"{'waiting' if gentle else 'overdue'} {late}d"
+        return f"{'waiting' if gentle else 'overdue'} {late}d{repeats}"
     words = "today" if late == 0 else "tomorrow" if late == -1 else day.strftime("%a %b %-d")
     t = _time(task, h24)
-    return f"{words} {t}".strip()
+    return f"{words} {t}".strip() + repeats
 
 
 def _sticker_rows(ctx: Context, tasks: list[dict]) -> tuple[list[Sticker], list[dict]]:
@@ -503,7 +504,8 @@ def print_focus(ctx: Context, task_id: str | None = None, dry_run: bool | None =
 
     def draw(accent: bool) -> Image.Image:
         return render_focus(_clean(task["content"]), steps, label_id, tag, color,
-                            _when(task, today, h24, gentle), minutes, start_by)
+                            _when(task, today, h24, gentle), minutes, start_by,
+                            urgent=int(task.get("priority", 1)) >= 3)
     return _finish(ctx, reason="focus", kind="focus", title=task["content"], draw=draw, label_id=label_id,
                    manifest=manifest, source=source, dry_run=dry_run)
 
@@ -579,9 +581,10 @@ def print_task(ctx: Context, task_id: str, dry_run: bool | None = None, source: 
     tag = str((task.get("labels") or [""])[0]).lower()
     text = ("! " if int(task.get("priority", 1)) >= 3 else "") + _clean(task["content"])
     body = _short(_clean(task.get("description") or ""), MAX_BODY, "… (the rest is in the task)")
-    steps = [s["text"] for s in task.get("steps") or [] if not s.get("done")][:8]
+    steps = [s["text"] for s in task.get("steps") or [] if not s.get("done")]  # all of them (12 at most)
     if steps and ctx.prefs.get("show_next_step", True):
-        body = (body + "\n" if body else "") + "Tiny steps:\n" + "\n".join(f"• {s}" for s in steps)
+        more = f"\n+{len(steps) - MAX_STEPS} more in Next Box" if len(steps) > MAX_STEPS else ""
+        body = (body + "\n" if body else "") + "Tiny steps:\n" + "\n".join(f"• {s}" for s in steps[:MAX_STEPS]) + more
 
     def draw(accent: bool) -> Image.Image:
         return render_label("NEW TASK" if reason == "new_task" else "TASK", subtitle,

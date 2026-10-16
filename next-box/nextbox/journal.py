@@ -284,6 +284,14 @@ class Wins:
                 select(w.day, w.task_id, w.source, w.content, w.scan_id)
                 .where(w.owner == self.owner, w.day >= first, w.day <= last).order_by(w.ts, w.id)).mappings()]
 
+    def count_since(self, ts: int) -> int:
+        """How many tasks were finished from `ts` on, whatever day each is filed under (the routine card's
+        day can cross midnight, and a read-back's wins are filed under its ticket's day)."""
+        w = db.wins.c
+        with self.db.connect() as conn:
+            return conn.execute(select(func.count()).select_from(db.wins)
+                                .where(w.owner == self.owner, w.ts >= int(ts))).scalar() or 0
+
     def newest_day_before(self, day: str) -> str | None:
         w = db.wins.c
         with self.db.connect() as conn:
@@ -513,12 +521,12 @@ Only you can download your journal. Keep this somewhere safe, or share it with s
 
 def day_notes_text(day: dict, photo_names: dict[str, str]) -> str:
     """notes.txt for one day: its win, then each page's notes with when it was snapped or written."""
-    from .paper import clock, day_title
+    from .paper import day_title, made_when
     out = [day_title(day["day"]), ""]
     out += [f"Your win: {p['win']}\n" for p in day["pages"] if p.get("win")]
     for p in day["pages"]:
-        name = photo_names.get(p["id"])
-        out.append(f"Snapped at {clock(p['created'])} ({name})" if name else f"Written at {clock(p['created'])}")
+        name, when = photo_names.get(p["id"]), made_when(p["created"], day["day"])
+        out.append(f"Snapped {when} ({name})" if name else f"Written {when}")
         out.append((p.get("notes") or "").strip() or "(no notes on this page)")
         out.append("")
     return "\n".join(out).rstrip() + "\n"
