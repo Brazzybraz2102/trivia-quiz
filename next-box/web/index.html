@@ -608,12 +608,26 @@
   .remindacts { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
   .remind .plain { background:var(--card); }
   .remind .linkish { color:inherit; font-weight:700; }
-  .remind .rclose { order:3; color:inherit; text-decoration:none; font-size:1.125rem; padding:4px 8px; }
+  .remind .rclose { order:3; color:inherit; text-decoration:none; font-size:1.125rem; padding:4px 8px; min-width:44px; min-height:44px; display:grid; place-items:center; }
   .remindacts { order:2; }
+  /* What sticks to the top of Settings and the bulk bars sits under the note while it's there (app.js: --remindH). */
+  #setJump, .bulkbar { top:var(--remindH, 0px); }
+  #settings > .card { scroll-margin-top:calc(60px + var(--remindH, 0px)); }
   @media (max-width:520px) {  /* phones: the words and ✕ on one line, the buttons under them */
     .remindtext { flex:1 1 0; }
     .remind .rclose { order:1; margin-left:auto; }
     .remindacts { flex-basis:100%; }
+    /* The note scrolls away with the page, so it never covers a big share of a small screen, and the routine
+       card is one line and its buttons: Just one thing starts on the first screen. */
+    .remindbar { position:static; box-shadow:none; }
+    .routinecard { padding:10px 12px; }
+    .routinecard .routinekick, .routinecard .routinesub { display:none; }
+    .routinecard h2 { font-size:1.125rem; margin:0; }
+    #routineActs { margin-top:6px; flex-wrap:nowrap; }
+    #routineActs .go { flex:0 1 auto; min-width:0; }
+    /* Not today / Hide as a small ✕ beside the main button (its name stays "Not today" for screen readers) */
+    #routineActs [data-routine=hide] { flex:none; font-size:0; min-width:44px; min-height:44px; padding:0; display:grid; place-items:center; }
+    #routineActs [data-routine=hide]::before { content:"✕"; content:"✕" / ""; font-size:1.125rem; }
   }
   #quickDialog { max-width:560px; }
   #quickText { min-height:6rem; }
@@ -627,7 +641,10 @@
     .quickbtn { width:44px; height:44px; }
     #routineActs button, .timerrow button, .timeracts button, .remind button, #quickGo, #quickClose, #keysClose { min-height:44px; }
   }
-  @media (max-width:400px) { header .quickbtn { margin-left:auto; } }
+  @media (max-width:400px) {
+    header .quickbtn { margin-left:auto; }
+    header #roleBadge, header #betaBadge { order:6; }  /* after the status line: + and the round button stay together, top right */
+  }
 </style>
 </head>
 <body>
@@ -686,6 +703,7 @@
   <button id="meBtn" class="avatar" aria-label="Your account" aria-haspopup="dialog">?</button></header>
 <div class="remindbar" id="remindBar" hidden><div id="remindList" role="region" aria-label="Reminders"></div></div>
 <span class="sr-only" id="remindSay" role="status" aria-live="polite"></span>
+<span class="sr-only" id="timerLive" role="status" aria-live="polite"></span>
 <div class="banner" id="updateBanner" hidden></div>
 <div class="banner" id="offlineBanner" role="status" hidden>You're offline. Next Box will work again when you're back online.</div>
 <div class="banner" id="announce" hidden></div>
@@ -741,7 +759,6 @@
             <button class="plain" id="timerNotNow">Not now</button>
           </div>
         </div>
-        <span class="sr-only" id="timerLive" role="status" aria-live="polite"></span>
       </div>
       <div class="row">
         <button class="go" id="nowStepDone" hidden>Step done ✓</button>
@@ -756,7 +773,7 @@
         <button class="plain" id="nowBreak" data-ai hidden>Break it down</button>
       </div>
       <div class="timerrow" id="timerRow" hidden>
-        <button class="plain small" id="timerGo" aria-label="Start a 5 minute focus timer"><span aria-hidden="true">⏱ </span>Start 5 min</button>
+        <button class="plain small" id="timerGo" aria-label="Start 5 min focus timer"><span aria-hidden="true">⏱ </span>Start 5 min</button>
         <button class="linkish" id="timerGoEst" hidden></button>
         <span class="muted">Just start. Stop any time.</span>
       </div>

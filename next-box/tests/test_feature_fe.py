@@ -205,7 +205,7 @@ def test_the_routine_card_only_reads_and_never_prints_by_itself():
     js = (WEB / "app.js").read_text()
     routine = js[js.index("// ---------------------------------------------------------------- FE: the routine card"):
                  js.index("// ---------------------------------------------------------------- FE: focus timer")]
-    assert 'api("/printed?limit=5"), api("/scans?limit=1")' in routine
+    assert 'api(`/printed?since=${encodeURIComponent(since)}&limit=100`), api("/scans?limit=1")' in routine
     # The only print is the Today's label button's own call, from a tap on the card's button.
     assert routine.count("printFrom(") == 1
     assert re.search(r'addEventListener\("click".*?printFrom\("/print/today"', routine, re.S)

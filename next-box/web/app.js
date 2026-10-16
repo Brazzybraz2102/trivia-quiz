@@ -1767,7 +1767,7 @@ async function undoDone(id, undo) {
   try {
     await api(`/list/${encodeURIComponent(id)}/reopen`, { method: "POST", json: undo || {} });
     toast("Back on your list");
-    loadList();
+    await loadList();
   } catch (err) { listError(err, id); }
 }
 
@@ -1791,7 +1791,7 @@ async function undoMove(id, undo) {
   try {
     const r = await api(`/list/${encodeURIComponent(id)}/move`, { method: "POST", json: undo });
     toast(`Back to ${dayWords(r.to)}`);
-    loadList();
+    await loadList();
   } catch (err) { listError(err, id); }
 }
 
@@ -4442,43 +4442,59 @@ window.addEventListener("unhandledrejection", (e) => {
 // ---------------------------------------------------------------- FE: the routine card
 // At the top of My list: "Print today's label" from the plan time (until it's made), "How did today go? Snap
 // your pages" from the look-back time, and "You finished N today ✓" once they're snapped. Worked out here from
-// the last few tickets and read-backs; nothing is sent, and the print button is the same Today's label button
-// as My list's (a preview, or "Send this to the printer?"): it never prints by itself.
-let routineData = null;  // { printed: the last 5 tickets, scans: the last read-back }, null until loaded (or if that failed)
+// this routine day's tickets and the last read-back; nothing is sent, and the print button is the same Today's
+// label button as My list's (a preview, or "Send this to the printer?"): it never prints by itself.
+let routineData = null;  // { printed: this routine day's tickets, scans: the last read-back }, null until loaded (or if that failed)
 let routineN = 0;
 let routineMem = null;   // what "Not today" hid, for a device that keeps nothing (a private window)
+// The routine day starts halfway between the look-back time and the next plan time (1:00 with 8:00 and 18:00),
+// so a night owl's day (plan 20:00, look back 6:00) is one day across midnight: a label made at 20:30 is still
+// today's at 0:30, and "Not today" lasts until the next one. From its start until the plan time the card is quiet.
+function routineDay() {
+  const p = me?.prefs || {}, d = new Date();
+  const plan = schedMinutes(p.routine_morning || "08:00"), look = schedMinutes(p.routine_evening || "18:00");
+  const edge = (look + Math.floor(((plan - look + 1440) % 1440) / 2)) % 1440;
+  const start = new Date(d);
+  start.setHours(Math.floor(edge / 60), edge % 60, 0, 0);
+  if (start > d) start.setDate(start.getDate() - 1);
+  const into = (min) => (min - edge + 1440) % 1440;  // minutes since the routine day started
+  const at = into(d.getHours() * 60 + d.getMinutes()), planAt = into(plan), lookAt = look === plan ? 1440 : into(look);
+  const day = start.toLocaleDateString("en-CA"), two = (n) => String(n).padStart(2, "0");
+  // `since`: as the server writes created_at (its local time, the same clock today() assumes)
+  return { day, since: `${day}T${two(start.getHours())}:${two(start.getMinutes())}:00`, morning: at >= planAt && at < lookAt, evening: at >= lookAt };
+}
 async function loadRoutine() {
   if (!me) return;
-  const n = ++routineN;
+  const n = ++routineN, since = routineDay().since;
   let got = null;
-  try { const [printed, scans] = await Promise.all([api("/printed?limit=5"), api("/scans?limit=1")]); got = { printed, scans }; }
-  catch {}  // a help, never an error: the card just steps aside
+  try {  // all of this routine day's tickets, so stickers or one-task prints made after the label don't hide it
+    const [printed, scans] = await Promise.all([api(`/printed?since=${encodeURIComponent(since)}&limit=100`), api("/scans?limit=1")]);
+    got = { printed, scans };
+  } catch {}  // a help, never an error: the card just steps aside
   if (n !== routineN || !me) return;
   routineData = got;
   routineRender();
 }
 const routineKey = () => (me ? `nb.routineHide:${me.username}` : "");
-function routineHidden() {  // the prompts put away today with "Not today" or "Hide"
+function routineHidden() {  // the prompts put away this routine day with "Not today" or "Hide"
   let v = routineMem;
   try { v = JSON.parse(localStorage.getItem(routineKey()) || "null") || routineMem; } catch {}
-  return v && v.day === today() && Array.isArray(v.states) ? v.states : [];
+  return v && v.day === routineDay().day && Array.isArray(v.states) ? v.states : [];
 }
 function routineSetHidden(states) {
-  routineMem = { day: today(), states };
+  routineMem = { day: routineDay().day, states };
   try { states.length ? localStorage.setItem(routineKey(), JSON.stringify(routineMem)) : localStorage.removeItem(routineKey()); } catch {}
 }
-// Which prompt shows now, and its words. The day runs from the plan time; before it the card is quiet.
+// Which prompt shows now, and its words.
 function routineView() {
   const p = me?.prefs || {};
   if (!me || p.routine_card === false || !routineData) return null;
-  const now = schedNowMin(), day = today();
-  const plan = schedMinutes(p.routine_morning || "08:00"), look = schedMinutes(p.routine_evening || "18:00");
-  const morning = plan < look ? now >= plan && now < look : now >= plan || now < look;  // a look-back before the plan time: a night owl's day
-  const evening = plan < look ? now >= look : now >= look && now < plan;
-  const label = routineData.printed.find((t) => t.kind === "today" && (t.created_at || "").slice(0, 10) === day && !t.failed);
-  // A snap counts once it's of today: after today's label was made, or today in the evening without one.
-  const snap = routineData.scans.find((s) => (s.created_at || "").slice(0, 10) === day && (!label || s.created_at >= label.created_at));
-  const due = [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])].some((t) => t.due && t.due.date.slice(0, 10) <= day);
+  const now = schedNowMin(), { since, morning, evening } = routineDay();
+  const label = routineData.printed.find((t) => t.kind === "today" && (t.created_at || "") >= since && !t.failed);
+  // A snap counts once it's of this routine day: after its label was made, or in the evening without one.
+  const snap = routineData.scans.find((s) => (s.created_at || "") >= since && (!label || s.created_at >= label.created_at));
+  // Something for the label to print (it prints today's list, by the clock).
+  const due = [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])].some((t) => t.due && t.due.date.slice(0, 10) <= today());
   const journal = p.journal_mode !== false;
   let state = null;
   if (snap && (label || evening)) state = "finished";
@@ -4538,26 +4554,40 @@ function routineForget() { routineData = null; routineMem = null; routineRender.
 // comes from when it started, so switching tabs, locking the phone or reloading doesn't lose it (it's kept on
 // this device for this person: the task's id and times, never its words). At the end: a soft chime if sound is
 // on (it needs the tap that started it), and Keep going / Done ✓ / Not now. No motion with reduced motion.
-let timerState = null;   // { id, total, start, left, paused, ended } in ms
+let timerState = null;   // { id, total, start, left, paused, ended, day } in ms (day: when it was paused)
 let timerIv = null, timerTo = null, timerAudio = null, timerSaidMinute = false;
 const TIMER_RING = 2 * Math.PI * 52;  // the ring's length (r = 52 in its 120×120 box)
 const timerKey = () => (me ? `nb.timer:${me.username}` : "");
 function timerSave() {
   try { const k = timerKey(); if (k) timerState ? localStorage.setItem(k, JSON.stringify(timerState)) : localStorage.removeItem(k); } catch {}
 }
+// One that ran out over 30 minutes ago (start + total is when: Resume and Keep going move the start), open
+// page or not, or one paused on an earlier day, is let go: no "Time's up" waiting on every screen next morning.
+function timerStale(s) {
+  if (!s) return false;
+  if (s.paused) return (s.day || new Date(s.start).toLocaleDateString("en-CA")) !== today();
+  return Date.now() - (s.start + s.total) > 30 * 60000;
+}
 function timerLoad() {  // once per person: a timer that was running when the page closed carries on
   if (!me || timerLoad.for === me.username) return;
   timerLoad.for = me.username;
   try {
     const v = JSON.parse(localStorage.getItem(timerKey()) || "null");
-    if (v && typeof v.id === "string" && v.total > 0 && v.total <= 3 * 3600000) timerState = v;
+    if (v && typeof v.id === "string" && v.total > 0 && v.total <= 3 * 3600000 && Number.isFinite(v.start)) timerState = v;
   } catch {}
   if (!timerState) return;
+  if (timerStale(timerState)) { timerState = null; timerSave(); return; }  // long ago: let it go quietly
   if (!timerState.paused && !timerState.ended && timerLeft() <= 0) {  // it ran out while Next Box was closed
-    timerState = -timerLeft() > 30 * 60000 ? null : { ...timerState, ended: true, left: 0 };  // long ago: let it go quietly
+    timerState = { ...timerState, ended: true, left: 0 };
     timerSave();
   }
   timerRun();
+}
+function timerDrop() {  // let a stale one go, quietly (no message), with the keyboard kept on the card or the note
+  const inCard = $("#nowCard").contains(document.activeElement), inBar = $("#remindList").contains(document.activeElement);
+  timerClear(); renderNow();
+  $("#timerLive").textContent = "";
+  if (inCard) timerFocusAfter(); else if (inBar) remindFocusAfter();
 }
 const timerLeft = () => (!timerState ? 0 : timerState.ended ? 0 : timerState.paused ? timerState.left : timerState.total - (Date.now() - timerState.start));
 const timerFmt = (ms) => { const s = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
@@ -4581,7 +4611,7 @@ function timerDraw(t) {
   if (!on) {
     const est = timerEst(t);
     $("#timerGoEst").hidden = !est;
-    if (est) { $("#timerGoEst").textContent = `or ${est} min`; $("#timerGoEst").setAttribute("aria-label", `Start a ${est} minute focus timer, your estimate`); }
+    if (est) { $("#timerGoEst").textContent = `or ${est} min`; $("#timerGoEst").setAttribute("aria-label", `or ${est} min: start a focus timer for your estimate`); }
     return;
   }
   const s = timerState, step = String(t.id).startsWith("nb:") && (t.steps || []).some((x) => !x.done);
@@ -4606,7 +4636,11 @@ function timerShow() {  // the clock and the ring; every second while it runs
   if (!timerState.paused && !timerState.ended && left <= 60000 && total > 60000 && !timerSaidMinute) { timerSaidMinute = true; timerSay("1 minute left."); }
   timerCheck();
 }
-function timerCheck() { if (timerState && !timerState.paused && !timerState.ended && timerLeft() <= 0) timerFinish(); }
+function timerCheck() {
+  if (!timerState || timerState.paused || timerState.ended || timerLeft() > 0) return;
+  if (timerStale(timerState)) return timerDrop();  // it ran out long ago (a computer that slept): no "Time's up" now
+  timerFinish();
+}
 function timerRun() {  // the second hand while it runs, and one wake-up for the end (that one fires even in the background)
   clearInterval(timerIv); clearTimeout(timerTo); timerIv = timerTo = null;
   if (!timerState || timerState.paused || timerState.ended) return;
@@ -4649,6 +4683,7 @@ function timerForget() {  // signing out: nothing keeps running on screen (the s
   timerState = null; timerLoad.for = ""; timerSaidMinute = false;
   clearInterval(timerIv); clearTimeout(timerTo); timerIv = timerTo = null;
   $("#timerBox").hidden = true; $("#timerRow").hidden = true; $("#nowCard > .row").hidden = false;
+  $("#timerLive").textContent = "";
 }
 const timerFocusAfter = () => ($("#timerRow").hidden ? $("#nowCard > .row button:not([hidden])") || $("#listTitle") : $("#timerGo")).focus({ preventScroll: true });
 
@@ -4661,7 +4696,7 @@ $("#timerPause").onclick = () => {
     timerState = { ...timerState, paused: false, start: Date.now() - (timerState.total - timerState.left) };
     timerSay(`Going again: ${timerFmt(timerLeft())} left.`);
   } else {
-    timerState = { ...timerState, paused: true, left: Math.max(0, timerLeft()) };
+    timerState = { ...timerState, paused: true, left: Math.max(0, timerLeft()), day: today() };  // kept for today only
     timerSay(`Paused with ${timerFmt(timerState.left)} left.`);
   }
   timerSave(); timerRun(); renderNow();
@@ -4752,46 +4787,63 @@ for (const ev of ["pointerdown", "keydown"]) document.addEventListener(ev, () =>
 
 
 // ---------------------------------------------------------------- FE: reminders before timed tasks
-// While Next Box is open (any screen), a note at the top N minutes before a task with a time today
-// (Settings → Focus: 10 by default, or Off), with Done / Tomorrow / Snooze 10m and ✕. Worked out here from
-// My list as last loaded: no server timer, no push. With "Show a notification too", the browser shows it as
-// well while Next Box is in the background; permission is only asked for when that's turned on.
+// While Next Box is open (any screen), a note at the top N minutes before a task with a time (Settings →
+// Focus: 10 by default, or Off), with Done / Tomorrow / Snooze 10m and ✕. Worked out here from My list as
+// last loaded: no server timer, no push. With "Show a notification too", the browser shows it as well while
+// Next Box is in the background; permission is only asked for when that's turned on.
 const REMIND_LATE = 30;        // minutes after its time that a task's reminder still shows
+const REMIND_STALE = 5 * 60000;  // a list older than this is fetched again before a reminder is notified
 const remindSeen = new Set();  // reminders already announced (and notified) on this visit
-let remindNoteNow = null;      // { text, undo }: what the last tap did, with Undo, for a few seconds
+const remindShown = new Set(); // notifications this page made (closed again on sign-out)
+let remindNoteNow = null;      // { text, undo, id }: what the last tap did, with Undo, for a few seconds
 let remindNoteTimer = null, remindMem = null;
 const remindKey = () => (me ? `nb.remind:${me.username}` : "");
-function remindMemo() {  // today's dismissed and snoozed reminders (task ids and times only)
+// Dismissed and snoozed reminders (task ids and times only), kept until the day after the task's time, so one
+// put away at 23:55 for 0:15 doesn't come back at midnight.
+function remindMemo() {
   let v = remindMem;
   try { v = JSON.parse(localStorage.getItem(remindKey()) || "null") || remindMem; } catch {}
-  return v && v.day === today() ? v : { day: today(), off: {}, snooze: {} };
+  const since = new Date(Date.now() - 864e5).toLocaleDateString("en-CA");  // yesterday
+  const keep = (o) => Object.fromEntries(Object.entries(o && typeof o === "object" ? o : {})
+    .filter(([k]) => k.slice(k.lastIndexOf("@") + 1).slice(0, 10) >= since));
+  return { off: keep(v?.off), snooze: keep(v?.snooze) };
 }
 function remindKeep(v) { remindMem = v; try { localStorage.setItem(remindKey(), JSON.stringify(v)); } catch {} }
+function remindAt(t) {  // a timed task's time on this device's clock (as My list shows it), else NaN
+  const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/.exec(t?.due?.date || "");
+  return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5]).getTime() : NaN;
+}
+// Open tasks with a time, by real time rather than today's date: 0:15 tomorrow is reminded from 23:45 tonight.
+const remindTimed = () => [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])].filter((t) => Number.isFinite(remindAt(t)));
 function remindDue() {
   const lead = me?.prefs?.remind_before ?? 10;
   if (!me || !lead || !lastLoad.at) return [];
-  const now = schedNowMin(), day = today(), memo = remindMemo();
-  return [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])]
-    .filter((t) => t.due && t.due.date.length > 10 && t.due.date.slice(0, 10) === day)
-    .map((t) => ({ t, at: schedMinutes(t.due.date.slice(11, 16)), key: `${t.id}@${t.due.date.slice(0, 16)}` }))
-    .filter((x) => x.at - lead <= now && now < x.at + REMIND_LATE && !memo.off[x.key] && !((memo.snooze[x.key] || 0) > Date.now()))
+  const now = Date.now(), memo = remindMemo();
+  return remindTimed()
+    .map((t) => ({ t, at: remindAt(t), key: `${t.id}@${t.due.date.slice(0, 16)}` }))
+    .map((x) => ({ ...x, min: Math.ceil((x.at - now) / 60000) }))  // minutes to go (0 or less: now)
+    .filter((x) => x.at - now <= lead * 60000 && now - x.at < REMIND_LATE * 60000 && !memo.off[x.key] && !((memo.snooze[x.key] || 0) > now))
     .sort((a, b) => a.at - b.at);
 }
+const remindWhen = (x) => (x.min > 0 ? `in ${schedIn(x.min)}` : "now");
 function remindRender() {
   const bar = $("#remindBar"), list = $("#remindList");
   if (!me) return remindForget();
-  const now = schedNowMin(), items = remindDue();
-  let html = items.slice(0, 3).map((x) => {
-    const d = x.at - now, name = esc(shortName(x.t)), clock = esc(fmtClock(x.t.due.date.slice(11, 16)));
+  const items = remindDue(), nowId = remindNowSeen();
+  // Just one thing's own task, with the card on screen: it's right there with its time and buttons.
+  const shown = items.filter((x) => x.t.id !== nowId);
+  remindRender.mine = !!$("#nowCard").dataset.id && items.some((x) => x.t.id === $("#nowCard").dataset.id);
+  let html = shown.slice(0, 3).map((x) => {
+    const name = esc(shortName(x.t)), clock = esc(fmtClock(x.t.due.date.slice(11, 16)));
     return `<div class="remind" data-rkey="${esc(x.key)}" data-id="${esc(x.t.id)}"><span aria-hidden="true">🔔</span>
-      <div class="remindtext"><b>${d > 0 ? `${schedIn(d)}:` : "Now:"}</b> ${name} <span class="when">· ${clock}</span></div>
+      <div class="remindtext"><b>${x.min > 0 ? `${schedIn(x.min)}:` : "Now:"}</b> ${name} <span class="when">· ${clock}</span></div>
       <div class="remindacts" role="group" aria-label="Reminder: ${name}">
         <button class="plain small" data-r="done" aria-label="Done: ${name}">Done ✓</button>
-        <button class="plain small" data-r="tomorrow" aria-label="Move ${name} to tomorrow">Tomorrow</button>
-        <button class="plain small" data-r="snooze" aria-label="Snooze ${name} for 10 minutes">Snooze 10m</button></div>
+        <button class="plain small" data-r="tomorrow" aria-label="Tomorrow: ${name}">Tomorrow</button>
+        <button class="plain small" data-r="snooze" aria-label="Snooze 10m: ${name}">Snooze 10m</button></div>
       <button class="linkish rclose" data-r="off" aria-label="Dismiss the reminder for ${name}" title="Dismiss">✕</button></div>`;
   }).join("");
-  if (items.length > 3) html += `<div class="remind"><div class="remindtext">…and ${plural(items.length - 3, "more")} at a set time. <button class="linkish" data-go-tab="mylist">See My list</button></div></div>`;
+  if (shown.length > 3) html += `<div class="remind"><div class="remindtext">…and ${plural(shown.length - 3, "more")} at a set time. <button class="linkish" data-go-tab="mylist">See My list</button></div></div>`;
   // The focus timer ran out while you're on another screen (or scrolled away from Just one thing).
   if (timerState?.ended && !remindCardSeen()) {
     html = `<div class="remind" data-rkey="timer"><span aria-hidden="true">⏱</span><div class="remindtext"><b>Time's up:</b> ${esc(timerName() || "your one thing")}</div>
@@ -4808,30 +4860,54 @@ function remindRender() {
     if (spot) list.querySelector(`[data-rkey="${CSS.escape(spot[0])}"] [data-r="${CSS.escape(spot[1])}"]`)?.focus({ preventScroll: true });
   }
   bar.hidden = !html;
-  // While it's there, whatever you Tab to scrolls clear of it.
-  document.documentElement.style.scrollPaddingTop = html ? `${bar.offsetHeight + 12}px` : "";
-  const fresh = items.filter((x) => !remindSeen.has(x.key));  // said once, and shown by the browser too when Next Box is in the background
+  remindMeasure();
+  // Said once (Just one thing's too), and shown by the browser as well when Next Box is in the background, but
+  // not from a list that's been sitting there: that waits for the fresh one (it may be done on another device).
+  const stale = document.visibilityState !== "visible" && Date.now() - lastLoad.at > REMIND_STALE;
+  const fresh = stale ? [] : items.filter((x) => !remindSeen.has(x.key));
   for (const x of fresh) {
-    const d = x.at - now;
     remindSeen.add(x.key);
-    remindNotify(x.t.content, `${d > 0 ? `In ${schedIn(d)}` : "Now"} · ${fmtClock(x.t.due.date.slice(11, 16))}`, `nb-${x.key}`);
+    remindNotify(x.t.content, `${x.min > 0 ? `In ${schedIn(x.min)}` : "Now"} · ${fmtClock(x.t.due.date.slice(11, 16))}`, `nb-${x.key}`);
   }
-  if (fresh.length) $("#remindSay").textContent = fresh.map((x) => `Reminder: ${x.t.content}, ${x.at > now ? `in ${schedIn(x.at - now)}` : "now"}.`).join(" ");
+  if (fresh.length) $("#remindSay").textContent = fresh.map((x) => `Reminder: ${x.t.content}, ${remindWhen(x)}.`).join(" ");
 }
+// On phones the note scrolls away with the page (index.html), so it never covers much of a small screen.
+const remindSticky = () => getComputedStyle($("#remindBar")).position === "sticky";
+// The note's height while it sticks to the top: Settings' "Jump to" row and the bulk bars stick under it
+// (--remindH), and whatever you Tab to scrolls clear of it.
+const remindCover = () => (!$("#remindBar").hidden && remindSticky() ? $("#remindBar").offsetHeight : 0);
+function remindMeasure() {
+  const h = remindCover(), root = document.documentElement.style;
+  root.setProperty("--remindH", `${h}px`);
+  root.scrollPaddingTop = h ? `${h + 12}px` : "";
+}
+window.addEventListener("resize", remindMeasure);
+if (window.ResizeObserver) new ResizeObserver(() => remindMeasure()).observe($("#remindBar"));  // it wraps, or the text size changed
+// Just one thing on screen says it already. On phones the note sits right above the card, so on My list that's
+// wherever you've scrolled (a line added up there would only push the page about); where the note sticks to the
+// top, it's while the card is on screen.
 function remindCardSeen() {  // Just one thing's timer is on screen: its own buttons are right there
   if (!$("#mylist").classList.contains("on") || $("#timerBox").hidden) return false;
+  if (!remindSticky()) return true;
   const r = $("#timerBox").getBoundingClientRect(), mid = (r.top + r.bottom) / 2;
   return mid > 0 && mid < window.innerHeight;
 }
+function remindNowSeen() {  // Just one thing's task, while its words are on screen (not under the note), else ""
+  const id = $("#nowCard").dataset.id;
+  if (!id || !$("#mylist").classList.contains("on")) return "";
+  if (!remindSticky()) return id;
+  const r = $("#nowText").getBoundingClientRect();
+  return r.height && r.bottom > remindCover() && r.top < window.innerHeight ? id : "";
+}
 let remindScrolling = false;
 window.addEventListener("scroll", () => {  // scrolling to or away from the card swaps the note at the top
-  if (!timerState?.ended || remindScrolling) return;
+  if (!(timerState?.ended || remindRender.mine) || remindScrolling) return;
   remindScrolling = true;
   requestAnimationFrame(() => { remindScrolling = false; remindRender(); });
 }, { passive: true });
-function remindNote(text, undo) {  // "Done ✓ Call the dentist · Undo" where the reminder was
+function remindNote(text, undo, id = "") {  // "Done ✓ Call the dentist · Undo" where the reminder was
   clearTimeout(remindNoteTimer);
-  remindNoteNow = { text, undo };
+  remindNoteNow = { text, undo, id };
   $("#remindSay").textContent = text;
   remindRender();
   remindNoteTimer = setTimeout(() => { remindNoteNow = null; remindRender(); }, ["large", "xlarge"].includes(me?.prefs?.text_size) ? 12000 : 8000);
@@ -4858,20 +4934,29 @@ $("#remindBar").addEventListener("click", async (e) => {
     return;
   }
   if (act === "undo") {
-    const undo = remindNoteNow?.undo;
+    const undo = remindNoteNow?.undo, back = remindNoteNow?.id;
     clearTimeout(remindNoteTimer); remindNoteNow = null; remindRender();
-    if (undo) await undo();
-    if (inBar) remindFocusAfter();
+    if (undo) await undo();  // the list is loaded again before this carries on
+    if (inBar) {  // back on the reminder that came back, else the next thing in the note
+      const again = back && $(`#remindList [data-id="${CSS.escape(back)}"] [data-r=done]`);
+      if (again) again.focus({ preventScroll: true }); else remindFocusAfter();
+    }
     return;
   }
+  if (key && key.includes("@")) remindUnnotify(`nb-${key}`);  // handled here: its notification goes too
   if (act === "off" || act === "snooze") {
     const memo = remindMemo();
     if (act === "off") { memo.off[key] = true; remindKeep(memo); remindRender(); }
     else {
       memo.snooze[key] = Date.now() + 10 * 60000;
       remindKeep(memo);
+      remindSeen.delete(key);  // when it comes back it's said (and notified) again
       setTimeout(remindRender, 10 * 60000 + 200);  // back right on time, not at the next 20 s check
-      remindNote(`Snoozed: ${name}. Back in 10 minutes.`, () => { const m = remindMemo(); delete m.snooze[key]; remindKeep(m); remindRender(); });
+      remindNote(`Snoozed: ${name}. Back in 10 minutes.`, () => {
+        const m = remindMemo(); delete m.snooze[key]; remindKeep(m);
+        remindSeen.add(key);  // back on screen at once, where you are: no need to say it again
+        remindRender();
+      }, id);
     }
     if (inBar) remindFocusAfter();
     return;
@@ -4881,10 +4966,10 @@ $("#remindBar").addEventListener("click", async (e) => {
       if (act === "done") {
         const r = await api(`/list/${encodeURIComponent(id)}/done`, { method: "POST" });
         const canUndo = r.undo != null && !(t && !String(id).startsWith("nb:") && t.due?.is_recurring);  // as My list's Done
-        remindNote(`Done ✓ ${name}`, canUndo ? () => undoDone(id, r.undo) : null);
+        remindNote(`Done ✓ ${name}`, canUndo ? () => undoDone(id, r.undo) : null, id);
       } else if (act === "tomorrow") {
         const r = await api(`/list/${encodeURIComponent(id)}/move`, { method: "POST", json: { to: "tomorrow" } });
-        if (r.moved) remindNote(`Moved to tomorrow: ${name}`, () => undoMove(id, r.undo));
+        if (r.moved) remindNote(`Moved to tomorrow: ${name}`, () => undoMove(id, r.undo), id);
         else toast(`It's on ${dayWords(r.to)} already`);
       }
       await loadList();
@@ -4926,20 +5011,43 @@ $("#remindNotify").onchange = async () => {
 async function remindNotify(title, body, tag) {
   if (!me?.prefs?.remind_notify || !remindCanNotify() || Notification.permission !== "granted" || document.visibilityState === "visible") return;
   const opts = { body, tag, icon: "icons/icon-192.png" };
-  try { const n = new Notification(title, opts); n.onclick = () => { window.focus(); n.close(); }; }
-  catch { try { (await navigator.serviceWorker?.getRegistration())?.showNotification(title, opts); } catch {} }  // phones: through sw.js
+  try {
+    const n = new Notification(title, opts);
+    remindShown.add(n);
+    n.onclick = () => { window.focus(); n.close(); };
+    n.onclose = () => remindShown.delete(n);
+  } catch { try { (await navigator.serviceWorker?.getRegistration())?.showNotification(title, opts); } catch {} }  // phones: through sw.js
 }
-// Every 20 s: reminders come and go and the routine card follows the clock. A list that's been sitting for a
-// while is fetched again quietly when a timed task is near, so a reminder isn't for something already done.
+// Takes Next Box's notifications away: one reminder's (its tag), or all of them (signing out, so the next person
+// on a shared device can't read the task names in the tray). Made here or through sw.js (phones).
+function remindUnnotify(tag = "") {
+  for (const n of remindShown) if (!tag || n.tag === tag) { remindShown.delete(n); try { n.close(); } catch {} }
+  try {
+    navigator.serviceWorker?.getRegistration()
+      .then((r) => r?.getNotifications(tag ? { tag } : undefined))
+      .then((all) => all?.forEach((n) => { if ((n.tag || "").startsWith("nb-")) n.close(); }))
+      .catch(() => {});
+  } catch {}
+}
+// Every 20 s: reminders come and go, the routine card follows the clock, and a timer that ran out long ago is
+// let go. When a timed task is near and the list has been sitting 5+ minutes, it's fetched again first (in the
+// background too, where notifications show), so a reminder isn't for something already done on another device.
 function remindTick() {
   if (!me || $("#appShell").hidden) return;
+  if (timerStale(timerState)) timerDrop();
   const visible = document.visibilityState === "visible";
   if (visible && lastLoad.day && today() !== lastLoad.day) { loadList(); loadToday(); loadRoutine(); return; }  // a new day
-  const lead = me.prefs.remind_before ?? 10, now = schedNowMin(), day = today();
-  const near = lead > 0 && [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])].some((t) => t.due && t.due.date.length > 10
-    && t.due.date.slice(0, 10) === day && Math.abs(schedMinutes(t.due.date.slice(11, 16)) - lead - now) <= 15);
-  const busy = $$("dialog[open]").length || document.activeElement?.matches?.("input, textarea, select");
-  if (visible && near && !busy && Date.now() - lastLoad.at > 5 * 60000) loadList();
+  const lead = me.prefs.remind_before ?? 10, now = Date.now();
+  // near: from 15 minutes before a reminder starts until it ends (a snoozed one can come back at any point in that)
+  const near = lead > 0 && remindTimed().some((t) => { const d = (remindAt(t) - now) / 60000; return d <= lead + 15 && d > -REMIND_LATE; });
+  // Not while someone's typing or has a sheet open; in the background, only a box in the list itself (redrawn) holds it up.
+  const typing = document.activeElement?.matches?.("input, textarea, select");
+  const busy = visible ? $$("dialog[open]").length || typing : typing && $("#listBody").contains(document.activeElement);
+  if (near && !busy && now - lastLoad.at > REMIND_STALE && now - (remindTick.asked || 0) > 60000) {
+    remindTick.asked = now;  // once a minute at most, if it can't be fetched (offline)
+    loadList().then(remindRender);  // drawn (and notified) from the fresh list
+    return;
+  }
   remindRender();
   if ($("#mylist").classList.contains("on")) routineRender();
 }
@@ -4947,9 +5055,10 @@ setInterval(remindTick, 20000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { timerShow(); remindTick(); } });
 document.addEventListener("click", (e) => { if (e.target.closest?.("#topnav button, .bottombar button, #moreMenu button, [data-go-tab]")) setTimeout(remindRender, 0); });
 function remindForget() {
-  remindSeen.clear(); remindNoteNow = null; remindMem = null; clearTimeout(remindNoteTimer);
-  $("#remindList").innerHTML = ""; $("#remindList").dataset.html = ""; $("#remindBar").hidden = true;
-  document.documentElement.style.scrollPaddingTop = "";
+  remindSeen.clear(); remindNoteNow = null; remindMem = null; clearTimeout(remindNoteTimer); remindRender.mine = false;
+  $("#remindList").innerHTML = ""; $("#remindList").dataset.html = ""; $("#remindBar").hidden = true; $("#remindSay").textContent = "";
+  document.documentElement.style.scrollPaddingTop = ""; document.documentElement.style.removeProperty("--remindH");
+  remindUnnotify();
 }
 
 
@@ -5038,7 +5147,10 @@ function quickRouteRead() {
   history.replaceState(null, "", location.pathname + location.search);
 }
 function quickRun() {
-  if (!quickRoute || !me || $("#appShell").hidden || $$("dialog[open]").length) return;
+  if (!me || $("#appShell").hidden) return;
+  // Signed in, and no shared photo is waiting for this page: one left behind earlier (never picked up) goes now.
+  if (!quickRoute?.shared && !quickRun.tidied) { quickRun.tidied = true; shareForget(); }
+  if (!quickRoute || $$("dialog[open]").length) return;
   const r = quickRoute;
   quickRoute = null;
   if (r.to === "add") return quickOpen(r.text || null, !!r.text);
