@@ -162,10 +162,40 @@ def test_buttons_that_hide_themselves_move_focus_on(js):
     assert re.search(r'\$\("#guideMini"\)\.onclick = \(\) => \{\s*setGuideOpen\(true\);\s*focusFirst\(\$\("#guideSteps \.next \.title"\), \$\("#guideHead h2"\)\);', js)
     assert '$("#guideLess").onclick = () => { setGuideOpen(false); focusFirst($("#guideMini")); };' in js
     assert '$("#nowMore").hidden = true; focusFirst($("#nowText"));' in js
-    older = between(js, '$("#jOlder").onclick', "\n};")
-    assert "await loadJournal(true);" in older and 'focusFirst($("#jEnd"))' in older
     back = between(js, '$("#jBackGo").onclick', "\n};")
     assert "await done;" in back and 'focusFirst($("#journal h2"))' in back
+
+
+def test_focus_that_moves_on_is_never_left_off_screen(js):
+    """W3-07 follow-up: Show less (a long checklist folding away above) and Older days (days pushing the button down)
+    left focus off screen. focusFirst scrolls just enough to show it, inside the scroll padding (the phone's tab bar,
+    a reminder note, Settings' Jump to row), and leaves the page alone when it's already in view."""
+    fn = between(js, "function focusFirst(", "\n}\n")
+    assert "el.focus({ preventScroll: true });" in fn
+    assert re.search(r'const r = el\.getBoundingClientRect\(\), pad = getComputedStyle\(document\.documentElement\);\s*'
+                     r'if \(r\.top < \(parseFloat\(pad\.scrollPaddingTop\) \|\| 0\) \|\| r\.bottom > innerHeight - '
+                     r'\(parseFloat\(pad\.scrollPaddingBottom\) \|\| 0\)\) \{\s*el\.scrollIntoView\(\{ block: "nearest" \}\);', fn)
+    assert fn.index("el.focus(") < fn.index("scrollIntoView")
+
+
+def test_older_days_focuses_the_first_day_it_added(js):
+    older = between(js, '$("#jOlder").onclick', "\n};")
+    assert older.index('const had = $$("#jDays .jday").length;') < older.index("await loadJournal(true);")
+    # Only when focus is still on the button, or was lost with it (not if they've moved on while it loaded).
+    assert 'if (a === $("#jOlder") || !a?.offsetParent) focusFirst($$("#jDays .jday")[had]?.querySelector("h3"), $("#jOlder"), $("#jEnd"));' in older
+    # The days go in above the button, so the first new one takes its place on screen.
+    assert '$("#jDays").insertAdjacentHTML("beforeend", html);' in js
+
+
+def test_notice_docs_say_what_the_back_gesture_does(js):
+    """closedby="none" turns the notice's close watcher off: Esc does nothing, but the phone's back gesture isn't caught
+    and goes back as on any page. The SPEC and the code comment say so, not that back does nothing."""
+    spec = (WEB.parent / "SPEC.md").read_text()
+    notice = between(spec, "- **The notice:**", "- **The superadmin can see:**")
+    assert "Esc does nothing" in notice and "doesn't catch the phone's back" in notice
+    assert not re.search(r"back gesture\s+do nothing", notice)
+    comment = between(js, "// Agree, or sign out: nothing else closes it (W3-01).", '$("#noticeDialog").addEventListener("keydown"')
+    assert "the phone's back gesture isn't caught here" in comment and "stops Esc and the" not in comment
 
 
 def test_deleting_the_oldest_days_page_goes_to_the_day_above(js):

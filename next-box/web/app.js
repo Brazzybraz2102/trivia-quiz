@@ -278,10 +278,11 @@ $("#noticeOk").onclick = async () => {
   catch (e) { $("#noticeMsg").textContent = errText(e); }
 };
 $("#noticeNo").onclick = () => signOut($("#noticeMsg"));
-// Agree, or sign out: nothing else closes it (W3-01). closedby="none" in index.html stops Esc and the
-// phone's back gesture; Esc is also stopped as a key, before it can become a close request, for browsers
-// without closedby (Chrome refuses only one close request in a row without a tap in between). Anything
-// that still closes it while the notice waits for an answer opens it again.
+// Agree, or sign out: nothing else closes it (W3-01). closedby="none" in index.html stops Esc; Esc is also
+// stopped as a key, before it can become a close request, for browsers without closedby (Chrome refuses
+// only one close request in a row without a tap in between). Anything that still closes it while the
+// notice waits for an answer opens it again. closedby="none" also turns off the dialog's close watcher, so
+// the phone's back gesture isn't caught here: it goes back as on any page, and the notice is there next time.
 $("#noticeDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") e.preventDefault(); });
 $("#noticeDialog").addEventListener("cancel", (e) => e.preventDefault());
 $("#noticeDialog").addEventListener("close", () => {
@@ -1661,12 +1662,17 @@ function focusMain() {
   el.focus({ preventScroll: true });
 }
 // After something you were on is removed: keyboard focus goes to the first of these still on screen
-// (a heading gets tabindex=-1), never back to the top of the page.
+// (a heading gets tabindex=-1), never back to the top of the page. The page only moves if that is off
+// screen or under a bar (the scroll padding), and then just enough to show it (W3-07).
 function focusFirst(...els) {
   const el = els.find((x) => x?.isConnected && x.offsetParent);
   if (!el) return focusMain();
   if (!el.matches("button, a[href], input, select, textarea, [tabindex]")) el.tabIndex = -1;
   el.focus({ preventScroll: true });
+  const r = el.getBoundingClientRect(), pad = getComputedStyle(document.documentElement);
+  if (r.top < (parseFloat(pad.scrollPaddingTop) || 0) || r.bottom > innerHeight - (parseFloat(pad.scrollPaddingBottom) || 0)) {
+    el.scrollIntoView({ block: "nearest" });
+  }
 }
 
 function renderList() {
@@ -3621,8 +3627,12 @@ async function loadJournal(more = false, from = "") {
   } catch (e) { $("#jDays").innerHTML = `<p class="err">${esc(errText(e))}</p>`; }
 }
 $("#jOlder").onclick = async () => {
+  const had = $$("#jDays .jday").length;
   await loadJournal(true);
-  if ($("#jOlder").hidden && !document.activeElement?.offsetParent) focusFirst($("#jEnd"));  // no more days: "That's everything." (W3-07)
+  // Focus goes to the first day it brought in, where the button was, so Tab carries on through them; with none,
+  // it stays on the button, or "That's everything." once that's all (W3-07).
+  const a = document.activeElement;
+  if (a === $("#jOlder") || !a?.offsetParent) focusFirst($$("#jDays .jday")[had]?.querySelector("h3"), $("#jOlder"), $("#jEnd"));
 };
 
 function winsHtml(w) {

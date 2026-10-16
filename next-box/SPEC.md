@@ -182,9 +182,10 @@ guarded auto print.
 ## 15. Admin visibility (everyone agreed)
 - **The notice:** at first sign-in everyone sees `DATA_NOTICE` and taps "I understand". It's
   recorded as `consent: {version, at}`. Bump `DATA_NOTICE_VERSION` if what's visible changes.
-  Until they agree or tap "No thanks, sign me out", nothing closes it: Esc and the phone's back gesture
-  do nothing (`closedby="none"`, and Esc is stopped as a key for browsers without it), and if it's
-  closed any other way while still unanswered, it opens again.
+  Until they agree or tap "No thanks, sign me out", nothing closes it: Esc does nothing (`closedby="none"`,
+  and Esc is stopped as a key for browsers without it), and if it's closed any other way while still
+  unanswered, it opens again. `closedby="none"` also means the notice doesn't catch the phone's back
+  gesture: that goes back as on any page (out of Next Box), and the notice is there again next time.
 - **The superadmin can see:**
   - `/super/usage`: per-person activity, tickets by reason, read-back outcomes, settings, last
     active, notice date, and a daily chart
@@ -514,6 +515,8 @@ one photo of both pages at night.
 - **Paper sizes**: `a5` and `half_letter` join letter and a4 for Print on paper.
 - Endpoints: `GET /journal?until=&days=`, `GET /journal/wins?days=`, `GET /journal/slugs`,
   `POST /journal` (typed note), `PATCH|DELETE /journal/{id}`, `GET /journal/{id}/photo`.
+  The Journal tab asks for 14 days at a time; Older days adds the next ones below, and keyboard focus goes
+  to the first day it added (or to "That's everything." when none came).
 - Family Mode (later) reuses all of this per person; sharing a page will be an explicit choice.
 
 ## 26. FB: the journal loop (notes → tasks, download, search, moving pages)
