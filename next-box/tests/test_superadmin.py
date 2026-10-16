@@ -56,7 +56,7 @@ def test_sees_everyone_across_households_with_filters(panel):
     o = boss.get("/super/overview").json()
     assert o["people"] == 4 and o["households"] == 2 and o["beta"] == 1 and o["open_tasks"] == 1
     d = boss.get("/super/users/sam").json()
-    assert d["connection"] == {"connected": False} and d["tags"] and "secret" not in str(d["connection"])
+    assert d["connection"] == {"connected": False} and d["tag_count"] >= 1 and "tags" not in d and "secret" not in str(d["connection"])
 
 
 def test_edit_move_and_protect(panel):

@@ -227,7 +227,8 @@ def test_one_name_for_each_thing(html, js):
 
 # ------------------------------------------------------------------ R-C18: a yes/no question has only yes and no
 def test_break_it_down_hides_while_finish_the_task_is_asked(js):
-    assert '$("#nowBreak").hidden = !aiOn() || !t || asking;' in body_of(js, "function renderNow()")
+    # Also hidden with no AI key (walkthrough W2-02): no Break it down button to dead-end on.
+    assert '$("#nowBreak").hidden = !aiOn() || !me?.ai_ready || !t || asking;' in body_of(js, "function renderNow()")
 
 
 # ------------------------------------------------------------------ R-C21: nothing private stays on a shared phone

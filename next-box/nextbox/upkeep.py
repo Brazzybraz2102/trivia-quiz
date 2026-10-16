@@ -37,6 +37,11 @@ def forget_data(engine: Engine, store, username: str) -> None:
     Wins(engine, username).delete_for_user()
     Slides(engine, username).delete_for_user()
     store.delete_for_user(username)
+    with engine.begin() as conn:  # the invite they used stays used, but no longer names them
+        conn.execute(update(db.invites).where(db.invites.c.used_by == username).values(used_by=DELETED_ACCOUNT))
+
+
+DELETED_ACCOUNT = "(deleted account)"  # in place of a deleted person's name on the invite they used
 
 
 def purge_user(accounts, store, events, feedback, username: str) -> str:

@@ -643,6 +643,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             events.log("?", "signup", ok=False, kind="auth", detail={"ip": client}, error=str(exc))
             raise HTTPException(400, str(exc)) from exc
         name = user["username"]
+        # Joined with a real invite: their typos while joining (a code, a taken name) stop counting. Each
+        # invite works once, so this can't be used to keep guessing codes.
+        accounts.clear_failures(client, "?")
         accounts.record_consent(name, None, terms=TERMS_VERSION)  # they ticked "I agree" to join
         events.log(name, "signup", kind="auth", detail={"ip": client, "household": user["household_id"],
                                                         "terms_version": TERMS_VERSION},
@@ -791,6 +794,15 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         events.log(caller.name, "profile_changed", kind="auth")
         return {"email": user.get("email"), "prefs": prefs}
 
+    @app.get("/auth/export/check")
+    def export_check(caller: Caller = Depends(person)):
+        """Would Download my data work right now? Asking doesn't count as a download. The app asks
+        first, so a hold or the hourly limit shows as a message instead of a page of raw JSON."""
+        _reset_hold(caller)
+        if export_window.full(caller.name):
+            raise HTTPException(429, "That's a lot of downloads this hour. Try again in a bit.")
+        return {"ok": True}
+
     @app.get("/auth/export")
     def export_my_data(format: str = "json", caller: Caller = Depends(person)):
         """Everything Next Box keeps about you, as a file. Never includes passwords or tokens.
@@ -861,9 +873,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                           caller: Caller = Depends(person)):
         """Delete yourself and everything Next Box keeps about you. Your linked apps aren't touched."""
         if body.confirm.strip().lower() != caller.name:
-            raise HTTPException(400, "type your username to confirm")
+            raise HTTPException(400, "Type your username to confirm.")
         if not _own_password_ok(caller.name, body.password):
-            raise HTTPException(403, "wrong password")
+            raise HTTPException(403, "That password didn't match.")
         _reset_hold(caller)
         try:
             upkeep.purge_user(accounts, ctx.store, events, feedback_store, caller.name)  # feedback stays, unlinked
@@ -2610,7 +2622,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         if name != caller.name:
             audit(caller, "view_user", target=name, what="details")
         return {**row, "prefs": target["prefs"], "connection": connections.status(name),
-                "devices": accounts.sessions_for(name), "tags": Tags(accounts.db, name).all(),
+                "devices": accounts.sessions_for(name),
+                "tag_count": len(Tags(accounts.db, name).all()),  # how many, not what they say (tags describe tasks)
                 "recent": events.query(user=name, limit=15),
                 "tickets": [{k: t.get(k) for k in ("id", "kind", "title", "created_at", "dry_run")}
                             for t in ctx.store.list_printed(8, by=name)]}

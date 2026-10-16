@@ -40,6 +40,8 @@ TABLE_NOTES = {
     "tasks": "Everyone's built-in to-do list (My list). Linked apps' tasks are never stored here.",
     "tags": "Each person's tags and the label color for each.",
     "wins": "What each person finished, by day (My list tasks by name; a linked app's by id only).",
+    "journal": "Each person's private journal pages: photo and notes (both hidden here), by day.",
+    "task_slides": "How many times each task moved to a later day (task ids and counts only, never text).",
 }
 MASKED_COLUMNS = {"hash", "salt", "token_hash", "notes", "photo", "win"}  # notes/photo/win: private journal pages
 # The same columns by table. On SQLite they read as NULL whatever the query calls them
@@ -51,7 +53,15 @@ UNREADABLE = {("journal", "notes"), ("journal", "photo"), ("journal", "win"), ("
 def _authorizer(action, table, column, _db, _source):
     if action == sqlite3.SQLITE_READ and (table, column) in UNREADABLE:
         return sqlite3.SQLITE_IGNORE  # the value reads as NULL
+    if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH):
+        return sqlite3.SQLITE_DENY  # read-only means no new database files either
     return sqlite3.SQLITE_OK
+
+
+# Read-only still lets these make files (ATTACH a new name, VACUUM INTO), so they're refused up front.
+FILE_MAKERS = re.compile(r"^\s*(?:(?:--[^\n]*\n|/\*.*?\*/)\s*)*(ATTACH|DETACH|VACUUM)\b", re.I | re.S)
+READ_ONLY_REFUSED = ("db sql is read-only here: ATTACH, DETACH and VACUUM aren't allowed "
+                     "(add --practice --write to try them on the practice database).")
 
 
 # PostgreSQL has no authorizer, so before a query runs on the real database its plan (EXPLAIN VERBOSE)
@@ -234,12 +244,15 @@ def _mask(columns: list[str], row: tuple) -> list:
         if col in MASKED_COLUMNS and (val or val is None):  # None: the authorizer hid it
             val = "•••• (hidden)"
         elif col == "connection" and val:
-            data = json.loads(val) if isinstance(val, str) else dict(val)
-            data.pop("secret", None)
+            data = json.loads(val) if isinstance(val, str) else val  # 'null' for someone with no linked app
+            if isinstance(data, dict):
+                data = {k: v for k, v in data.items() if k != "secret"}
             val = json.dumps(data)
         elif col == "calendars" and val:
-            data = json.loads(val) if isinstance(val, str) else list(val)
-            val = json.dumps([{k: v for k, v in c.items() if k != "secret"} for c in data])
+            data = json.loads(val) if isinstance(val, str) else val
+            if isinstance(data, list):
+                data = [{k: v for k, v in c.items() if k != "secret"} if isinstance(c, dict) else c for c in data]
+            val = json.dumps(data)
         elif col in ("png", "parts") and val:
             val = f"<image, {len(val):,} bytes>"
         out.append(val)
@@ -256,6 +269,8 @@ def run_sql(data_dir: Path, sql: str, practice: bool = False, write: bool = Fals
     with engine.connect() as conn:
         raw = conn.connection.driver_connection if engine.dialect.name == "sqlite" and not practice else None
         passed: list[tuple[int, str]] = []
+        if not write and FILE_MAKERS.match(sql):
+            raise PermissionError(READ_ONLY_REFUSED)
         if not write:
             if engine.dialect.name == "sqlite":
                 conn.exec_driver_sql("PRAGMA query_only = ON")

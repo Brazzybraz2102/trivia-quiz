@@ -119,8 +119,16 @@ def _hash_password(password: str, salt: bytes) -> str:
     return hashlib.scrypt(password.encode(), salt=salt, **_SCRYPT).hex()
 
 
+_PREFS_LOCK = threading.Lock()  # set_prefs: one read-merge-write at a time
+
+
 def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _device_id(token_hash: str) -> str:
+    """A device's short id for Profile and Manage: worked out from the stored hash, but not a piece of it."""
+    return hashlib.sha256(b"nextbox-device:" + token_hash.encode()).hexdigest()[:12]
 
 
 def norm_code(code: str) -> str:
@@ -343,7 +351,7 @@ class Accounts:
         salt = secrets.token_bytes(16)
         with self.db.begin() as conn:
             if self._row(conn, username):
-                raise AuthError(f"user {username} already exists")
+                raise AuthError(f"The username {username} already exists. Pick another one.")
             if email and conn.execute(select(db.users.c.username).where(db.users.c.email == email)).first():
                 raise AuthError("that email already has an account")
             conn.execute(insert(db.users).values(
@@ -367,7 +375,7 @@ class Accounts:
                 # A name or email error below rolls this back, so the code still works.
                 inv = self._redeem(conn, invite, username)
                 if self._row(conn, username):
-                    raise AuthError(f"user {username} already exists")
+                    raise AuthError(f"The username {username} already exists. Pick another one.")
                 if email and conn.execute(select(db.users.c.username).where(db.users.c.email == email)).first():
                     raise AuthError("another account already uses that email")
             beta = bool(inv.get("beta"))
@@ -478,8 +486,14 @@ class Accounts:
                 raise AuthError(f"unknown setting {k}")
             if not PREFS[k][1](v):
                 raise AuthError(PREF_HINTS.get(k, "That value isn't allowed."))
-        with self.db.begin() as conn:
-            row = self._row(conn, username)
+        # Read, merge and write as one step: two settings changed a moment apart (a number box, then a
+        # switch) must both be kept, not the second written over the first. The lock covers this process;
+        # FOR UPDATE covers PostgreSQL with more than one (SQLite leaves it out and locks the file instead).
+        with _PREFS_LOCK, self.db.begin() as conn:
+            row = conn.execute(select(db.users).where(db.users.c.username == username.strip().lower())
+                               .with_for_update()).mappings().first()
+            if row is None:
+                raise AuthError(f"no user {username}")
             prefs = {**default_prefs(), **(row["prefs"] or {}), **changes}
             conn.execute(update(db.users).where(db.users.c.username == username).values(prefs=prefs))
         return prefs
@@ -683,7 +697,7 @@ class Accounts:
             rows = conn.execute(select(db.sessions).where(and_(
                 db.sessions.c.username == username, db.sessions.c.expires > int(time.time())))
                 .order_by(db.sessions.c.created.desc())).mappings().all()
-        out = [{"id": r["token_hash"][:12], "created": r["created"], "last_used": r["last_used"] or r["created"],
+        out = [{"id": _device_id(r["token_hash"]), "created": r["created"], "last_used": r["last_used"] or r["created"],
                 "ip": r["ip"], "agent": r["agent"], "current": r["token_hash"] == cur} for r in rows]
         # This device first, then the most recently used.
         return sorted(out, key=lambda s: (not s["current"], -(s["last_used"] or 0)))
@@ -694,8 +708,8 @@ class Accounts:
         if not re.fullmatch(r"[0-9a-f]{12}", sid or ""):
             raise KeyError(sid)
         with self.db.begin() as conn:
-            found = [r[0] for r in conn.execute(select(db.sessions.c.token_hash).where(and_(
-                db.sessions.c.username == username, db.sessions.c.token_hash.startswith(sid))))]
+            found = [r[0] for r in conn.execute(select(db.sessions.c.token_hash).where(
+                db.sessions.c.username == username)) if _device_id(r[0]) == sid]
             if not found:
                 raise KeyError(sid)
             if keep and _token_hash(keep) in found:

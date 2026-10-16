@@ -724,7 +724,7 @@ class LocalTasks(TaskProvider):
         if "content" in f or creating:
             content = str(f.get("content") or "").strip()
             if not content:
-                raise ValueError("the task needs some words")
+                raise ValueError("Type a few words for the task first.")
             out["content"] = content[:500]
         if "description" in f:
             out["description"] = str(f["description"] or "")[:4000]

@@ -72,7 +72,7 @@ The API also takes `"dry_run": true` on every print endpoint.
 `GET /scans` · `GET /scan/{id}` · `POST /scan/{id}/confirm {decisions:{row:"confirm"|"skip"}}` ·
 `/app` (web app) · `/docs` (OpenAPI).
 
-Auth: `POST /auth/login {username,password}` sets an HttpOnly, SameSite=Strict `nextbox_session`
+Auth: `POST /auth/login {username,password}` sets an HttpOnly, SameSite=Lax (§20) `nextbox_session`
 cookie that lasts 30 days. With `want_token: true` it returns a bearer token instead, for the
 native app (`Authorization: Bearer ...`). `POST /auth/logout` ends the session and `GET /auth/me`
 says who's signed in. Home Assistant and scripts send `X-NextBox-Key`. Keys are never accepted in
@@ -224,20 +224,20 @@ Nothing else records who sent what:
 - deleting an account removes its identity entries; its posts stay, unlinked
 
 **Who can do what:**
-- **Admins:** set a status (new / seen / planned / fixed / won't fix / hidden), reply publicly,
-  or remove a post. Hidden posts are seen only by admins and the author. Admins never see who
-  wrote anything.
-- **Superadmins:** can look up who sent a specific post ("Who sent this?"). Each lookup is
+- **Superadmins** moderate: set a status (new / seen / planned / fixed / won't fix / hidden), reply
+  publicly, or remove a post. Hidden posts are seen only by superadmins and the author. The board
+  never shows who wrote anything. Admins and everyone else read and post like any user.
+- **Superadmins** can also look up who sent a specific post ("Who sent this?"). Each lookup is
   written to the audit log by feedback ID only, so the audit log never names the sender.
 
 **Limit:** scrubbing can't catch everything, such as a stranger's name or a street address. The
-form asks people to leave personal details out, and admins can hide any post that slips through.
+form asks people to leave personal details out, and a superadmin can hide any post that slips through.
 
 ## 10. Roles, settings, support and debugging
 **Everyone** (Settings tab):
 - **Account:** change password (signs out other devices), list signed-in devices, sign out
   other devices.
-- **Printing:** always preview only; rows per ticket (3–20); show "Also waiting"; 24-hour
+- **Printing:** always preview only; rows per ticket (1–20); show "Also waiting"; 24-hour
   times; default list filter.
 - **Read-back:** apply confident marks automatically, on or off; confidence needed (50–95%).
   Drops always wait for confirmation, whatever these say.
@@ -250,7 +250,6 @@ form asks people to leave personal details out, and admins can hide any post tha
 - sign people out
 - mark beta testers
 - read a person's activity, without tracebacks
-- respond to feedback publicly, set its status, hide posts that slipped personal details through (§13)
 
 Admins only manage plain users, and can't change roles or debug mode.
 
@@ -385,7 +384,7 @@ Superadmins only (`super_only`). Shows every person in every household:
   (signs them out); reset password (one-time password shown once), sign out all devices, reset
   settings to defaults, unlink the to-do app (their built-in list stays), debug bundle, recent
   activity, devices and tickets; delete after typing the username.
-- Bulk: sign out, turn off, turn on, beta on/off for everyone selected. Bulk skips the caller.
+- Bulk: sign out, turn off, turn on, beta on/off for everyone selected. Turn off and sign out skip the caller ("that's you").
 - New household; add a person into any household; CSV export (no secrets; cells that start with
   `= + - @` are prefixed with `'` so spreadsheets don't run them).
 Open task *counts* are shown, never task text. A superadmin can't turn off or demote themselves
@@ -450,10 +449,12 @@ Profile and email (`PATCH /auth/profile`; sign in with username or email), chang
 devices (sign out the others), settings, help, feedback, refresh, **download my data**
 (`GET /auth/export`: account, settings, tags, tasks, linked app and calendar names, tickets, read-backs,
 journal pages, wins and devices as data.json; `?format=zip` adds the ticket images (`tickets/*.png`) and
-journal photos (`journal/*.jpg`), 5 an hour; both are sent `no-store`; never passwords, hashes or tokens),
-sign out, and **delete my account**
+journal photos (`journal/*.jpg`), 5 an hour; both are sent `no-store`; never passwords, hashes or tokens;
+the app first asks `GET /auth/export/check`, which doesn't count, so a reset hold or the hourly limit is a
+message in the app), sign out, and **delete my account**
 (`POST /auth/delete-account`: password + typed username; removes the account, tasks, tags,
-tickets, scans and activity; feedback stays, unlinked; the protected admin and the last superadmin
+tickets, scans and activity; feedback stays, unlinked; the invite it joined with stays used but no longer
+names it; the protected admin and the last superadmin
 can't). The login page has show-password and "Forgot your password?" (an admin gives a one-time
 password). Superadmins see a banner when a newer version is published (`GET /super/update-check`,
 reads the published pyproject.toml at most every 6 hours).

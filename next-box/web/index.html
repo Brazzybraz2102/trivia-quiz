@@ -264,7 +264,7 @@
     .printbar button.go, .printbar button.plain { padding:8px 10px; font-size:15px; }
   }
   .step.next button.plain { border-color:color-mix(in srgb, currentColor 50%, transparent); }
-  .hint code { background:var(--bg); padding:1px 5px; border-radius:4px; border:1px solid var(--line); font-size:.8125rem; }
+  .hint code { background:var(--bg); padding:1px 5px; border-radius:4px; border:1px solid var(--line); font-size:.8125rem; white-space:nowrap; }
   .guide .bar { height:8px; background:var(--line); border-radius:99px; overflow:hidden; margin:8px 0 4px; }
   .guide .bar div { height:100%; background:var(--ok); border-radius:99px; transition:width .3s; }
   .step { display:flex; gap:10px; padding:10px 0; border-top:1px solid var(--line); }
@@ -700,7 +700,6 @@
   </form>
   <p class="muted" style="text-align:center"><button class="linkish" id="showJoin">Have an invite code? Join</button>
     · <a href="guide.html" target="_blank" rel="noopener">New here? Quick start</a></p>
-  <p class="muted" style="text-align:center;font-size:13px"><a href="about.html">About</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a></p>
   <p class="muted" style="text-align:center"><button class="linkish" data-feedback>Having trouble? Send feedback</button></p>
 </div>
 
@@ -1011,7 +1010,7 @@
       <p class="muted" id="noticeWhen"></p>
       <p class="muted">Download my data saves one .zip file: your list, settings, journal pages and photos, and ticket images.
         Download my journal saves just your journal, a folder for each day or a PDF to print.</p>
-      <div class="row"><a class="plain" href="/auth/export?format=zip">Download my data</a>
+      <div class="row"><a class="plain" href="/auth/export?format=zip" data-export-data>Download my data</a>
         <button class="plain" data-journal-export>Download my journal</button>
         <button class="go warn" id="pDelete">Delete my account</button></div>
       <div id="pDeletePanel"></div>
@@ -1170,7 +1169,7 @@
     </div>
     <div class="card" id="activityCard" hidden><h2>Activity: <span id="actUser"></span></h2>
       <div id="activity"></div></div>
-    <div class="card"><h2>Feedback</h2><p class="muted">Respond, set a status or hide posts on the <button class="linkish" data-goto="board">Feedback board</button>. Names are never shown.</p></div>
+    <div class="card" data-min="superadmin" hidden><h2>Feedback</h2><p class="muted">Respond, set a status or hide posts on the <button class="linkish" data-goto="board">Feedback board</button>. Names are never shown.</p></div>
   </section>
 
   <section id="superusers">

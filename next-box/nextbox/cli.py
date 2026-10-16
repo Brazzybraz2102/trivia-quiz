@@ -403,7 +403,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    print(json.dumps(result, indent=2, ensure_ascii=False)) if args.json else _show(result, ctx.store)
+    if args.json and isinstance(result, dict) and result.get("id") and result.get("status") != "skipped":
+        result = {**result, "png": str(ctx.store.png_path(result["id"]))}  # the label image, to open it
+    print(json.dumps(result, indent=2, ensure_ascii=False, default=str)) if args.json else _show(result, ctx.store)
     return 0
 
 

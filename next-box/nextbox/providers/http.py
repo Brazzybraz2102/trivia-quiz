@@ -38,8 +38,11 @@ def resolve_public(url: str, what: str = "That address") -> tuple[str, str | Non
         port = p.port
     except ValueError:
         port = -1
-    if p.scheme not in ("https", "http") or not p.hostname or port == -1 or (p.scheme == "http" and not private_ok):
+    if p.scheme not in ("https", "http") or not p.hostname or (p.scheme == "http" and not private_ok):
         raise ProviderError(f"{what} must start with https://")
+    if port == -1:
+        raise ProviderError(f"{what} has a port number that isn't right (the part after the colon). "
+                            "Copy the address again.")
     if private_ok:
         return url, None
     try:

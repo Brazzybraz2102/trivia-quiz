@@ -31,6 +31,7 @@ NOT_ON_LABEL, DUPLICATE_ROW = "not on this label", "duplicate row"
 ALREADY_DONE, ALREADY_MOVED, READ_BEFORE = "already done", "already moved", "read before"
 NEWER_TASK = "deleted since printed"  # the row's task was deleted; a newer task has its old id
 NO_CODE = "We couldn't read the ticket code. Pick the ticket below."
+NO_TICKETS = "We saw ticked boxes, but you haven't printed a ticket with tasks yet, so nothing changed."
 NO_LABEL = "We couldn't find a printed label in the photo, so nothing changed."
 READ_FAILED = "Saved your photo; reading it failed. Tap Try again."
 READ_FAILED_NO_COPY = "Reading the photo didn't work. Try again in a minute."
@@ -132,7 +133,7 @@ def prepare_photo(data: bytes) -> tuple[bytes, str]:
     except Exception as exc:
         if not heic and data[4:12] in (b"ftypheic", b"ftypheix", b"ftypmif1", b"ftypmsf1", b"ftyphevc"):
             raise PhotoError(HEIC_HELP) from exc
-        raise PhotoError("that file isn't a photo Next Box can read (try JPEG or PNG)") from exc
+        raise PhotoError("That file isn't a photo Next Box can read. Try a JPEG or PNG.") from exc
     img.thumbnail((MAX_EDGE, MAX_EDGE))
     out = io.BytesIO()
     img.save(out, "JPEG", quality=85)
@@ -433,8 +434,8 @@ def _read(ctx: Context, record: dict, result: ReadBack, image: bytes, hint: dict
     else:
         record["label_id"], record["day"] = None, ctx.today().isoformat()
         if record["vision"]["rows"]:
-            record["errors"].append(NO_CODE)
             record["candidates"] = _candidates(ctx)
+            record["errors"].append(NO_CODE if record["candidates"] else NO_TICKETS)
     ctx.store.save_scan(record)  # saved before the page: the marks are already applied
     try:
         page = _keep_page(ctx, image, notes, record["id"], record["label_id"], record["day"], win)

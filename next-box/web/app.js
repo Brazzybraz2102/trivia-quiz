@@ -460,7 +460,7 @@ async function loadUsage() {
     const s = u.series, week = u.bucket === "week", total = (d) => d.tickets + d.scans;
     const day = (iso) => new Date(iso + "T12:00").toLocaleDateString([], { month: "short", day: "numeric" });
     const max = Math.max(0, ...s.map(total)), peak = s.find((d) => total(d) === max);
-    $("#uChart").innerHTML = s.map((d) => `<div style="height:${Math.round(total(d) / Math.max(1, max) * 100)}%" title="${week ? "Week of " : ""}${day(d.date)}: ${d.tickets} tickets, ${d.scans} read-backs, ${d.people} ${d.people === 1 ? "person" : "people"}"></div>`).join("");
+    $("#uChart").innerHTML = s.map((d) => `<div style="height:${Math.round(total(d) / Math.max(1, max) * 100)}%" title="${week ? "Week of " : ""}${day(d.date)}: ${plural(d.tickets, "ticket")}, ${plural(d.scans, "read-back")}, ${d.people} ${d.people === 1 ? "person" : "people"}"></div>`).join("");
     $("#uChart").setAttribute("aria-label", `${week ? "Weekly" : "Daily"} tickets and read-backs, ${day(s[0].date)} to ${day(s[s.length - 1].date)}: ` +
       (max ? `most was ${max} ${week ? "in the week of" : "on"} ${day(peak.date)}` : "none yet"));
     $("#uChartCap").innerHTML = `<span>${day(s[0].date)}</span><span>${week ? "per week" : "per day"} · most ${max}</span><span>${day(s[s.length - 1].date)}</span>`;
@@ -468,7 +468,7 @@ async function loadUsage() {
         <b>${esc(p.username)}</b><span class="badge ${p.role !== "user" ? "hot" : ""}">${esc(p.role)}</span>${p.beta ? `<span class="badge">beta</span>` : ""}
         <span class="muted" style="margin-left:auto">active ${when(p.last_active)}</span></div>
       <div class="muted">${p.app ? esc(p.app) : "no to-do app"} · ${p.consented ? "notice accepted " + when(p.consented_at) : "<span class='err'>notice not accepted yet</span>"}</div>
-      <div style="margin-top:6px">${p.tickets} tickets (${p.printed} printed) · ${p.scans} read-backs · marks: ${p.marks_applied} auto, ${p.marks_confirmed} confirmed, ${p.marks_skipped} skipped</div>
+      <div style="margin-top:6px">${plural(p.tickets, "ticket")} (${p.printed} printed) · ${plural(p.scans, "read-back")} · marks: ${p.marks_applied} auto, ${p.marks_confirmed} confirmed, ${p.marks_skipped} skipped</div>
       <div class="muted">${Object.entries(p.by_reason).map(([k, v]) => `${esc(REASON_NAMES[k] || k)} ${v}`).join(" · ") || "no tickets yet"}</div>
       <div class="muted">most used: ${p.top_actions.map(([a, n]) => `${esc(a)} ×${n}`).join(", ") || "nothing yet"}</div>
       <div class="muted">settings: ${p.prefs.max_rows} rows${p.prefs.split_overdue ? ", overdue split" : ""}${p.prefs.always_dry_run ? ", preview only" : ""}, labels: ${Object.entries(p.prefs.color_rules || {}).map(([k, c]) => `${esc(REASON_NAMES[k] || k)}→${esc(c)}`).join(", ") || "default"}</div>
@@ -816,7 +816,7 @@ function scanCard(rec) {
     h += rec.candidates.length ? `<div class="tickets">${rec.candidates.map((c) => `<button data-label="${esc(c.id)}">
         <img src="/printed/${encodeURIComponent(c.id)}/png" alt="" loading="lazy">
         <span><b>#${esc(c.id)}</b><br>${esc(shortTime(c.created_at))} · ${c.rows} task${c.rows === 1 ? "" : "s"}</span></button>`).join("")}</div>`
-      : `<p class="muted">You haven't printed a ticket with tasks yet.</p>`;
+      : "";  // the message above says there's no ticket yet
     h += `<details style="margin-top:8px"><summary class="muted">Type the code instead</summary>
         <div class="row"><input type="text" data-code-input aria-label="Ticket code" autocapitalize="characters" spellcheck="false" placeholder="e.g. 260930-P9AM or P9AM" style="max-width:240px">
         <button class="plain" data-code-go>Use this code</button></div></details>`;
@@ -1073,11 +1073,17 @@ function prefErr(el, msg) {
   box.textContent = msg; el.dataset.bad = "1"; el.setAttribute("aria-invalid", "true");
 }
 
-$$("[data-pref]").forEach((el) => el.onchange = async () => {
+// One save at a time, in the order they were made: a number box saves as it loses focus, and the switch
+// tapped next waits for it, so each answer has both and the screen never goes back to an older one.
+let prefQueue = Promise.resolve();
+$$("[data-pref]").forEach((el) => el.onchange = () => {
   const k = el.dataset.pref, typed = el.type === "text" || el.type === "number" || el.type === "time";
   let v = el.type === "checkbox" ? el.checked : el.value;
   if (el.type === "number" || "int" in el.dataset) v = parseInt(v, 10);  // data-int: a list of numbers
   if (el.type === "range") v = parseFloat(v);
+  return (prefQueue = prefQueue.then(() => savePref(el, k, v, typed)));
+});
+async function savePref(el, k, v, typed) {
   try {
     const prefs = await api("/settings", { method: "PATCH", json: { [k]: v } });
     if (me) { me.prefs = prefs; applyLook(); }
@@ -1094,7 +1100,7 @@ $$("[data-pref]").forEach((el) => el.onchange = async () => {
     if (typed) prefErr(el, errText(e));
     else { toast(errText(e), 4000); loadPrefs(me.prefs); }
   }
-});
+}
 $("[data-pref=confidence]").oninput = (e) => confText(e.target.value);
 
 $("#pwForm").onsubmit = async (e) => {
@@ -1142,7 +1148,10 @@ $("#sessions").addEventListener("click", async (e) => {
   b.disabled = true;
   try { await api(`/auth/sessions/${encodeURIComponent(b.closest("[data-sid]").dataset.sid)}`, { method: "DELETE" }); toast("Signed out that device"); }
   catch (err) { toast(errText(err), 4000); }
-  loadSessions();
+  const at = $$("#sessions [data-endsession]").indexOf(b);
+  await loadSessions();  // the list is drawn again: focus goes to the next device's button, or the heading
+  const left = $$("#sessions [data-endsession]");
+  focusFirst(left[Math.min(at, left.length - 1)], $("#sessions").closest(".card")?.querySelector("h2"));
 });
 $("#signoutOthers").onclick = () => hold($("#signoutOthers"), async () => {
   try {
@@ -1638,6 +1647,14 @@ function focusMain() {
   if (!el.hasAttribute("tabindex")) el.tabIndex = -1;
   el.focus({ preventScroll: true });
 }
+// After something you were on is removed: keyboard focus goes to the first of these still on screen
+// (a heading gets tabindex=-1), never back to the top of the page.
+function focusFirst(...els) {
+  const el = els.find((x) => x?.isConnected && x.offsetParent);
+  if (!el) return focusMain();
+  if (!el.matches("button, a[href], input, select, textarea, [tabindex]")) el.tabIndex = -1;
+  el.focus({ preventScroll: true });
+}
 
 function renderList() {
   const spot = listFocus || focusSpot(document.activeElement);
@@ -1729,7 +1746,7 @@ function renderNow() {
   $("#nowDone").className = step && !asking ? "plain" : "go";
   $("#nowDone").textContent = asking ? "Yes, finish it ✓" : step ? "Whole task done" : "Done ✓";
   $("#nowNotYet").hidden = !asking;
-  $("#nowBreak").hidden = !aiOn() || !t || asking;  // "Finish the task?" is a yes/no question: nothing else beside it
+  $("#nowBreak").hidden = !aiOn() || !me?.ai_ready || !t || asking;  // "Finish the task?" is a yes/no question: nothing else beside it
   $("#nowRepeatSkip").hidden = !t || asking || !String(t.id).startsWith("nb:") || !t.repeat || !t.due;
   if (t?.due && t.due.date.slice(0, 10) > today()) $("#nowTomorrow").hidden = true;  // never moves it sooner
   $("#nowAgain").hidden = !!t || !setAside;
@@ -2782,7 +2799,7 @@ async function openUser(name) {
   $("#udInfo").innerHTML = `
     <div class="kv"><dt>To-do app</dt><dd>${u.connection.connected ? `${esc(u.connection.name)}${u.connection.account ? " · " + esc(u.connection.account) : ""}` : "only their built-in list"}</dd>
     <dt>Open tasks</dt><dd>${u.open_tasks}</dd><dt>Prints (30d)</dt><dd>${u.prints_30d}</dd><dt>Errors (7d)</dt><dd>${u.errors_7d}</dd>
-    <dt>Tags</dt><dd>${u.tags.map((t) => esc(t.name)).join(", ") || "none"}</dd></div>
+    <dt>Tags</dt><dd>${u.tag_count ? plural(u.tag_count, "tag") : "none"}</dd></div>
     <h4 style="margin:12px 0 4px">Signed-in devices (${u.devices.length})</h4>
     ${u.devices.map((d) => `<div class="mini">${esc(d.agent || "unknown device")} · ${esc(d.ip || "")} · since ${when(d.created)}</div>`).join("") || "<div class='mini'>None</div>"}
     <h4 style="margin:12px 0 4px">Recent activity</h4>
@@ -2884,7 +2901,7 @@ async function loadInvites() {
   }
   const row = (i) => `<div class="mini" data-code="${esc(i.code)}"><b>${esc(i.code)}</b>
       · ${esc(i.note || "no note")} · ${i.own_household ? "own household" : "joins " + esc(i.household)}${i.beta ? " · beta" : ""}
-      · ${i.status === "used" ? "used by " + esc(i.used_by) : i.status === "expired" ? "expired" : "open until " + when(i.expires)}
+      · ${i.status === "used" ? (i.used_by === "(deleted account)" ? "used by an account that's since been deleted" : "used by " + esc(i.used_by)) : i.status === "expired" ? "expired" : "open until " + when(i.expires)}
       ${i.status === "open" ? `<button class="linkish" data-copylink aria-label="Copy the link for ${esc(i.code)}">copy link</button>
         · <button class="linkish" data-revoke aria-label="Cancel ${esc(i.code)}">cancel</button>` : ""}</div>`;
   // Open codes first; used and expired ones fold away and can be cleared.
@@ -3237,8 +3254,8 @@ function drawQuiz() {
   const was = quiz.answers[q.key];
   if (q.times) {
     $("#quizBody").innerHTML = `<div class="quiztimes">
-      <div class="field"><label for="quizPlan">Plan my day at</label><input type="time" id="quizPlan" value="${esc(quiz.answers.plan_at || p.routine_morning || "08:00")}"></div>
-      <div class="field"><label for="quizLook">Snap my pages at</label><input type="time" id="quizLook" value="${esc(quiz.answers.review_at || p.routine_evening || "18:00")}"></div></div>`;
+      <div class="field"><label for="quizPlan">Plan my day at</label><input type="time" id="quizPlan" value="${esc(quiz.answers.plan_at || quiz.draft?.plan_at || p.routine_morning || "08:00")}"></div>
+      <div class="field"><label for="quizLook">Snap my pages at</label><input type="time" id="quizLook" value="${esc(quiz.answers.review_at || quiz.draft?.review_at || p.routine_evening || "18:00")}"></div></div>`;
   } else {
     const current = quiz.rerun && q.now ? q.now(p) : null;
     const on = (v) => (q.multi ? (was || (quiz.rerun ? quizHelpsNow(p) : [])).includes(v) : was === v);
@@ -3301,7 +3318,10 @@ $("#quizPass").onclick = () => {  // skip this one: whatever was picked here bef
   for (const k of q.times ? ["plan_at", "review_at"] : [q.key]) delete quiz.answers[k];
   quizStep(1);
 };
-$("#quizBack").onclick = () => quizStep(-1);
+$("#quizBack").onclick = () => {  // times typed but not yet saved with Next come back when you return
+  if (QUIZ[quiz.i]?.times) quiz.draft = { plan_at: $("#quizPlan").value, review_at: $("#quizLook").value };
+  quizStep(-1);
+};
 $("#quizSkip").onclick = () => skipQuiz();
 $("#quizDialog").addEventListener("cancel", (e) => {  // Esc does what the Skip button says
   if (quiz.i >= QUIZ.length && !quiz.saving) return;   // the last screen: Esc just closes it
@@ -3365,9 +3385,11 @@ function quizSummary(c) {
                 paper: "Printing on paper: make a preview, then tap Print on paper.",
                 none: "No printer yet: everything is a preview, so nothing prints by surprise." }[c.print_with], "Settings → Printing"]);
   }
-  if ("journal_mode" in c) {
-    out.push(c.journal_mode
-      ? [`Journal, ${PAPER_NAMES[c.paper_size] || "letter"} size: your daily label gets a “Today's win” line, and every page you snap is kept in Journal.`, "Settings → Focus and Printing"]
+  if ("journal_mode" in c || "paper_size" in c) {  // journal mode starts on, so often only the size changed
+    const journal = "journal_mode" in c ? c.journal_mode : me?.prefs?.journal_mode !== false;
+    const size = c.paper_size || me?.prefs?.paper_size;
+    out.push(journal
+      ? [`Journal, ${PAPER_NAMES[size] || "letter"} size: your daily label gets a “Today's win” line, and every page you snap is kept in Journal.`, "Settings → Focus and Printing"]
       : ["No journal: the daily label has no journal lines, and a snap is kept in Journal only when it has handwriting (notes or a win).", "Settings → Focus"]);
   }
   if ("max_rows" in c) out.push([`${c.max_rows} tasks on your daily label. The rest are listed small at the bottom.`, "Settings → Focus"]);
@@ -3500,6 +3522,7 @@ $("#guideLess").onclick = () => setGuideOpen(false);
 $("#guideHide").onclick = async () => {
   await api("/setup/guide/hide", { method: "POST" }).catch(() => {});
   $("#guideCard").hidden = true;
+  focusMain();
   toast("Hidden. Bring it back any time: Settings → Help.");
 };
 $("#guideShow").onclick = async () => {
@@ -3657,9 +3680,13 @@ function wireJournal() {
       await api(`/journal/${id}?confirm=true`, { method: "DELETE" });
       const day = page.closest(".jday"), kept = jData.get(day?.dataset.day);
       if (kept) kept.pages = kept.pages.filter((p) => p.id !== id);
+      const next = page.nextElementSibling?.matches("[data-page]") ? page.nextElementSibling : null;
+      const nextDay = day?.nextElementSibling;
       page.remove();
       if (day && !day.querySelector(".jpage, [data-wins], .jwin, .jchanges")) day.remove();
       if (!$("#jDays .jday")) $("#jDays").innerHTML = NO_JOURNAL;
+      focusFirst(next?.querySelector("textarea, button"), day?.isConnected ? day.querySelector("h3") : null,
+                 nextDay?.querySelector?.("h3"), $("#journal h2"));
       toast("Deleted");
     } catch (e) { toast(errText(e)); }
   });
@@ -3723,8 +3750,10 @@ async function loadSlugs() {
   } catch { $("#slugCard").hidden = true; }
 }
 function dropSlug(el, msg) {
+  const next = el.nextElementSibling || el.previousElementSibling;
   el.remove();
   if (!$("#slugList .slug")) $("#slugCard").hidden = true;
+  focusFirst(next?.querySelector("button"), $("#slugCard:not([hidden]) h2"), $("#journal h2"));
   toast(msg);
 }
 
@@ -4094,7 +4123,14 @@ function openJournalExport() {
 }
 document.addEventListener("click", (e) => {
   if (e.target.closest("[data-journal-export]")) { e.preventDefault(); openJournalExport(); }
+  if (e.target.closest("a[data-export-data]")) { e.preventDefault(); exportMyData(); }
 });
+// Download my data (.zip): asks first, so a paused download (after a password reset) or the hourly
+// limit is a message here, not a page of raw JSON in place of the app.
+async function exportMyData() {
+  try { await api("/auth/export/check"); } catch (e) { return toast(errText(e), { error: true }); }
+  location.href = "/auth/export?format=zip";
+}
 $("#jxDialog").addEventListener("change", jxSummary);
 $("#jxGo").addEventListener("click", (e) => {
   if (!$("#jxGo").href) return e.preventDefault();
@@ -4493,7 +4529,9 @@ function paperButton(id) {
 document.addEventListener("change", (e) => {
   if (!e.target.matches?.("select[data-paper]")) return;
   const link = e.target.closest(".paperrow").querySelector("[data-paper-link]");
-  link.href = link.href.replace(/paper=[a-z_]+/, `paper=${e.target.value}`);
+  const u = new URL(link.href, location.href);  // a4, a5: the size names have digits in them
+  u.searchParams.set("paper", e.target.value);
+  link.href = u.href;
 });
 
 
@@ -4542,7 +4580,7 @@ $("#fbDialog").addEventListener("cancel", (e) => {  // nor with Esc or the phone
 });
 // What deleting your account removes, and how to keep a copy first.
 const DELETE_WARNING = `<p class="err">This deletes your account, your list, tags, journal pages and journal photos, tickets and history from Next Box. It can't be undone. Apps you linked (like Todoist) aren't touched.</p>
-  <p class="muted">Want a copy first? <a href="/auth/export?format=zip">Download my data</a>: one .zip file with your list, settings, journal pages and photos, and ticket images.</p>
+  <p class="muted">Want a copy first? <a href="/auth/export?format=zip" data-export-data>Download my data</a>: one .zip file with your list, settings, journal pages and photos, and ticket images.</p>
   <p class="muted"><button class="linkish" data-journal-export>Download your journal first</button>: a folder for each day, or a PDF you can print.</p>`;
 $("#meDialog").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-me]");
@@ -4552,7 +4590,7 @@ $("#meDialog").addEventListener("click", async (e) => {
   if (what === "profile") { $("#meDialog").close(); return goto("profile"); }
   if (what === "feedback") { $("#meDialog").close(); return document.querySelector("[data-feedback]")?.click(); }
   if (what === "refresh") return location.reload();
-  if (what === "export") { location.href = "/auth/export?format=zip"; return; }
+  if (what === "export") return exportMyData();
   if (what === "signout") return signOut(panel);
   if (what === "delete") {
     panel.innerHTML = `${DELETE_WARNING}

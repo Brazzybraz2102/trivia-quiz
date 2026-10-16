@@ -98,20 +98,21 @@ If it comes out faint, cramped or rotated, tell Claude and it'll tune `nextbox/r
 
 ### 6. Run it as a service (starts at boot)
 ```bash
-scripts/install.sh          # second run: installs the systemd user service and enables linger
+scripts/install.sh          # already done in step 2 if you ran it there; safe to run again
 ```
 The install script ends by printing the web app address, `http://<desktop-ip>:8787/app`. Open
 that on any phone or laptop on your Wi-Fi and sign in. You stay signed in for 30 days per device.
 
 The first account you create is the **superadmin**, which is you. After that, add people from
-the web app (**Admin → Add someone**). They get a one-time password and pick their own when they
-first sign in. There's no public sign-up page.
+the web app (**Users → Add a person**; a household admin uses **Admin → Add someone**). They get a
+one-time password and pick their own when they first sign in. Or hand out a code from
+**Admin → Invite people**, and they join with it. There's no open sign-up.
 
 | Role | Can do |
 |---|---|
 | user | print, read back, their own Settings, send and read anonymous feedback |
-| admin | support: add people, reset passwords, turn accounts off/on, sign people out, mark beta testers, see activity, reply to feedback (never sees who wrote it) |
-| superadmin | debug: everything above, plus roles, per-user debug mode, diagnostics, the error log, debug bundles, pause all printing, auto-print switch, banner |
+| admin | support: add people, reset passwords, turn accounts off/on, sign people out, mark beta testers, see activity |
+| superadmin | debug: everything above, plus roles, per-user debug mode, diagnostics, the error log, debug bundles, pause all printing, auto-print switch, banner, and moderating the feedback board (reply, set a status, hide; the board never shows who wrote a post) |
 
 If you're ever locked out of the web app, fix it from the desktop:
 | Want | Run |

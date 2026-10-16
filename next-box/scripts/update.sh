@@ -4,7 +4,12 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$HERE"
-command -v rsync >/dev/null || sudo apt-get install -y rsync >/dev/null
+if ! command -v rsync >/dev/null; then  # Ubuntu/Debian, Fedora or Arch
+  if command -v apt-get >/dev/null; then sudo apt-get install -y rsync >/dev/null
+  elif command -v dnf >/dev/null; then sudo dnf install -y rsync >/dev/null
+  elif command -v pacman >/dev/null; then sudo pacman -S --noconfirm rsync >/dev/null
+  else echo "Please install rsync, then run this again."; exit 1; fi
+fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 echo "Downloading the newest Next Box..."
