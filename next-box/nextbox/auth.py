@@ -20,6 +20,7 @@ from sqlalchemy import and_, delete, func, insert, or_, select, update
 from . import db
 
 SESSION_DAYS = 30
+SESSION_TOUCH = 600  # seconds between "last used" updates of a signed-in device
 MIN_PASSWORD = 8
 USERNAME_RE = re.compile(r"^[a-z0-9_.-]{2,32}$")
 EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$")
@@ -57,6 +58,21 @@ PREFS = {
     "default_printer": ("", lambda v: isinstance(v, str) and len(v) <= 40),
     "color_rules": ({}, lambda v: _valid_rules(v)),     # reason -> label color, e.g. overdue -> red
     "split_overdue": (False, lambda v: isinstance(v, bool)),  # overdue tasks on their own ticket
+}
+
+# What to tell someone whose setting wasn't saved: plain words, never the setting's key.
+PREF_HINTS = {
+    "max_rows": "Pick a number from 1 to 20.",
+    "slug_after": "Pick a number from 2 to 10.",
+    "default_filter": "Keep the filter to 200 characters or less.",
+    "display_name": "Keep the name to 40 characters or less.",
+    "confidence": "Pick a value from 50% to 95%.",
+    "paper_size": "Pick a paper size from the list.",
+    "text_size": "Pick a text size from the list.",
+    "start_tab": "Pick a screen from the list.",
+    "new_tasks_to": "Pick My list or your linked app.",
+    "default_printer": "Pick a printer from the list.",
+    "color_rules": "Pick a label color from the list.",
 }
 
 
@@ -133,7 +149,7 @@ class Accounts:
             return None
         email = email.strip().lower()
         if not EMAIL_RE.match(email):
-            raise AuthError("that doesn't look like an email address")
+            raise AuthError("That doesn't look like an email address.")
         return email
 
     # --- households ----------------------------------------------------------
@@ -396,7 +412,7 @@ class Accounts:
             if k not in PREFS:
                 raise AuthError(f"unknown setting {k}")
             if not PREFS[k][1](v):
-                raise AuthError(f"invalid value for {k}")
+                raise AuthError(PREF_HINTS.get(k, "That value isn't allowed."))
         with self.db.begin() as conn:
             row = self._row(conn, username)
             prefs = {**default_prefs(), **(row["prefs"] or {}), **changes}
@@ -457,6 +473,17 @@ class Accounts:
                 raise AuthError("can't remove the last superadmin")
             conn.execute(delete(db.users).where(db.users.c.username == username))
         self.revoke_user_sessions(username)
+
+    def removable(self, username: str) -> bool:
+        """Whether remove_user would work: not the protected admin, nor the last active superadmin."""
+        username = username.strip().lower()
+        if username == self.protected():
+            return False
+        with self.db.connect() as conn:
+            row = self._row(conn, username)
+            if not row:
+                return False
+            return not (row["role"] == "superadmin" and not row["disabled"] and self._active_superadmins(conn) <= 1)
 
     def password_ok(self, username: str, password: str) -> bool:
         """Right password, whether or not the account is turned off."""
@@ -554,7 +581,7 @@ class Accounts:
             conn.execute(delete(db.sessions).where(db.sessions.c.expires < now))
             conn.execute(insert(db.sessions).values(token_hash=_token_hash(token), username=username.lower(),
                                                     created=now, expires=now + SESSION_DAYS * 86400,
-                                                    ip=ip[:64], agent=agent[:200]))
+                                                    ip=ip[:64], agent=agent[:200], last_used=now))
         return token
 
     def session_user(self, token: str | None) -> str | None:
@@ -569,11 +596,15 @@ class Accounts:
             user = self._row(conn, s["username"])
         if not user or user["disabled"]:
             return None
+        changes = {}
         if s["expires"] - now < (SESSION_DAYS - 1) * 86400:
             # Sliding expiry: anyone who uses the app at least monthly stays signed in.
+            changes["expires"] = int(now) + SESSION_DAYS * 86400
+        if not s.get("last_used") or now - s["last_used"] > SESSION_TOUCH:
+            changes["last_used"] = int(now)  # "last used" in Signed-in devices, every 10 minutes at most
+        if changes:
             with self.db.begin() as conn:
-                conn.execute(update(db.sessions).where(db.sessions.c.token_hash == h).values(
-                    expires=int(now) + SESSION_DAYS * 86400))
+                conn.execute(update(db.sessions).where(db.sessions.c.token_hash == h).values(**changes))
         if not user["last_seen"] or now - user["last_seen"] > 3600:
             # "Last active": phones stay signed in for weeks, so sign-ins alone undercount. Hourly at most.
             with self.db.begin() as conn:
@@ -587,8 +618,24 @@ class Accounts:
             rows = conn.execute(select(db.sessions).where(and_(
                 db.sessions.c.username == username, db.sessions.c.expires > int(time.time())))
                 .order_by(db.sessions.c.created.desc())).mappings().all()
-        return [{"id": r["token_hash"][:12], "created": r["created"], "ip": r["ip"], "agent": r["agent"],
-                 "current": r["token_hash"] == cur} for r in rows]
+        out = [{"id": r["token_hash"][:12], "created": r["created"], "last_used": r["last_used"] or r["created"],
+                "ip": r["ip"], "agent": r["agent"], "current": r["token_hash"] == cur} for r in rows]
+        # This device first, then the most recently used.
+        return sorted(out, key=lambda s: (not s["current"], -(s["last_used"] or 0)))
+
+    def end_session_id(self, username: str, sid: str, keep: str | None = None) -> None:
+        """Sign out one of your devices by the short id sessions_for shows (never `keep`, this one).
+        KeyError when it isn't one of yours (or is already signed out)."""
+        if not re.fullmatch(r"[0-9a-f]{12}", sid or ""):
+            raise KeyError(sid)
+        with self.db.begin() as conn:
+            found = [r[0] for r in conn.execute(select(db.sessions.c.token_hash).where(and_(
+                db.sessions.c.username == username, db.sessions.c.token_hash.startswith(sid))))]
+            if not found:
+                raise KeyError(sid)
+            if keep and _token_hash(keep) in found:
+                raise AuthError("That's this device. Use Sign out instead.")
+            conn.execute(delete(db.sessions).where(db.sessions.c.token_hash.in_(found)))
 
     def end_session(self, token: str | None) -> None:
         if not token:

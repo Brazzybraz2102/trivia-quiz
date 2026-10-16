@@ -131,6 +131,10 @@ def parse_dump(text: str, today: date) -> list[dict]:
 
 
 # --- tags ------------------------------------------------------------------------------------
+class TagExists(ValueError):
+    pass
+
+
 class Tags:
     def __init__(self, root_or_url, owner: str):
         self.db = root_or_url if isinstance(root_or_url, Engine) else db.database(root_or_url)
@@ -167,6 +171,14 @@ class Tags:
                     raise ValueError("30 tags is the limit; fewer tags are easier to use anyway")
                 conn.execute(insert(db.tags).values(owner=self.owner, name=name, color=color, position=len(existing)))
         return {"name": name, "color": color}
+
+    def add(self, name: str, color: str) -> dict:
+        """A new tag only: an existing one keeps its color (change that with set)."""
+        name = tag_name(name)
+        mine = next((t for t in self.all() if t["name"] == name), None)
+        if mine:
+            raise TagExists(f"You already have #{name} ({mine['color']}). Change its color in the list above.")
+        return self.set(name, color)
 
     def remove(self, name: str) -> None:
         self.all()

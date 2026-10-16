@@ -28,7 +28,7 @@ def test_profile_and_me(ctx):
     sam = login("sam", "sam password")
     me = sam.get("/auth/me").json()
     assert me["email"] is None and me["version"] and me["protected"] is False
-    assert sam.patch("/auth/profile", json={"email": "Sam@Example.com"}).json() == {"email": "sam@example.com"}
+    assert sam.patch("/auth/profile", json={"email": "Sam@Example.com"}).json()["email"] == "sam@example.com"
     assert sam.patch("/auth/profile", json={"email": "nope"}).status_code == 400
     # Sign in with the email too.
     r = TestClient(sam.app, base_url="http://testserver").post(

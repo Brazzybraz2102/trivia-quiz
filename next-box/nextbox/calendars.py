@@ -199,7 +199,8 @@ KINDS = [
                 {"name": "username", "label": "Username", "help": "iCloud: your Apple ID email"},
                 {"name": "password", "label": "App password", "secret": True,
                  "help": "iCloud: appleid.apple.com → Sign-In and Security → App-Specific Passwords"},
-                {"name": "only", "label": "Only this calendar", "optional": True}]},
+                {"name": "only", "label": "Only this calendar", "optional": True},
+                {"name": "name", "label": "Name", "optional": True, "help": "e.g. Family"}]},
 ]
 
 

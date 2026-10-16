@@ -31,7 +31,7 @@ function applyTheme(t) {
   if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
 }
 try { applyTheme(localStorage.getItem("theme") || ""); $("#theme").value = localStorage.getItem("theme") || ""; } catch {}
-$("#theme").onchange = () => { applyTheme($("#theme").value); try { localStorage.setItem("theme", $("#theme").value); } catch {} };
+$("#theme").onchange = () => { applyTheme($("#theme").value); try { localStorage.setItem("theme", $("#theme").value); } catch {} toast("Saved on this device"); };
 
 // ---------------------------------------------------------------- sign in
 function showOnly(id) {
@@ -183,17 +183,30 @@ let printOpts = null;
 async function loadLabels() {
   try { printOpts = await api("/printing-options"); } catch (e) { $("#printersLoaded").textContent = e.message; return; }
   const ps = printOpts.printers;
+  // No label printers: nothing to pick here, and every ticket still works on paper or as a preview.
+  for (const id of ["#defPrinterRow", "#ruleHead", "#colorRules"]) $(id).hidden = !ps.length;
   $("#printersLoaded").innerHTML = ps.length
     ? "Loaded right now: " + ps.map((p) => `${sw(p.stock_color)}${esc(p.name)} (${esc(p.stock_color)} labels${p.ink === "black_red" ? ", red ink" : ""})`).join(", ")
-    : "No printers set up yet. An admin can add them under Admin → Printers.";
-  $("#defPrinter").innerHTML = `<option value="">First printer</option>` + ps.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
-  $("#defPrinter").value = me.prefs.default_printer || "";
+    : "No label printers yet. Every ticket can still be printed on paper or previewed." + (me.role !== "user" ? " Add one under Admin → Printers." : "");
+  if (!ps.length) return;
+  // Your usual printer, and what happens when it was removed.
+  const saved = me.prefs.default_printer || "", missing = saved && !ps.some((p) => p.id === saved);
+  $("#defPrinter").innerHTML = `<option value="">First printer (${esc(ps[0].name)})</option>` + ps.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("");
+  $("#defPrinter").value = missing ? "" : saved;
+  $("#defPrinterNote").textContent = missing ? `Your usual printer was removed; using ${ps[0].name} for now.` : "Used whenever a color below isn't loaded anywhere.";
+  $("#defPrinterNote").classList.toggle("err", !!missing);
+  if (missing) refreshStatus();  // the header may still name the removed one
   const rules = me.prefs.color_rules || {};
+  // Loaded colors first; clear and other only when they're already someone's choice.
+  const loaded = new Set(ps.map((p) => p.stock_color));
+  const colorOpts = (cur) => printOpts.colors.filter((c) => loaded.has(c) || !["clear", "other"].includes(c) || c === cur)
+    .sort((a, b) => loaded.has(b) - loaded.has(a))
+    .map((c) => `<option value="${c}" ${cur === c ? "selected" : ""}>${c} labels${loaded.has(c) ? " (loaded)" : ""}</option>`).join("");
   $("#colorRules").innerHTML = Object.entries(printOpts.reasons).map(([k, label]) => `
     <label class="setting"><div class="label"><b>${esc(label)}</b>
       <span>${rules[k] && rules[k] !== "any" ? (ps.some((p) => p.stock_color === rules[k]) ? "" : `No printer has ${esc(rules[k])} labels loaded right now.`) : ""}</span></div>
       <select data-rule="${esc(k)}" aria-label="${esc(label)} label color">
-        <option value="any">usual printer</option>${printOpts.colors.map((c) => `<option value="${c}" ${rules[k] === c ? "selected" : ""}>${c} labels</option>`).join("")}
+        <option value="any">usual printer</option>${colorOpts(rules[k])}
       </select></label>`).join("");
   $$("#colorRules select").forEach((sel) => sel.onchange = async () => {
     const next = {}; $$("#colorRules select").forEach((x) => next[x.dataset.rule] = x.value);
@@ -202,8 +215,10 @@ async function loadLabels() {
   });
 }
 $("#defPrinter").onchange = async () => {
-  try { me.prefs = await api("/settings", { method: "PATCH", json: { default_printer: $("#defPrinter").value } }); toast("Saved"); }
-  catch (e) { toast(e.message); }
+  try {
+    me.prefs = await api("/settings", { method: "PATCH", json: { default_printer: $("#defPrinter").value } });
+    toast("Saved"); refreshStatus(); loadLabels();  // the header names the printer your tickets use
+  } catch (e) { toast(errText(e)); }
 };
 
 async function loadPrinters() {
@@ -295,31 +310,51 @@ $("#uPeople").addEventListener("click", async (e) => {
 // ---------------------------------------------------------------- to-do app connection
 let providers = [], conn = null;
 
-async function loadConnection() {
+async function loadConnection(check = false) {  // check: also ask the app whether the saved sign-in still works
   try {
-    [providers, conn] = await Promise.all([providers.length ? providers : api("/providers"), api("/connection")]);
-  } catch (e) { $("#appStatus").textContent = e.message; return; }
+    [providers, conn] = await Promise.all([providers.length ? providers : api("/providers"), api(check ? "/connection?check=1" : "/connection")]);
+  } catch (e) { $("#appStatus").textContent = errText(e); return; }
   const ready = providers.filter((p) => p.status === "ready" || p.status === "oauth");
   renderGuide();  // the "Link your to-do app" step names only the apps on offer
   const spec = providers.find((p) => p.key === conn.provider);
   $$(".appName").forEach((el) => el.textContent = conn.connected ? conn.name : "my list");
   $("#filterHelp").textContent = spec?.filter_help || "";
-  if (conn.connected) {
+  // "New tasks go to: My linked app" only means something while one is linked.
+  const opt = $("[data-pref=new_tasks_to] option[value=linked]");
+  opt.disabled = !conn.connected;
+  opt.textContent = conn.connected ? `My linked app (${conn.name})` : "My linked app (none linked)";
+  $("#provCancel").hidden = !conn.connected || !!conn.legacy;
+  if (conn.connected && conn.ok === false) {  // linked, but the app no longer accepts the saved sign-in
+    $("#appStatus").innerHTML = `<p class="err" role="alert" style="margin:0">${esc(conn.error)}</p>
+      <div class="muted">Linked: ${esc(conn.name)}${conn.account ? ` as ${esc(conn.account)}` : ""}. Your tasks are safe in ${esc(conn.name)}.</div>
+      <div class="row">${conn.legacy ? "" : `<button class="go small" id="appReconnect">Reconnect</button>
+        <button class="plain small" id="appDisconnect">Disconnect</button>`}</div>`;
+    $("#appConnect").hidden = !conn.legacy;
+  } else if (conn.connected) {
     $("#appStatus").innerHTML = `Connected to <b>${esc(conn.name)}</b>${conn.account ? ` as ${esc(conn.account)}` : ""}.
       ${conn.legacy ? `<div class="muted">Using the Todoist token in the server's .env. Connect here to use your own.</div>` : ""}
       ${(conn.lists || []).length ? `<div class="muted">Lists: ${conn.lists.map(esc).join(", ")}</div>` : ""}
       ${conn.legacy ? "" : `<div class="row"><button class="plain small" id="appDisconnect">Disconnect</button>
         <button class="plain small" id="appChange">Switch app</button></div>`}`;
     $("#appConnect").hidden = !conn.legacy;
-    $("#appDisconnect")?.addEventListener("click", async () => {
-      if (!confirm("Disconnect your to-do app? Your tasks stay in the app; Next Box just stops reading them.")) return;
-      await api("/connection", { method: "DELETE" }); toast("Disconnected"); loadConnection();
-    });
-    $("#appChange")?.addEventListener("click", () => { $("#appConnect").hidden = false; });
+    $("#appChange")?.addEventListener("click", () => { $("#appConnect").hidden = false; $("#provSel").focus(); });
   } else {
     $("#appStatus").textContent = "Not connected yet. Pick your app below.";
     $("#appConnect").hidden = false;
   }
+  $("#appDisconnect")?.addEventListener("click", async () => {
+    if (!confirm("Disconnect your to-do app? Your tasks stay in the app; Next Box just stops reading them.")) return;
+    try {
+      await api("/connection", { method: "DELETE" }); toast("Disconnected");
+      me.prefs = await api("/settings"); loadPrefs(me.prefs);  // new tasks go to My list again
+    } catch (e) { toast(errText(e), 4000); }
+    loadConnection();
+  });
+  $("#appReconnect")?.addEventListener("click", () => {
+    $("#appConnect").hidden = false;
+    if ([...$("#provSel").options].some((o) => o.value === conn.provider)) { $("#provSel").value = conn.provider; renderProviderFields(); }
+    ($("#provFields input") || $("#provGo")).focus();
+  });
   if (!$("#provSel").options.length) {
     $("#provSel").innerHTML = ready.map((p) => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join("");
     $("#provSel").onchange = renderProviderFields;
@@ -349,14 +384,19 @@ $("#provGo").onclick = async () => {
   if (chosen?.status === "oauth") { location.href = `/connect/${encodeURIComponent(chosen.app)}/tasks/start`; return; }
   const fields = {};
   $$("#provFields [data-field]").forEach((el) => fields[el.dataset.field] = el.value);
-  $("#provGo").disabled = true; $("#provMsg").textContent = "";
+  $("#provGo").disabled = true;
+  $("#provMsg").textContent = `Checking with ${chosen?.name || "your app"}…`; $("#provMsg").className = "muted";  // it can take a few seconds
   try {
     await api("/connection", { method: "PUT", json: { provider: $("#provSel").value, fields } });
     $$("#provFields input").forEach((el) => el.value = "");
+    $("#provMsg").textContent = "";
     toast("Connected"); loadConnection(); loadGuide();
-  } catch (e) { $("#provMsg").textContent = e.message; }
+  } catch (e) { $("#provMsg").textContent = errText(e); $("#provMsg").className = "err"; }
   finally { $("#provGo").disabled = false; }
 };
+$("#provCancel").onclick = () => { $("#appConnect").hidden = true; $("#provMsg").textContent = ""; };
+// Opening Settings checks that the linked app still accepts the saved sign-in, so "Connected" is true.
+$("#topnav button[data-tab=settings]").addEventListener("click", () => { if (me) loadConnection(true); });
 
 $("#loginForm").onsubmit = async (e) => {
   e.preventDefault();
@@ -400,8 +440,10 @@ $$("#topnav button").forEach((b) => b.onclick = () => {
 });
 
 async function refreshStatus() {
+  const n = refreshStatus.n = (refreshStatus.n || 0) + 1;  // a slow, older answer never overwrites a newer one
   try {
     const s = await api("/status");
+    if (n !== refreshStatus.n) return;
     $("#status").textContent = `${s.printer || "printer"} ${s.printer_reachable ? "online" : "offline"}${s.dry_run_forced ? " · preview only" : ""}`;
   } catch (e) { $("#status").textContent = `server: ${e.message}`; }
 }
@@ -492,27 +534,44 @@ function confText(v) { $("#confLabel").textContent = `Marks below ${Math.round(v
 
 function loadPrefs(prefs) {
   $$("[data-pref]").forEach((el) => {
+    if (el.dataset.bad) return;  // keeps what they typed until it's fixed (see prefErr)
     const v = prefs[el.dataset.pref];
     if (el.type === "checkbox") el.checked = !!v; else el.value = v;
   });
   confText(prefs.confidence);
   $("#dry").checked = true;
   $("#dry").disabled = !!prefs.always_dry_run;
-  if (prefs.default_filter && !$("#query").value) $("#query").value = prefs.default_filter;
+  // The Print tab's filter follows the default, unless they typed their own there.
+  const q = $("#query");
+  if (!q.value || q.value === loadPrefs.lastFilter) q.value = prefs.default_filter || "";
+  loadPrefs.lastFilter = prefs.default_filter || "";
+}
+
+// A typed setting that wasn't saved: say why next to it, in red, and keep what they typed.
+function prefErr(el, msg) {
+  const label = el.closest(".setting")?.querySelector(".label");
+  let box = label?.querySelector(".err");
+  if (!msg) { box?.remove(); delete el.dataset.bad; el.removeAttribute("aria-invalid"); return; }
+  if (!label) return toast(msg, 4000);
+  if (!box) { box = document.createElement("span"); box.className = "err"; box.setAttribute("role", "alert"); label.append(box); }
+  box.textContent = msg; el.dataset.bad = "1"; el.setAttribute("aria-invalid", "true");
 }
 
 $$("[data-pref]").forEach((el) => el.onchange = async () => {
-  const k = el.dataset.pref;
+  const k = el.dataset.pref, typed = el.type === "text" || el.type === "number";
   let v = el.type === "checkbox" ? el.checked : el.value;
   if (el.type === "number") v = parseInt(v, 10);
   if (el.type === "range") v = parseFloat(v);
   try {
     const prefs = await api("/settings", { method: "PATCH", json: { [k]: v } });
     if (me) { me.prefs = prefs; applyLook(); }
-    me.prefs = prefs;
+    if (typed) prefErr(el, "");
     loadPrefs(prefs);
     toast("Saved");
-  } catch (e) { toast(e.message); loadPrefs(me.prefs); }
+  } catch (e) {
+    if (typed) prefErr(el, errText(e));
+    else { toast(errText(e), 4000); loadPrefs(me.prefs); }
+  }
 });
 $("[data-pref=confidence]").oninput = (e) => confText(e.target.value);
 
@@ -528,13 +587,41 @@ $("#pwForm").onsubmit = async (e) => {
 };
 $("#pwForm").addEventListener("input", () => { $("#pwMsg").textContent = ""; });
 
+// "Safari on iPhone", "Chrome on Windows", "Next Box app": enough to recognise a lost phone.
+function deviceName(agent) {
+  const a = agent || "";
+  if (/^NextBox\//i.test(a)) return "Next Box app";
+  const browser = /Edg(e|A|iOS)?\//.test(a) ? "Edge" : /OPR\/|Opera/.test(a) ? "Opera" : /Firefox\/|FxiOS/.test(a) ? "Firefox"
+    : /Chrome\/|CriOS/.test(a) ? "Chrome" : /Safari\//.test(a) ? "Safari" : "";
+  const os = /iPhone/.test(a) ? "iPhone" : /iPad/.test(a) ? "iPad" : /Android/.test(a) ? "Android" : /CrOS/.test(a) ? "Chromebook"
+    : /Mac OS X|Macintosh/.test(a) ? "Mac" : /Windows/.test(a) ? "Windows" : /Linux/.test(a) ? "Linux" : "";
+  if (browser && os) return `${browser} on ${os}`;
+  return browser || os || "Unknown device";
+}
+function ago(ts) {
+  const s = Date.now() / 1000 - ts;
+  if (s < 900) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)} minutes ago`;
+  if (s < 86400) { const h = Math.round(s / 3600); return `${h} hour${h === 1 ? "" : "s"} ago`; }
+  return when(ts);
+}
 async function loadSessions() {
   try {
     const list = await api("/auth/sessions");
-    $("#sessions").innerHTML = list.map((s) => `<div>${s.current ? "<b>This device</b>" : esc(s.agent.split(")")[0].split("(")[1] || s.agent || "Unknown device")}
-      · ${esc(s.ip)} · since ${when(s.created)}</div>`).join("") || "None";
-  } catch (e) { $("#sessions").textContent = e.message; }
+    $("#sessions").innerHTML = list.map((s) => `<div class="device" data-sid="${esc(s.id)}"><div style="flex:1;min-width:0">
+        <b>${esc(deviceName(s.agent))}</b>${s.current ? ` <span class="badge hot">this device</span>` : ""}
+        <div class="muted">${s.current ? "In use now" : "Last used " + esc(ago(s.last_used))} · ${esc(s.ip || "?")} · signed in ${esc(when(s.created))}</div></div>
+        ${s.current ? "" : `<button class="plain small" data-endsession aria-label="Sign out ${esc(deviceName(s.agent))}">Sign out</button>`}</div>`).join("")
+      || `<p class="muted">None.</p>`;
+  } catch (e) { $("#sessions").textContent = errText(e); }
 }
+$("#sessions").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-endsession]"); if (!b) return;
+  b.disabled = true;
+  try { await api(`/auth/sessions/${encodeURIComponent(b.closest("[data-sid]").dataset.sid)}`, { method: "DELETE" }); toast("Signed out that device"); }
+  catch (err) { toast(errText(err), 4000); }
+  loadSessions();
+});
 $("#signoutOthers").onclick = async () => {
   const r = await api("/auth/signout-others", { method: "POST" });
   toast(`Signed out ${r.signed_out} other device${r.signed_out === 1 ? "" : "s"}`);
@@ -1033,8 +1120,8 @@ async function loadTags() {
 }
 $("#tagList").addEventListener("change", async (e) => {
   const row = e.target.closest(".tagrow");
-  try { await api(`/tags/${encodeURIComponent(row.dataset.name)}`, { method: "PUT", json: { color: e.target.value } }); loadTags(); }
-  catch (err) { toast(err.message); }
+  try { await api(`/tags/${encodeURIComponent(row.dataset.name)}`, { method: "PUT", json: { color: e.target.value } }); toast("Saved"); loadTags(); }
+  catch (err) { toast(errText(err)); }
 });
 $("#tagList").addEventListener("click", async (e) => {
   if (!e.target.matches("[data-del]")) return;
@@ -1042,10 +1129,17 @@ $("#tagList").addEventListener("click", async (e) => {
   if (!confirm(`Remove the tag "${name}"? Tasks keep their other tags.`)) return;
   try { await api(`/tags/${encodeURIComponent(name)}`, { method: "DELETE" }); loadTags(); } catch (err) { toast(err.message); }
 });
-$("#addTag").onclick = async () => {
-  try { await api(`/tags/${encodeURIComponent($("#newTag").value)}`, { method: "PUT", json: { color: $("#newTagColor").value } });
-        $("#newTag").value = ""; loadTags(); }
-  catch (err) { toast(err.message); }
+$("#tagForm").onsubmit = async (e) => {  // a form, so Enter adds it too
+  e.preventDefault();
+  const typed = $("#newTag").value.trim();
+  if (!typed) { toast("Type a tag name first"); $("#newTag").focus(); return; }
+  try {
+    const r = await api("/tags", { method: "POST", json: { name: typed, color: $("#newTagColor").value } });
+    $("#newTag").value = "";
+    // Tag names are short, lowercase letters, numbers, - and _: say so when what was typed changed.
+    toast(r.name === typed.replace(/^[#@]+/, "").toLowerCase() ? `Added #${r.name}` : `Added "${typed}" as #${r.name}`, 3500);
+    loadTags();
+  } catch (err) { toast(errText(err), 4500); }
 };
 
 // ---------------------------------------------------------------- super admin: users
@@ -1308,9 +1402,21 @@ async function loadCalendars() {
   let r;
   try { r = await api("/calendars"); } catch (e) { $("#calList").textContent = e.message; return; }
   calKinds = r.kinds;
-  $("#calList").innerHTML = r.calendars.map((c) => `<div class="tagrow" data-cal="${esc(c.id)}">
-      <div style="flex:1;min-width:0"><b>${esc(c.name)}</b><div class="muted">${esc((calKinds.find((k) => k.key === c.provider) || {}).name || c.provider)}${c.calendars?.length ? " · " + c.calendars.map(esc).join(", ") : ""}</div></div>
-      <button class="plain small" data-remove>Remove</button></div>`).join("") || `<p class="muted">No calendars yet. Add one to see today's events here and on your daily ticket.</p>`;
+  $("#calList").innerHTML = r.calendars.map((c) => `<div class="tagrow" data-cal="${esc(c.id)}" data-kind="${esc(c.provider)}" style="flex-wrap:wrap">
+      <div style="flex:1;min-width:0"><b class="calname">${esc(c.name)}</b><div class="muted">${esc((calKinds.find((k) => k.key === c.provider) || {}).name || c.provider)}${c.calendars?.length ? " · " + c.calendars.map(esc).join(", ") : ""}</div></div>
+      <button class="plain small" data-rename aria-label="Rename ${esc(c.name)}">Rename</button>
+      <button class="plain small" data-remove>Remove</button>
+      <div class="calstatus" style="flex-basis:100%"></div></div>`).join("") || `<p class="muted">No calendars yet. Add one to see today's events here and on your daily ticket.</p>`;
+  // Which ones aren't working right now (otherwise that only shows on My list).
+  if (r.calendars.length) api("/calendars/today").then((t) => {
+    for (const [id, msg] of Object.entries(t.failing || {})) {
+      const row = $(`#calList [data-cal="${CSS.escape(id)}"]`);
+      if (!row) continue;
+      const fix = row.dataset.kind === "ics" ? "Remove it, then add it again with a fresh link."
+        : row.dataset.kind === "caldav" ? "Remove it, then add it again with a new app password." : "Remove it, then sign in again.";
+      row.querySelector(".calstatus").innerHTML = `<div class="err">Not working: ${esc(msg)}</div>${/again/i.test(msg) ? "" : `<div class="muted">${fix}</div>`}`;
+    }
+  }).catch(() => {});
   const usable = calKinds.filter((k) => k.status === "ready" || k.status === "oauth");
   const cur = $("#calKind").value;
   $("#calKind").innerHTML = usable.map((k) => `<option value="${esc(k.key)}">${esc(k.name)}</option>`).join("");
@@ -1323,9 +1429,16 @@ function renderCalFields() {
   const k = calKinds.find((x) => x.key === $("#calKind").value);
   if (!k) return;
   $("#calGo").textContent = k.status === "oauth" ? `Sign in with ${k.app === "google" ? "Google" : "Microsoft"}` : "Add calendar";
+  // A link is shown as typed (it's kept sealed all the same); only a password gets dots, with Show.
+  const input = (f) => {
+    const id = `cf_${esc(f.name)}`, attrs = `id="${id}" data-cfield="${esc(f.name)}" autocapitalize="none" spellcheck="false"`;
+    if (f.name === "url") return `<input ${attrs} type="url" autocomplete="off" placeholder="https://">`;
+    if (f.secret) return `<span class="pwrow"><input ${attrs} type="password" autocomplete="new-password"><button type="button" data-show="${id}">Show</button></span>`;
+    return `<input ${attrs} type="text" autocomplete="off">`;
+  };
   $("#calFields").innerHTML = k.status === "oauth" ? `<p class="muted">You'll sign in on ${esc(k.name)}'s own page and come straight back. Next Box only reads events.</p>` :
     (k.fields || []).map((f) => `<div class="field"><label for="cf_${esc(f.name)}">${esc(f.label)}${f.optional ? " (optional)" : ""}</label>
-      <input id="cf_${esc(f.name)}" data-cfield="${esc(f.name)}" type="${f.secret ? "password" : "text"}" autocomplete="off" autocapitalize="none">
+      ${input(f)}
       ${f.help ? `<div class="muted">${esc(f.help)}</div>` : ""}</div>`).join("");
   $("#calMsg").textContent = "";
 }
@@ -1335,14 +1448,31 @@ $("#calGo").onclick = async () => {
   if (k?.status === "oauth") { location.href = `/connect/${encodeURIComponent(k.app)}/calendar/start`; return; }
   const fields = {};
   $$("#calFields [data-cfield]").forEach((el) => fields[el.dataset.cfield] = el.value);
-  $("#calGo").disabled = true; $("#calMsg").textContent = "Checking…";
+  $("#calGo").disabled = true; $("#calMsg").textContent = "Checking…"; $("#calMsg").className = "muted";
   try {
     await api("/calendars", { method: "POST", json: { kind: k.key, fields } });
     $$("#calFields input").forEach((el) => el.value = "");
     $("#calMsg").textContent = ""; toast("Calendar added"); loadCalendars(); loadToday(); loadGuide();
-  } catch (e) { $("#calMsg").textContent = e.message; }
+  } catch (e) { $("#calMsg").textContent = errText(e); $("#calMsg").className = "err"; }
   finally { $("#calGo").disabled = false; }
 };
+// Rename in place: the name turns into a box with Save and Cancel.
+$("#calList").addEventListener("click", (e) => {
+  if (!e.target.matches("[data-rename]")) return;
+  const row = e.target.closest("[data-cal]"), name = row.querySelector(".calname");
+  e.target.hidden = true;
+  name.outerHTML = `<form class="row calrename" style="margin:0 0 4px"><input type="text" maxlength="60" value="${esc(name.textContent)}" aria-label="Calendar name" style="flex:1;min-width:0">
+    <button class="go small" type="submit">Save</button><button class="plain small" type="button" data-cancel>Cancel</button></form>`;
+  const form = row.querySelector(".calrename"), box = form.querySelector("input");
+  box.focus(); box.select();
+  form.querySelector("[data-cancel]").onclick = () => loadCalendars();
+  box.onkeydown = (ev) => { if (ev.key === "Escape") { ev.preventDefault(); loadCalendars(); } };
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    try { await api(`/calendars/${encodeURIComponent(row.dataset.cal)}`, { method: "PATCH", json: { name: box.value } }); toast("Renamed"); loadCalendars(); loadToday(); }
+    catch (err) { toast(errText(err), 4000); box.focus(); }
+  };
+});
 $("#calList").addEventListener("click", async (e) => {
   if (!e.target.matches("[data-remove]")) return;
   const id = e.target.closest("[data-cal]").dataset.cal;
@@ -1586,8 +1716,9 @@ function paperButton(id) {
 
 
 // ---------------------------------------------------------------- your account (top right)
-$$("[data-show]").forEach((b) => b.onclick = () => {
-  const input = $("#" + b.dataset.show);
+document.addEventListener("click", (e) => {  // delegated, so Show also works on fields drawn later (calendars)
+  const b = e.target.closest("[data-show]"), input = b && $("#" + b.dataset.show);
+  if (!input) return;
   input.type = input.type === "password" ? "text" : "password";
   b.textContent = input.type === "password" ? "Show" : "Hide";
 });
@@ -1602,15 +1733,31 @@ async function checkUpdate() {
     ? `Next Box ${update.latest} is available (you have ${update.current}). ${update.how}` : "";
 }
 function openMe() {
-  $("#meAvatar").textContent = displayName().slice(0, 1).toUpperCase();
+  $("#meAvatar").textContent = initial();
   $("#meName").textContent = displayName();
   $("#meSub").textContent = [me.role === "user" ? "" : me.role, me.email || "no email yet", me.protected ? "protected admin" : ""].filter(Boolean).join(" · ");
   $("#meUpdate").textContent = `Next Box ${me.version}` + (update ? (update.update_available ? ` · update available: ${update.latest}` : update.latest ? " · up to date ✓" : "") : "");
   $("#mePanel").innerHTML = "";
+  $("#meDialog [data-me=delete]").hidden = me.can_delete === false;  // the protected admin or the only superadmin
   $("#meDialog").showModal();
 }
 $("#meBtn").onclick = openMe;
 $("#meClose").onclick = () => $("#meDialog").close();
+// A tap on the dimmed area closes a menu, like on most phones. The rectangle check keeps taps on
+// the sheet's own padding from closing it. Never for the data notice or a task being edited.
+function closeOnBackdrop(dlg, ok = () => true) {
+  dlg.addEventListener("click", (e) => {
+    if (e.target !== dlg || !ok()) return;
+    const r = dlg.getBoundingClientRect();
+    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dlg.close();
+  });
+}
+closeOnBackdrop($("#meDialog"));
+closeOnBackdrop($("#moreDialog"));
+closeOnBackdrop($("#fbDialog"), () => !$("#fbDone").hidden || !$$("#fbDialog textarea").some((t) => t.value.trim()));  // nothing typed is lost
+// What deleting your account removes, and how to keep a copy first.
+const DELETE_WARNING = `<p class="err">This deletes your account, your list, tags, journal pages and journal photos, tickets and history from Next Box. It can't be undone. Apps you linked (like Todoist) aren't touched.</p>
+  <p class="muted">Want a copy first? <a href="/auth/export?format=zip">Download my data</a>: one .zip file with your list, settings, journal pages and photos, and ticket images.</p>`;
 $("#meDialog").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-me]");
   if (!b) return;
@@ -1619,36 +1766,10 @@ $("#meDialog").addEventListener("click", async (e) => {
   if (what === "profile") { $("#meDialog").close(); return goto("profile"); }
   if (what === "feedback") { $("#meDialog").close(); return document.querySelector("[data-feedback]")?.click(); }
   if (what === "refresh") return location.reload();
-  if (what === "export") { location.href = "/auth/export"; return; }
+  if (what === "export") { location.href = "/auth/export?format=zip"; return; }
   if (what === "signout") return signOut(panel);
-  if (what === "profile") {
-    panel.innerHTML = `<div class="field"><label for="meEmail">Email</label><input type="email" id="meEmail" autocapitalize="none" value="${esc(me.email || "")}">
-      <div class="muted">You can sign in with it instead of your username.</div></div>
-      <div class="row"><button class="go small" id="meSaveEmail">Save</button><span class="err" id="meMsg"></span></div>`;
-    $("#meSaveEmail").onclick = async () => {
-      try { const r = await api("/auth/profile", { method: "PATCH", json: { email: $("#meEmail").value } }); me.email = r.email; toast("Saved"); openMe(); }
-      catch (err) { $("#meMsg").textContent = err.message; }
-    };
-  }
-  if (what === "password") {
-    panel.innerHTML = `<div class="field"><label for="meCur">Current password</label><input type="password" id="meCur" autocomplete="current-password"></div>
-      <div class="field"><label for="meNew">New password (8+ characters)</label><input type="password" id="meNew" autocomplete="new-password" minlength="8"></div>
-      <div class="row"><button class="go small" id="meSavePw">Change password</button><span class="err" id="meMsg"></span></div>`;
-    $("#meSavePw").onclick = async () => {
-      try { await api("/auth/password", { method: "POST", json: { current: $("#meCur").value, new: $("#meNew").value } });
-            toast("Password changed. Other devices were signed out."); openMe(); }
-      catch (err) { $("#meMsg").textContent = err.message; }
-    };
-  }
-  if (what === "devices") {
-    let list = [];
-    try { list = await api("/auth/sessions"); } catch (err) { panel.textContent = err.message; return; }
-    panel.innerHTML = list.map((d) => `<div class="mini">${esc(d.agent ? d.agent.replace(/\(.*?\)/g, "").slice(0, 60) : "Unknown device")}${d.current ? " <b>(this one)</b>" : ""}<div class="muted">since ${when(d.created)}</div></div>`).join("")
-      + `<div class="row"><button class="plain small" id="meOthers">Sign out all other devices</button></div>`;
-    $("#meOthers").onclick = async () => { const r = await api("/auth/signout-others", { method: "POST" }); toast(`Signed out ${r.signed_out ?? ""} other device(s)`); openMe(); };
-  }
   if (what === "delete") {
-    panel.innerHTML = `<p class="err">This deletes your account, your list, tags, tickets and history from Next Box. It can't be undone. Apps you linked (like Todoist) aren't touched. Tip: Download my data first.</p>
+    panel.innerHTML = `${DELETE_WARNING}
       <div class="field"><label for="meDelPw">Your password</label><input type="password" id="meDelPw" autocomplete="current-password"></div>
       <div class="field"><label for="meDelName">Type your username (${esc(me.username)})</label><input type="text" id="meDelName" autocapitalize="none"></div>
       <div class="row"><button class="go warn small" id="meDelGo">Delete my account forever</button><span class="err" id="meMsg"></span></div>`;
@@ -1664,16 +1785,20 @@ $("#meDialog").addEventListener("click", async (e) => {
 
 // ---------------------------------------------------------------- profile page and look
 const displayName = () => (me?.prefs?.display_name || "").trim() || me?.username || "";
+const initial = () => {  // the first letter as people see it: a whole emoji or accented letter, never half of one
+  const n = displayName();
+  const seg = typeof Intl.Segmenter === "function" ? [...new Intl.Segmenter().segment(n)][0]?.segment : Array.from(n)[0];
+  return (seg || "?").toUpperCase();
+};
 function applyLook() {
   if (!me) return;
-  const initial = displayName().slice(0, 1).toUpperCase();
-  $("#meBtn").textContent = initial;
+  $("#meBtn").textContent = initial();
   const size = me.prefs.text_size || "normal";
   if (size === "normal") delete document.documentElement.dataset.text; else document.documentElement.dataset.text = size;
 }
 function loadProfile() {
   if (!me) return;
-  $("#pAvatar").textContent = displayName().slice(0, 1).toUpperCase();
+  $("#pAvatar").textContent = initial();
   $("#pName").textContent = displayName();
   $("#pDisplay").value = me.prefs.display_name || "";
   $("#pEmail").value = me.email || "";
@@ -1682,20 +1807,30 @@ function loadProfile() {
                  ["Last sign-in", when(me.last_login)], ["App version", `Next Box ${me.version}`]];
   if (me.protected) facts.push(["Account", "protected admin (always a superadmin)"]);
   $("#pFacts").innerHTML = facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
-  $("#pDeletePanel").innerHTML = "";
+  // The protected admin and the only superadmin can't be deleted: say so up front, not after the password.
+  $("#pDelete").disabled = me.can_delete === false;
+  $("#pDeletePanel").innerHTML = me.can_delete === false ? `<p class="muted">${me.protected
+    ? "This is the protected admin account, so it can't be deleted. It always stays a superadmin."
+    : "You're the only superadmin. Make someone else a superadmin first."}</p>` : "";
   loadSessions();
 }
-$("#pSave").onclick = async () => {
-  $("#pMsg").textContent = "";
+// Name and email are saved together: both or neither, and the page shows what was saved.
+$("#pForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const msg = $("#pMsg");
+  msg.textContent = ""; msg.className = "muted";
+  if (!$("#pEmail").checkValidity()) {
+    msg.textContent = "That doesn't look like an email address."; msg.className = "err"; $("#pEmail").focus(); return;
+  }
   try {
-    const prefs = await api("/settings", { method: "PATCH", json: { display_name: $("#pDisplay").value.trim() } });
-    const r = await api("/auth/profile", { method: "PATCH", json: { email: $("#pEmail").value } });
-    me.prefs = prefs; me.email = r.email;
+    const r = await api("/auth/profile", { method: "PATCH", json: { display_name: $("#pDisplay").value.trim(), email: $("#pEmail").value.trim() } });
+    me.prefs = r.prefs; me.email = r.email;
     applyLook(); loadProfile(); toast("Saved");
-  } catch (e) { $("#pMsg").textContent = e.message; }
+  } catch (err) { msg.textContent = errText(err); msg.className = "err"; }
 };
+$("#pForm").addEventListener("input", () => { $("#pMsg").textContent = ""; });
 $("#pDelete").onclick = () => {
-  $("#pDeletePanel").innerHTML = `<p class="err">This deletes your account, your list, tags, tickets and history from Next Box. It can't be undone. Apps you linked (like Todoist) aren't touched.</p>
+  $("#pDeletePanel").innerHTML = `${DELETE_WARNING}
     <div class="field"><label for="pDelPw">Your password</label><input type="password" id="pDelPw" autocomplete="current-password"></div>
     <div class="field"><label for="pDelName">Type your username (${esc(me.username)})</label><input type="text" id="pDelName" autocapitalize="none"></div>
     <div class="row"><button class="go warn" id="pDelGo">Delete my account forever</button><span class="err" id="pDelMsg"></span></div>`;
@@ -1706,8 +1841,11 @@ $("#pDelete").onclick = () => {
   };
 };
 $("#setJump").onclick = (e) => {
-  const b = e.target.closest("[data-jump]");
-  if (b) document.getElementById(b.dataset.jump)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  const b = e.target.closest("[data-jump]"), card = b && document.getElementById(b.dataset.jump);
+  if (!card) return;
+  card.scrollIntoView({ behavior: "smooth", block: "start" });
+  const h = card.querySelector("h2");  // keyboard and screen readers carry on inside the card
+  if (h) { h.tabIndex = -1; h.focus({ preventScroll: true }); }
 };
 
 

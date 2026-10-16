@@ -103,6 +103,22 @@ class Connections:
     def disconnect(self, username: str) -> None:
         self.accounts.set_connection(username, None)
 
+    def check(self, username: str) -> dict:
+        """The status, plus whether the linked app still answers with the saved sign-in (ok/error)."""
+        status = self.status(username)
+        if not status.get("connected"):
+            return {**status, "ok": True, "error": ""}
+        name = status.get("name") or "your app"
+        try:
+            self.linked_for(username).check()
+        except ProviderError as exc:  # the app said no: its own words say what to do
+            return {**status, "ok": False, "error": str(exc)[:300]}
+        except ValueError:  # the Vault can't open it (secret.key changed or the data dir was moved)
+            return {**status, "ok": False, "error": f"Reconnect {name}: the saved sign-in can't be read any more."}
+        except Exception:  # noqa: BLE001 - a server we can't reach at all
+            return {**status, "ok": False, "error": f"{name} didn't answer. Try again in a bit, or reconnect it."}
+        return {**status, "ok": True, "error": ""}
+
     # --- sign in with Google / Microsoft / TickTick --------------------------------------------
     def finish_signin(self, username: str, app: str, state: str, code: str, client=None, *, nonce: str) -> dict:
         purpose, tokens = oauth.finish(app, state, code, username, client=client, nonce=nonce)
@@ -124,10 +140,36 @@ class Connections:
     def calendars(self, username: str) -> list[dict]:
         return [{k: v for k, v in c.items() if k != "secret"} for c in self.accounts.calendars(username)]
 
+    def _same_calendar(self, kind: str, config: dict, secrets: dict) -> Callable[[dict], bool]:
+        """Matches a saved calendar that's this one again: the same .ics link, or the same CalDAV
+        server, username and "only this calendar"."""
+        def link(u: str) -> str:
+            u = (u or "").strip()
+            u = "https://" + u[len("webcal://"):] if u.lower().startswith("webcal://") else u
+            return u.rstrip("/").lower()
+
+        def caldav(cfg: dict) -> tuple:
+            return (link(cfg.get("url", "")), cfg.get("username", "").strip().lower(), cfg.get("only", "").strip().lower())
+
+        def same(entry: dict) -> bool:
+            if entry.get("provider") != kind:
+                return False
+            if kind == "caldav":
+                return caldav(entry.get("config") or {}) == caldav(config)
+            if kind == "ics" and entry.get("secret"):
+                try:
+                    return link(self.vault.open(entry["secret"]).get("url", "")) == link(secrets.get("url", ""))
+                except ValueError:  # can't be read any more: not a match
+                    return False
+            return False
+        return same
+
     def _add_calendar(self, username: str, kind: str, config: dict, secrets: dict) -> dict:
         existing = self.accounts.calendars(username)
         if len(existing) >= MAX_CALENDARS:
             raise ProviderError(f"{MAX_CALENDARS} calendars is the limit")
+        if any(map(self._same_calendar(kind, config, secrets), existing)):
+            raise ProviderError("You already added this calendar.")
         info = self.calendar_builder(kind, config, dict(secrets)).check()
         entry = {"id": _secrets.token_hex(4), "provider": kind, "config": config, "secret": self.vault.seal(secrets),
                  "account": str(info.get("account", ""))[:120], "calendars": list(info.get("calendars", []))[:20],
@@ -154,8 +196,22 @@ class Connections:
             except Exception:  # noqa: BLE001 - a damaged secret just means there's nothing to forget
                 pass
 
-    def events_for(self, username: str, day: dt.date) -> tuple[list[dict], list[str]]:
-        """Today's events from every calendar. A calendar that fails is reported, not fatal."""
+    def rename_calendar(self, username: str, cal_id: str, name: str) -> dict:
+        name = (name or "").strip()
+        if not 1 <= len(name) <= 60:
+            raise ProviderError("A calendar name is 1 to 60 characters.")
+        cals = self.accounts.calendars(username)
+        mine = next((c for c in cals if c.get("id") == cal_id), None)
+        if not mine:
+            raise KeyError(cal_id)
+        mine["name"] = name
+        self.accounts.set_calendars(username, cals)
+        return {k: v for k, v in mine.items() if k != "secret"}
+
+    def events_for(self, username: str, day: dt.date,
+                   failing: dict[str, str] | None = None) -> tuple[list[dict], list[str]]:
+        """Today's events from every calendar. A calendar that fails is reported, not fatal.
+        `failing`, when given, also gets each failing calendar's problem by its id."""
         events, problems = [], []
         for entry in self.accounts.calendars(username):
             def resave(tokens: dict, cid=entry["id"]) -> None:
@@ -171,6 +227,10 @@ class Connections:
                     events.append({**e, "calendar": e.get("calendar") or entry.get("name", "")})
             except ProviderError as exc:
                 problems.append(f"{entry.get('name', 'A calendar')}: {exc}")
+                if failing is not None:
+                    failing[entry["id"]] = str(exc)
             except Exception as exc:  # a broken feed must not stop the daily ticket
                 problems.append(f"{entry.get('name', 'A calendar')} didn't work: {str(exc)[:120]}")
+                if failing is not None:
+                    failing[entry["id"]] = "It didn't answer. Check the link or sign-in."
         return sort_events(events), problems

@@ -21,7 +21,7 @@ from .printer import COLORS, DRIVERS, PrinterConfig, _host_port, legacy_config
 # Why a ticket is being printed. People map each reason to a label color in Settings.
 REASONS = {
     "overdue": "Overdue (expired) tasks",
-    "urgent": "Urgent tasks (p1/p2)",
+    "urgent": "Urgent tasks",
     "today": "Daily list",
     "list": "Lists",
     "task": "Single task",
