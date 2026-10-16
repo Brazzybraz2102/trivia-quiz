@@ -1047,6 +1047,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 "slides": slides, "slug_after": slug_after,
                 "linked_error": linked_error, "linked_undo": linked_undo, "tags": _tags_with_uses(caller.name),
                 "done_today": len(Wins(accounts.db, caller.name).between(today.isoformat(), today.isoformat())),
+                # Ever had a task here, open or done: finishing the last one isn't a brand-new start.
+                "has_tasks": bool(tasks) or _has_own_tasks(caller),
                 "one_thing": _one_thing(caller),
                 "marks_waiting": sum(len(_waiting(r)) for r in ctx.store.list_scans(50, by=caller.name))}
 
@@ -1386,6 +1388,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             prev = ((task.get("due") or {}).get("date") or "")[:10] or None
             if prev == target:
                 return {"ok": True, "moved": False, "from": prev, "to": target, "task": task if local else None}
+            if to == "tomorrow" and not body.undo and prev and target and prev > target:
+                # → Tomorrow never moves a task sooner: one due later stays where it is.
+                return {"ok": True, "moved": False, "later": True, "from": prev, "to": prev,
+                        "task": task if local else None}
             if local:
                 task = tasks.update(task_id, {"due_date": target})  # keeps its time; a weekday repeat skips weekends
                 now = ((task.get("due") or {}).get("date") or "")[:10] or None
