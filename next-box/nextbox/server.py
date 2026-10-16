@@ -27,7 +27,7 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import jobs, printer, scan, upkeep
 from .auth import ROLES, Accounts, AuthError, default_prefs, rank
@@ -102,19 +102,19 @@ class TodayBody(BaseModel):
 
 
 class ListBody(BaseModel):
-    query: str
-    title: str | None = None
+    query: str = Field(max_length=200)
+    title: str | None = Field(default=None, max_length=80)
     dry_run: bool = False
 
 
 class TaskBody(BaseModel):
-    task_id: str
+    task_id: str = Field(max_length=200)
     dry_run: bool = False
 
 
 class TextBody(BaseModel):
-    text: str
-    title: str = "NOTE"
+    text: str = Field(max_length=jobs.MAX_TEXT)  # the label shows the first part; see jobs.MAX_BODY
+    title: str = Field(default="NOTE", max_length=80)
     todo: bool = False  # also create a Todoist task
     dry_run: bool = False
 
@@ -161,7 +161,7 @@ class TagBody(BaseModel):
 
 class PickBody(BaseModel):
     task_ids: list[str] | None = None
-    query: str | None = None
+    query: str | None = Field(default=None, max_length=200)
     dry_run: bool | None = None
 
 
@@ -171,7 +171,7 @@ class JournalBody(BaseModel):
 
 
 class FocusBody(BaseModel):
-    task_id: str | None = None
+    task_id: str | None = Field(default=None, max_length=200)
     dry_run: bool | None = None
 
 
@@ -412,7 +412,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             factory = ctx.tasks_factory
         else:
             factory = lambda: connections.provider_for(name)  # noqa: E731
-        return dataclasses.replace(ctx, user=name, household=household_of(caller), prefs=prefs, printers=ctx.printers,
+        return dataclasses.replace(ctx, user=name, household=household_of(caller), prefs=prefs, printers=registry,
+                                   can_add_printer=rank(caller.role) >= rank("admin"),
                                    printing_paused=s["printing_paused"],
                                    auto_print_enabled=s["auto_print_enabled"],
                                    tasks_factory=factory, _tasks=None,
@@ -1103,8 +1104,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return run(caller, "print_focus", jobs.print_focus, rctx(caller), body.task_id, dry_run=body.dry_run)
 
     @app.get("/printed")
-    def printed(limit: int = Query(50, ge=1, le=500), caller: Caller = Depends(auth)):
-        return ctx.store.list_printed(limit, by=acting_as(caller))
+    def printed(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0, le=100_000),
+                caller: Caller = Depends(auth)):
+        return ctx.store.list_printed(limit, by=acting_as(caller), offset=offset)
 
     @app.get("/printed/{label_id}/png")
     def printed_png(label_id: str, caller: Caller = Depends(auth)):
@@ -1134,7 +1136,12 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         size = paper or caller.prefs.get("paper_size", "letter")
         if size not in paper_pdf.PAGES:
             raise HTTPException(400, "paper is letter, a4, a5 or half_letter")
-        data = paper_pdf.ticket_pdf(png, ctx.store.get_parts(label_id), size)
+        parts = ctx.store.get_parts(label_id)
+        if not parts and rec.get("kind") == "stickers":  # one sticker from before parts were kept: still real size
+            from PIL import Image
+            import io as _io
+            parts = [Image.open(_io.BytesIO(png))]
+        data = paper_pdf.ticket_pdf(png, parts, size, code=label_id)
         events.log(caller.name, "print_paper", detail={"id": label_id, "paper": size})
         return Response(data, media_type="application/pdf",
                         headers={"Content-Disposition": f'inline; filename="next-box-{label_id}.pdf"'})

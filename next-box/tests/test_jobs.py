@@ -7,7 +7,7 @@ from nextbox.render import WIDTH
 def test_today_dry_run_renders_png_and_manifest(ctx):
     r = jobs.print_today(ctx)
     assert r["status"] == "dry_run"
-    img = Image.open(r["png"])
+    img = Image.open(ctx.store.png_path(r["id"]))
     assert img.width == WIDTH and img.height > 200
     # urgent first (#1 p1), then the rest of today (#2, #4), then overdue (#3)
     assert [m["task_id"] for m in r["manifest"]] == ["1", "2", "4", "3"]
@@ -54,7 +54,7 @@ def test_list_task_text_and_todo(ctx, todo):
 def test_long_words_wrap_without_overflow(ctx, todo):
     todo.tasks["1"]["content"] = "x" * 300
     r = jobs.print_today(ctx)
-    assert Image.open(r["png"]).width == WIDTH
+    assert Image.open(ctx.store.png_path(r["id"])).width == WIDTH
 
 
 def test_timed_tasks_first_and_overflow_goes_to_waiting(ctx, todo):

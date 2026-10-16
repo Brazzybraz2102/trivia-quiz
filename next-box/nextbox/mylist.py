@@ -168,6 +168,14 @@ class Tags:
                 conn.execute(insert(db.tags).values(owner=self.owner, name=name, color=color, position=len(existing)))
         return {"name": name, "color": color}
 
+    def ensure(self, names: list[str]) -> None:
+        """Make sure these tags exist (a new one starts white), e.g. after typing #tag."""
+        known = {t["name"] for t in self.all()}
+        for name in names:
+            if tag_name(name) not in known:
+                self.set(name, "white")
+                known.add(tag_name(name))
+
     def remove(self, name: str) -> None:
         self.all()
         with self.db.begin() as conn:
@@ -394,10 +402,19 @@ class Merged(TaskProvider):
             info = {"account": other.get("account", ""), "lists": ["My list", *other.get("lists", [])]}
         return info
 
+    linked_error = ""  # set when the linked app didn't answer and only My list was used
+
     def today(self) -> list[dict]:
         out = self.local.today()
         if self.linked is not None:
-            out += self._mark(self.linked.today(), self._linked_key())
+            try:
+                out += self._mark(self.linked.today(), self._linked_key())
+            except (ProviderError, OSError):
+                if not out:
+                    raise  # nothing of My list to show either: say what went wrong, don't print "Nothing due"
+                from .providers import display_name
+                name = display_name(self._linked_key()) if self._linked_key() != "linked" else "Your linked app"
+                self.linked_error = f"{name} didn't answer, so this has My list only."
         return out
 
     def filter_tasks(self, query: str) -> list[dict]:

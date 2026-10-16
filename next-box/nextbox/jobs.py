@@ -15,15 +15,24 @@ from .auth import default_prefs
 from .config import Settings
 from .printer import PrinterConfig, legacy_config
 from .printers import Printers, choose, choose_color
-from .render import (DayRow, Sticker, finalize, render_day, render_focus, render_label, render_sticker,
+from .render import (DayRow, Row, Sticker, finalize, render_day, render_focus, render_label, render_sticker,
                      render_strips, stack_with_cuts)
 from .journal import SLUG_MOVES
+from .mylist import LocalTasks, Tags, parse_line
 from .store import Store
 from .providers import TaskProvider
 
 TODAY_QUERY = "today | overdue"
 MAX_ROWS = 5  # the rest are listed at the bottom (not markable): a short list is one you start
+LIST_MAX_ROWS = 20  # a list from a filter (groceries, packing) gets a box for everything up to this
 MAX_STICKERS = 30
+MAX_BODY = 1500  # characters of a note or task notes that go on a label; the rest stays in Next Box
+MAX_TEXT = 4000  # longest note Next Box takes in (the web app and the API stop there too)
+
+
+def _short(text: str, limit: int, tail: str = "…") -> str:
+    text = text.strip()
+    return text if len(text) <= limit else text[:limit].rstrip() + tail
 
 
 @dataclass
@@ -45,6 +54,7 @@ class Context:
     on_move: Callable[[str], None] | None = None  # a task was moved to a later day
     on_done: Callable[[str], None] | None = None  # a task was finished
     save_page: Callable[..., dict] | None = None  # keep a journal page (read-back)
+    can_add_printer: bool = False     # an admin: the no-printer note says where to add one
     _tasks: TaskProvider | None = field(default=None, repr=False)
 
     @property
@@ -117,19 +127,26 @@ def _is_late(task: dict, today: date) -> bool:
 
 
 NO_PRINTER = "No label printer in your household yet. Tap Print on paper to print it on any printer."
+NO_PRINTER_ADMIN = ("No label printer in your household yet. Add one under Admin → Printers, "
+                    "or tap Print on paper to print it on any printer.")
 
 
 def _available(ctx: Context) -> list[PrinterConfig]:
     """This household's printers. The .env printer only ever serves the original Home household,
     so someone in another household can never print on it by accident."""
     if ctx.printers is None:
-        return [legacy_config(ctx.settings)]
+        fallback = _fallback(ctx)
+        return [fallback] if fallback else []
     return ctx.printers.all(ctx.household)
 
 
 def _fallback(ctx: Context) -> PrinterConfig | None:
+    """The .env printer, only for callers with no printer registry (the registry already holds it,
+    so a printer an admin removed stays removed), only for Home, and only if it has an address."""
     from .auth import DEFAULT_HOUSEHOLD
-    return legacy_config(ctx.settings) if ctx.household == DEFAULT_HOUSEHOLD else None
+    if ctx.printers is not None or not ctx.settings.printer_ip or ctx.household != DEFAULT_HOUSEHOLD:
+        return None
+    return legacy_config(ctx.settings)
 
 
 def _target(ctx: Context, reason: str) -> tuple[PrinterConfig | None, str]:
@@ -142,22 +159,28 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
             label_id: str, manifest: list[dict], source: str, dry_run: bool | None, text: str = "",
             color: str | None = None) -> dict:
     """Fit, print and record a ticket. `draw` may return several images (stickers): each is
-    printed and cut on its own, and the record keeps one preview of them all."""
+    printed and cut on its own, and the record keeps one preview of them all.
+
+    The record is saved before anything is sent, so every #code that comes out of the printer can
+    be read back. If the printer doesn't answer, the result says so (status "failed") with the
+    preview, so Print on paper still works. It's never retried automatically."""
     dry = ctx.is_dry(dry_run)
     if color is None:
         cfg, note = _target(ctx, reason)
     else:
         found, note = choose_color(_available(ctx), ctx.prefs, color)
         cfg = found or _fallback(ctx)
-    if cfg is None:  # nothing this person may print on: draw it at the usual size, as a preview
-        cfg, note, dry = legacy_config(ctx.settings), NO_PRINTER, True
+    no_printer = cfg is None
+    if no_printer:  # nothing this person may print on: draw it at the usual size, as a preview
+        cfg, note, dry = legacy_config(ctx.settings), NO_PRINTER_ADMIN if ctx.can_add_printer else NO_PRINTER, True
+    elif dry and not dry_run and not ctx.settings.dry_run:  # they asked for paper: say why it's a preview
+        if ctx.printing_paused:
+            note = "Printing is paused by an admin, so this is a preview."
+        elif ctx.prefs.get("always_dry_run"):
+            note = "Always preview only is on in Settings, so this is a preview."
     red = cfg.ink == "black_red"
     drawn = draw(red)
     parts = [finalize(i, cfg.width_px, red=red) for i in (drawn if isinstance(drawn, list) else [drawn])]
-    png = ctx.store.png_path(label_id)
-    sent = False
-    for part in parts:
-        sent = printer.print_image(part, ctx.settings, dry_run=dry, cfg=cfg)
     img = parts[0] if len(parts) == 1 else stack_with_cuts([p.convert("RGB") for p in parts])
     record = {
         "id": label_id,
@@ -165,22 +188,42 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
         "reason": reason,
         "title": title,
         "source": source,
-        "dry_run": not sent,
+        "dry_run": dry,
         "by": ctx.user,
         "household_id": ctx.household,
-        "printer": {"id": cfg.id, "name": cfg.name, "color": cfg.stock_color},
+        "printer": None if no_printer else {"id": cfg.id, "name": cfg.name, "color": cfg.stock_color},
         "created_at": datetime.now().isoformat(timespec="seconds"),
-        "png": str(png),
         "manifest": manifest,
     }
     if color is not None:
         record["color"] = color
+    linked_error = getattr(ctx._tasks, "linked_error", "") if ctx._tasks is not None else ""
+    if linked_error:  # the linked app was down: this has My list only
+        note = f"{note} {linked_error}".strip()
     if note:
         record["note"] = note
     if text:
         record["text"] = text
-    ctx.store.save_printed(record, png=img, parts=drawn if isinstance(drawn, list) and len(drawn) > 1 else None)
-    return {"status": "printed" if sent else "dry_run", **record}
+    # Stickers keep their separate images (even just one), so Print on paper can lay them out real size.
+    keep = drawn if isinstance(drawn, list) else None
+    ctx.store.save_printed(record, png=img, parts=keep)
+    sent_parts = 0
+    try:
+        for part in parts:
+            if printer.print_image(part, ctx.settings, dry_run=dry, cfg=cfg):
+                sent_parts += 1
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:  # off, unplugged, out of reach
+        failed = {**record, "dry_run": sent_parts == 0, "failed": True, "sent_parts": sent_parts,
+                  "error": type(exc).__name__,  # the kind of problem only: messages can hold addresses
+                  "note": (f"{cfg.name} didn't answer"
+                           + (f" after {sent_parts} of {len(parts)} stickers" if sent_parts else "")
+                           + ". Is it on? Tap Print on paper instead.")}
+        ctx.store.save_printed(failed, png=img, parts=keep)
+        return {"status": "failed", **failed}
+    if record["dry_run"] == bool(sent_parts):  # the printer module had the last word on dry runs
+        record["dry_run"] = not sent_parts
+        ctx.store.save_printed(record, png=img, parts=keep)
+    return {"status": "printed" if sent_parts else "dry_run", **record}
 
 
 MAX_EVENTS = 8
@@ -207,24 +250,31 @@ def _schedule(ctx: Context) -> tuple[list[tuple[str, str]], str]:
 
 def _task_label(ctx: Context, *, kind: str, title: str, subtitle: str, tasks: list[dict],
                 source: str, dry_run: bool | None, reason: str,
-                schedule: list[tuple[str, str]] | None = None, calendar_note: str = "") -> dict:
+                schedule: list[tuple[str, str]] | None = None, calendar_note: str = "",
+                max_rows: int | None = None, extras: bool = True) -> dict:
+    """extras: the wins and journal lines (only on the main daily ticket, not its overdue half)."""
     today = ctx.today()
     tasks = sorted(tasks, key=lambda t: _sort_key(t, today))
-    max_rows = int(ctx.prefs.get("max_rows", MAX_ROWS))
+    max_rows = max_rows or int(ctx.prefs.get("max_rows", MAX_ROWS))
     shown, waiting = tasks[:max_rows], tasks[max_rows:]
     h24 = bool(ctx.prefs.get("time_24h"))
     gentle = bool(ctx.prefs.get("gentle_words", True))
     label_id = ctx.store.new_id(today)
     rows, manifest = [], []
     moves = ctx.slides() if ctx.slides else {}
+    slug_after = int(ctx.prefs.get("slug_after", SLUG_MOVES))
     for n, task in enumerate(shown, start=1):
         due = task.get("due") or {}
         tag, color = _first_tag(ctx, task)
         state = _tag(task, today, gentle)
+        day = (due.get("date") or "")[:10]
+        if day > today.isoformat():  # not due today: its day goes with its time, so "3:00p" never reads as today
+            state = f"{state} {_day_words(date.fromisoformat(day), today)} {_time(task, h24)}".strip()
         slid = moves.get(str(task["id"]), 0)
-        if slid >= int(ctx.prefs.get("slug_after", SLUG_MOVES)):  # it keeps sliding: say so kindly, so it can be made smaller
+        if slid >= slug_after:  # it keeps sliding: say so kindly, so it can be made smaller
             state = f"{state} · slid {slid}×" if state else f"slid {slid}×"
-        rows.append(DayRow(_clean(task["content"]), _time(task, h24), int(task.get("priority", 1)) >= 3,
+        rows.append(DayRow(_clean(task["content"]), _time(task, h24) if day == today.isoformat() else "",
+                           int(task.get("priority", 1)) >= 3,
                            state, late=_is_late(task, today), color=color if tag else "",
                            note=_next_step(task) if ctx.prefs.get("show_next_step", True) else ""))
         manifest.append({
@@ -238,17 +288,23 @@ def _task_label(ctx: Context, *, kind: str, title: str, subtitle: str, tasks: li
     made = f"{now:%a} {now.hour % 12 or 12}:{now:%M}{'a' if now.hour < 12 else 'p'}"
     footer = f"{kind}  {today.isoformat()}  made {made}"
     show_waiting = ctx.prefs.get("show_waiting", True)
-    waiting_names = [_clean(t["content"]) for t in waiting] if show_waiting else None
+
+    def waiting_name(t: dict) -> str:
+        """Short, so one long name can't hide the rest; a slug keeps its "slid N×" even down here."""
+        slid = moves.get(str(t["id"]), 0)
+        return _short(_clean(t["content"]), 28) + (f" (slid {slid}×)" if slid >= slug_after else "")
+    waiting_names = [waiting_name(t) for t in waiting] if show_waiting else None
     footer_win = ""
-    if kind == "today" and ctx.prefs.get("show_wins", True) and ctx.wins is not None:
+    if kind == "today" and extras and ctx.prefs.get("show_wins", True) and ctx.wins is not None:
         done = ctx.wins()
         footer_win = f"Yesterday you finished {done}. ✓" if done else ""
+    head = "More" if kind == "list" else "Not today" if gentle else "Also waiting"
 
     def draw(accent: bool) -> Image.Image:
         return render_day(title, subtitle, rows, code=label_id, footer=footer, waiting=waiting_names,
-                          accent=accent, waiting_head="Not today" if gentle else "Also waiting",
+                          accent=accent, waiting_head=head,
                           win=footer_win, schedule=schedule,
-                          journal=kind == "today" and bool(ctx.prefs.get("journal_mode", True)))
+                          journal=kind == "today" and extras and bool(ctx.prefs.get("journal_mode", True)))
     result = _finish(ctx, reason=reason, kind=kind, title=title, draw=draw, label_id=label_id,
                      manifest=manifest, source=source, dry_run=dry_run)
     if calendar_note:
@@ -275,6 +331,12 @@ def _next_step(task: dict) -> str:
     return next((s["text"] for s in task.get("steps") or [] if not s.get("done")), "")
 
 
+def _day_words(day: date, today: date) -> str:
+    """A later day, briefly: "tomorrow", "Sat" this week, "Oct 24" after that."""
+    ahead = (day - today).days
+    return "tomorrow" if ahead == 1 else day.strftime("%a") if ahead < 7 else day.strftime("%b %-d")
+
+
 def _when(task: dict, today: date, h24: bool, gentle: bool) -> str:
     due = task.get("due") or {}
     if not due.get("date"):
@@ -291,12 +353,14 @@ def _when(task: dict, today: date, h24: bool, gentle: bool) -> str:
 def _sticker_rows(ctx: Context, tasks: list[dict]) -> tuple[list[Sticker], list[dict]]:
     today = ctx.today()
     h24, gentle = bool(ctx.prefs.get("time_24h")), bool(ctx.prefs.get("gentle_words", True))
+    steps_on, big = ctx.prefs.get("show_next_step", True), ctx.prefs.get("sticker_size") == "big"
     stickers, manifest = [], []
     for n, task in enumerate(tasks, start=1):
         tag, color = _first_tag(ctx, task)
         due = task.get("due") or {}
         stickers.append(Sticker(n, _clean(task["content"]), tag, color, _when(task, today, h24, gentle),
-                                task.get("minutes"), _next_step(task), int(task.get("priority", 1)) >= 3))
+                                task.get("minutes"), _next_step(task) if steps_on else "",
+                                int(task.get("priority", 1)) >= 3, big=big))
         manifest.append({"row": n, "task_id": str(task["id"]), "content": task["content"],
                          "due_date": (due.get("date") or "")[:10] or None,
                          "is_recurring": bool(due.get("is_recurring"))})
@@ -363,6 +427,8 @@ def print_strips(ctx: Context, task_ids: list[str] | None = None, query: str | N
     """One label of tear-off strips: tear along the dashes and stick each task where it happens."""
     missing: list[str] = []
     tasks = _pick(ctx, task_ids, query, missing)
+    if not tasks:
+        raise ValueError("No tasks to print. Pick some on My list, or add a few first.")
     stickers, manifest = _sticker_rows(ctx, tasks)
     today = ctx.today()
     label_id = ctx.store.new_id(today)
@@ -433,8 +499,10 @@ def print_today(ctx: Context, source: str = "manual", dry_run: bool | None = Non
     late = [t for t in tasks if _is_late(t, today)]
     if ctx.prefs.get("split_overdue") and late and len(late) < len(tasks):
         # Overdue tasks get their own ticket, so they can come out on (say) red labels.
-        extra = _task_label(ctx, kind="today", title="Overdue", subtitle=subtitle, tasks=late,
-                            source=source, dry_run=dry_run, reason="overdue")
+        # The wins and journal lines stay on the main ticket only.
+        extra = _task_label(ctx, kind="today", title="Waiting" if ctx.prefs.get("gentle_words", True) else "Overdue",
+                            subtitle=subtitle, tasks=late, source=source, dry_run=dry_run, reason="overdue",
+                            extras=False)
         main = _task_label(ctx, kind="today", title=title, subtitle=subtitle,
                            tasks=[t for t in tasks if not _is_late(t, today)],
                            source=source, dry_run=dry_run, reason="today", schedule=schedule,
@@ -449,44 +517,79 @@ def print_today(ctx: Context, source: str = "manual", dry_run: bool | None = Non
 def print_filter(ctx: Context, query: str, title: str | None = None,
                  dry_run: bool | None = None, source: str = "manual") -> dict:
     tasks = ctx.tasks.filter_tasks(query)
-    return _task_label(ctx, kind="list", title=title or query, subtitle=ctx.today().strftime("%b %-d"),
-                       tasks=tasks, source=source, dry_run=dry_run, reason="list")
+    if not tasks:  # a typo shouldn't cost a label that says "Nothing due"
+        raise ValueError(f"Nothing matches “{query.strip()}”. Try today, overdue, #tag or a word from a task."
+                         if query.strip() else "Your list is empty. Add a few tasks first.")
+    # A list (groceries, packing) gets a box for every item, up to LIST_MAX_ROWS.
+    return _task_label(ctx, kind="list", title=(title or query).strip() or "My list",
+                       subtitle=ctx.today().strftime("%b %-d"), tasks=tasks, source=source, dry_run=dry_run,
+                       reason="list", max_rows=LIST_MAX_ROWS)
 
 
 def print_task(ctx: Context, task_id: str, dry_run: bool | None = None, source: str = "manual",
                reason: str | None = None) -> dict:
+    """One task on its own ticket, with a numbered box and the ✓ → ✗ legend so it can be read back."""
+    if not str(task_id or "").strip():
+        raise ValueError("Pick a task from your list first.")
     task = ctx.tasks.get_task(task_id)
     today = ctx.today()
     label_id = ctx.store.new_id(today)
     due = task.get("due") or {}
     late = _is_late(task, today)
-    subtitle = (f"overdue · due {due['date'][:10]}" if late else f"due {due['date'][:10]}") if due.get("date") else ""
+    h24, gentle = bool(ctx.prefs.get("time_24h")), bool(ctx.prefs.get("gentle_words", True))
+    subtitle = _when(task, today, h24, gentle)
     reason = reason or ("overdue" if late else "urgent" if int(task.get("priority", 1)) >= 3 else "task")
     manifest = [{"row": 1, "task_id": str(task["id"]), "content": task["content"],
                  "due_date": (due.get("date") or "")[:10] or None,
                  "is_recurring": bool(due.get("is_recurring"))}]
+    tag = str((task.get("labels") or [""])[0]).lower()
+    text = ("! " if int(task.get("priority", 1)) >= 3 else "") + _clean(task["content"])
+    body = _short(_clean(task.get("description") or ""), MAX_BODY, "… (the rest is in the task)")
+    steps = [s["text"] for s in task.get("steps") or [] if not s.get("done")][:8]
+    if steps and ctx.prefs.get("show_next_step", True):
+        body = (body + "\n" if body else "") + "Tiny steps:\n" + "\n".join(f"• {s}" for s in steps)
 
     def draw(accent: bool) -> Image.Image:
-        return render_label(_clean(task["content"]), subtitle, body=task.get("description", ""),
-                            code=label_id, accent_subtitle=accent and late)
+        return render_label("NEW TASK" if reason == "new_task" else "TASK", subtitle,
+                            rows=[Row(1, text, meta=tag)], body=body, code=label_id,
+                            accent_subtitle=accent and late)
     return _finish(ctx, reason=reason, kind="task", title=task["content"], draw=draw, label_id=label_id,
                    manifest=manifest, source=source, dry_run=dry_run)
 
 
 def print_text(ctx: Context, text: str, title: str = "NOTE", dry_run: bool | None = None,
                source: str = "manual") -> dict:
+    if not text.strip():
+        raise ValueError("Type something to print.")
+    text, title = text.strip()[:MAX_TEXT], _short(title, 80) or "NOTE"
     label_id = ctx.store.new_id(ctx.today())
+    body = _short(text, MAX_BODY, "… (cut short to fit the label)")  # a long email can't run feet of tape
 
     def draw(accent: bool) -> Image.Image:
-        return render_label(title, ctx.today().strftime("%a %b %-d"), body=text, code=label_id)
+        return render_label(title, ctx.today().strftime("%a %b %-d"), body=body, code=label_id)
     return _finish(ctx, reason="note", kind="text", title=title, draw=draw, label_id=label_id,
                    manifest=[], source=source, dry_run=dry_run, text=text)
 
 
 def add_and_print(ctx: Context, text: str, dry_run: bool | None = None, source: str = "manual") -> dict:
-    """Create a task in the person's to-do app (first line = title, rest = notes), print its ticket."""
+    """Create a task in the person's to-do app (first line = title, rest = notes), print its ticket.
+    On My list the first line understands Brain dump's shortcuts: tomorrow 3pm #call !"""
     first, _, rest = text.strip().partition("\n")
-    task = ctx.tasks.add_task(first.strip()[:500], description=rest.strip())
+    rest = rest.strip()[:MAX_TEXT]
+    if not first.strip():
+        raise ValueError("Type something to print.")
+    tasks = ctx.tasks
+    local = tasks if isinstance(tasks, LocalTasks) else getattr(tasks, "local", None)
+    to_my_list = local is not None and getattr(tasks, "new_tasks_to", "nextbox") != "linked"
+    fields = parse_line(first, ctx.today()) if to_my_list else None
+    if fields:
+        try:
+            Tags(local.db, local.owner).ensure(fields.get("tags", []))
+        except ValueError:
+            pass  # 30 tags already: the task keeps its #tag words, just with no color
+        task = local.create({**fields, "description": rest})
+    else:
+        task = tasks.add_task(first.strip()[:500], description=rest)
     return print_task(ctx, str(task["id"]), dry_run=dry_run, source=source, reason="new_task")
 
 
