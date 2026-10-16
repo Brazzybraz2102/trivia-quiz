@@ -301,6 +301,12 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def _token(request: Request) -> str | None:
         return _bearer(request) or request.cookies.get(COOKIE)
 
+    def _same_origin(request: Request) -> None:
+        """Writes from a browser must come from this site's own pages (scripts send no Origin)."""
+        origin = request.headers.get("origin")
+        if origin and urlparse(origin).netloc != request.headers.get("host"):
+            raise HTTPException(403, "cross-site request refused")
+
     def auth(request: Request, x_nextbox_key: str | None = Header(default=None)) -> Caller:
         if x_nextbox_key:
             if from_internet(request):
@@ -470,23 +476,42 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def health():
         return {"ok": True}
 
+    TOO_MANY = "Too many tries. Wait {n} minutes, then try again. Forgot it? Ask your admin for a one-time password."
+
     @app.post("/auth/login")
     def login(body: LoginBody, request: Request, response: Response):
+        from hashlib import sha256
+        _same_origin(request)
         client = request.client.host if request.client else "?"
-        username = accounts.find_login(body.username) or body.username.strip().lower()  # username or email
+        known = accounts.find_login(body.username)  # username or email; None if there's no such account
+        username = known or body.username.strip().lower()
+        # Whose password the guesses were at, without keeping what was typed (it may be a password).
+        tag = sha256(username.encode()).hexdigest()[:16]
+        account = f"user:{tag}"  # slows guesses at one account spread over many addresses
         if accounts.too_many_failures(client):
-            raise HTTPException(429, "too many attempts; wait 5 minutes")
+            raise HTTPException(429, TOO_MANY.format(n=5))
+        if accounts.too_many_failures(account, limit=10, window=900):
+            raise HTTPException(429, TOO_MANY.format(n=15))
         if not accounts.verify(username, body.password):
-            user = accounts.get(username)
+            user = accounts.get(known) if known else None
             # Only say "turned off" to someone who knows the password; everyone else gets the
             # same answer as a wrong password, and it counts toward the lockout.
-            if user and user["disabled"] and accounts.password_ok(username, body.password):
-                events.log(username, "login", ok=False, kind="auth", detail={"ip": client, "why": "disabled"})
+            if user and user["disabled"] and accounts.password_ok(known, body.password):
+                events.log(known, "login", ok=False, kind="auth", detail={"ip": client, "why": "disabled"})
                 raise HTTPException(403, "this account is turned off; ask an admin")
-            accounts.record_failure(client)
-            events.log(username or "?", "login", ok=False, kind="auth", detail={"ip": client})
-            raise HTTPException(401, "wrong username or password")
-        accounts.clear_failures(client)
+            accounts.record_failure(client, tag)
+            accounts.record_failure(account, tag)
+            # Never log what was typed as the name: only a real account, or "?".
+            events.log(known or "?", "login", ok=False, kind="auth", detail={"ip": client})
+            here, there = 5 - accounts.failure_count(client), 10 - accounts.failure_count(account, 900)
+            left, pause = min(here, there), 5 if here <= there else 15
+            msg = "That username or password didn't match."
+            if left <= 0:
+                msg += f" That was the last try for now: wait {pause} minutes, then try again."
+            elif left <= 2:
+                msg += f" {left} {'try' if left == 1 else 'tries'} left before a {pause}-minute pause."
+            raise HTTPException(401, msg)
+        accounts.clear_failures(client, tag)
         token = accounts.create_session(username, client, request.headers.get("user-agent", ""))
         accounts.touch_login(username)
         events.log(username, "login", kind="auth", detail={"ip": client})
@@ -500,9 +525,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.post("/auth/signup")
     def signup(body: SignupBody, request: Request, response: Response):
         """Join with an invite code. There's no open sign-up: every new account needs a code."""
+        _same_origin(request)
         client = request.client.host if request.client else "?"
         if accounts.too_many_failures(client):
-            raise HTTPException(429, "too many attempts; wait 5 minutes")
+            raise HTTPException(429, "Too many tries. Wait 5 minutes, then try again.")
         if not body.invite.strip():
             raise HTTPException(400, "you need an invite code to join")
         if not body.agree:
@@ -510,12 +536,13 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         try:
             user = accounts.sign_up(body.username, body.password, email=body.email or None, invite=body.invite)
         except AuthError as exc:
-            if "invite" in str(exc):
-                accounts.record_failure(client)  # guessing codes counts toward the lockout
-            events.log(body.username.strip().lower()[:32] or "?", "signup", ok=False, kind="auth",
-                       detail={"ip": client}, error=str(exc))
+            # Wrong codes and taken names or emails all count toward the lockout, so neither codes
+            # nor accounts can be found by trying lots of them.
+            accounts.record_failure(client)
+            events.log("?", "signup", ok=False, kind="auth", detail={"ip": client}, error=str(exc))
             raise HTTPException(400, str(exc)) from exc
         name = user["username"]
+        accounts.record_consent(name, None, terms=TERMS_VERSION)  # they ticked "I agree" to join
         events.log(name, "signup", kind="auth", detail={"ip": client, "household": user["household_id"],
                                                         "terms_version": TERMS_VERSION},
                    household=user["household_id"])
@@ -532,6 +559,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.post("/auth/logout")
     def logout(request: Request, response: Response):
+        _same_origin(request)
         accounts.end_session(_token(request))
         response.delete_cookie(COOKIE, path="/")
         return {"ok": True}
@@ -553,15 +581,22 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 "must_change": user["must_change"], "prefs": user["prefs"],
                 "announcement": s["announcement"], "printing_paused": s["printing_paused"],
                 "data_notice": DATA_NOTICE,
-                "consented": consent.get("version") == DATA_NOTICE_VERSION, "consented_at": consent.get("at")}
+                "consented": consent.get("version") == DATA_NOTICE_VERSION, "consented_at": consent.get("at"),
+                # Everyone agrees to the current Terms and Privacy Policy, including people an admin added.
+                "terms_ok": consent.get("terms") == TERMS_VERSION, "terms_version": TERMS_VERSION,
+                # They agreed to an older notice or older terms: say what's new.
+                "notice_changed": consent.get("version") not in (None, DATA_NOTICE_VERSION)
+                                  or consent.get("terms") not in (None, TERMS_VERSION)}
 
     @app.post("/auth/consent")
     def consent(request: Request):
+        _same_origin(request)
         name = accounts.session_user(_token(request))
         if not name:
             raise HTTPException(401, "sign in required")
-        accounts.record_consent(name, DATA_NOTICE_VERSION)
-        events.log(name, "data_notice_accepted", kind="auth", detail={"version": DATA_NOTICE_VERSION})
+        accounts.record_consent(name, DATA_NOTICE_VERSION, terms=TERMS_VERSION)
+        events.log(name, "data_notice_accepted", kind="auth",
+                   detail={"version": DATA_NOTICE_VERSION, "terms_version": TERMS_VERSION})
         return {"ok": True}
 
     @app.get("/about")
@@ -576,11 +611,25 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def version():
         return {"version": _version(), "build": build, "credit": ctx.settings.credit}
 
+    def _own_password_ok(name: str, password: str) -> bool:
+        """Your password, when you change it or delete your account. Wrong ones count toward a
+        lockout, so a signed-in device left unlocked can't be used to guess it."""
+        key = f"pw:{name}"
+        if accounts.too_many_failures(key):
+            raise HTTPException(429, "Too many tries. Wait 5 minutes, then try again.")
+        if not accounts.verify(name, password):
+            accounts.record_failure(key)
+            return False
+        accounts.clear_failures(key)
+        return True
+
     @app.post("/auth/password")
     def change_password(body: PasswordBody, request: Request, response: Response,
                         caller: Caller = Depends(person)):
-        if not accounts.verify(caller.name, body.current):
-            raise HTTPException(401, "current password is wrong")
+        if not _own_password_ok(caller.name, body.current):
+            raise HTTPException(401, "Your current password didn't match.")
+        if body.new == body.current:  # also stops keeping the temporary password an admin saw
+            raise HTTPException(400, "Pick a password that's different from your current one.")
         try:
             accounts.set_password(caller.name, body.new)  # signs out every device...
         except AuthError as exc:
@@ -633,7 +682,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         """Delete yourself and everything Next Box keeps about you. Your linked apps aren't touched."""
         if body.confirm.strip().lower() != caller.name:
             raise HTTPException(400, "type your username to confirm")
-        if not accounts.verify(caller.name, body.password):
+        if not _own_password_ok(caller.name, body.password):
             raise HTTPException(403, "wrong password")
         try:
             accounts.remove_user(caller.name)
@@ -828,26 +877,53 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             return jobs.one_thing(dataclasses.replace(c, tasks_factory=lambda: my_list(caller), _tasks=None))
 
     # ----------------------------------------------------------- Get started guide
-    SETUP_STEPS = ("tasks", "home", "app", "calendar", "printer", "preview", "focus")
+    SETUP_STEPS = ("tasks", "home", "app", "calendar", "printer", "preview", "today", "snap", "focus")
+    NEW_STEPS = ("today", "snap")  # added later: people who'd already finished the others aren't sent back
     _reach_cache: dict[str, tuple[float, bool]] = {}
+
+    def _has_own_tasks(caller: Caller) -> bool:
+        from sqlalchemy import select as _select
+
+        from . import db as _db
+        with accounts.db.connect() as conn:  # open or done
+            return conn.execute(_select(_db.tasks.c.id).where(_db.tasks.c.owner == caller.name).limit(1)).first() is not None
 
     @app.get("/setup")
     def setup_guide(caller: Caller = Depends(person)):
-        """The Get started checklist. Steps tick themselves off from what the person has done;
-        optional ones can be skipped (remembered in prefs.setup_dismissed)."""
+        """The Get started checklist. Steps tick themselves off from what the person has done, and
+        stay ticked (prefs.setup_done); optional ones can be skipped (prefs.setup_dismissed)."""
         dismissed = set(caller.prefs.get("setup_dismissed") or [])
-        done: dict[str, bool] = {}
-        done["tasks"] = bool(my_list(caller).all_open()) or bool(ctx.store.list_printed(1, by=caller.name))
-        done["app"] = bool(connections.status(caller.name).get("connected"))
-        done["calendar"] = bool(connections.calendars(caller.name))
-        done["preview"] = bool(ctx.store.list_printed(1, by=caller.name))
-        if "printer" not in dismissed:
+        ticked = {k for k in caller.prefs.get("setup_done") or [] if k in SETUP_STEPS}
+        done: dict[str, bool] = {k: True for k in ticked}
+        linked = None
+        if "tasks" not in ticked or "app" not in ticked:
+            linked = bool(connections.status(caller.name).get("connected"))
+        if "tasks" not in ticked:  # finishing your only task doesn't untick it
+            done["tasks"] = linked or _has_own_tasks(caller)
+        if "app" not in ticked:
+            done["app"] = linked
+        if "calendar" not in ticked:
+            done["calendar"] = bool(connections.calendars(caller.name))
+        if "preview" not in ticked or "today" not in ticked:
+            tickets = ctx.store.list_printed(200, by=caller.name)
+            done["preview"] = done.get("preview") or any(
+                t.get("kind") in ("stickers", "strips") and t.get("manifest") for t in tickets)
+            done["today"] = done.get("today") or any(t.get("kind") == "today" for t in tickets)
+        if "snap" not in ticked:
+            done["snap"] = bool(ctx.store.list_scans(1, by=caller.name))
+        if "printer" not in dismissed and "printer" not in ticked:
             hit = _reach_cache.get(caller.household)
             if not hit or hit[0] < time.time() - 60:  # don't knock on the printer every page load
                 mine = registry.all(caller.household)[:3]
                 hit = (time.time(), any(printer.is_reachable(p, timeout=1.0) for p in mine))
                 _reach_cache[caller.household] = hit
             done["printer"] = hit[1]
+        if caller.prefs.get("setup_hidden") or all(done.get(k) or k in dismissed
+                                                    for k in SETUP_STEPS if k not in NEW_STEPS):
+            done.update({k: True for k in NEW_STEPS})
+        newly = {k for k in SETUP_STEPS if done.get(k)} - ticked
+        if newly:
+            accounts.set_prefs(caller.name, {"setup_done": sorted(ticked | newly)})
         steps = [{"key": k, "done": bool(done.get(k)) or k in dismissed, "skipped": k in dismissed and not done.get(k)}
                  for k in SETUP_STEPS]
         return {"steps": steps, "hidden": bool(caller.prefs.get("setup_hidden")),
@@ -1241,7 +1317,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             result = connections.finish_signin(who, app_name, state, code)
         except ProviderError as exc:
             events.log(who, "signin", ok=False, detail={"app": app_name}, error=str(exc))
-            return RedirectResponse(f"/app/#settings&signin={quote(str(exc))}", status_code=303)
+            # The details stay in their activity; the page only shows messages it knows (app.js SIGNIN_MSGS).
+            msg = "That sign-in didn't work. Try again."
+            return RedirectResponse(f"/app/#settings&signin={quote(msg)}", status_code=303)
         events.log(who, "signin", detail={"app": app_name, "kind": result["kind"]})
         return RedirectResponse(f"/app/#settings&signin={quote('Connected ' + oauth.APPS[app_name]['name'])}",
                                 status_code=303)

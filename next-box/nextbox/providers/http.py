@@ -39,7 +39,8 @@ def check_public_url(url: str, what: str = "That address") -> str:
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
         if not ip.is_global:
-            raise ProviderError(f"{what} points inside a private network, which Next Box doesn't allow")
+            raise ProviderError(f"{what} points inside a private network, which Next Box doesn't allow. "
+                                "If it's on your home network, ask your Next Box owner.")
     return url
 
 
