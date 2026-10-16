@@ -368,6 +368,10 @@ Closing the loop:
 | A copy of your journal | Journal → Download my journal (.zip or PDF); one day: Print my journal page |
 | A task that won't start | Just one thing, Edit or a slug → Break it down → tick the steps → Save |
 | How did my week go? | Journal → Look back on my week (tick "Include my journal notes" if you like) → Save to my journal |
+| Fit Next Box to you | New accounts answer 5 quick questions after the notice; any time: Settings → Help → Run setup again |
+| Your day in time order | My list → Schedule: calendar events, timed tasks, a Now line and "Next: … in 20 min" |
+| Easier reading | Settings → General → Easy-to-read text (screen and printed labels) |
+| No surprises | Settings → Focus → Same words every time (opens My list on Schedule) |
 | History | web app → Printed, or `nextbox printed` |
 | Sign out | web app → Account → Sign out |
 

@@ -157,6 +157,7 @@ function clearPerson() {
   $("#journal").classList.remove("searching"); jData.clear(); lines = { items: [], opener: null };
   listData = { tasks: [], linked: [], tags: [] }; picked = new Set(); skipped = new Set(); guide = null; showingDone = false;
   forgetListExtras();
+  todayCal = null; viewPick = "";
   conn = null; printOpts = null; update = null; editing = null; suRows = []; suPicked = new Set(); suOpen = null;
   $("#lookOut").innerHTML = ""; $("#lookNotes").checked = false; lookText = ""; lookPrivacy();  // the AI helpers
   markTab("mylist");
@@ -221,6 +222,8 @@ async function boot() {
     $("#noticeMsg").textContent = "";
     if (!$("#noticeDialog").open) $("#noticeDialog").showModal();
   }
+  // A new account: the setup questions, once the notice is agreed (boot runs again after "I agree").
+  else if (me.setup_quiz && !quizAsked && !$("#quizDialog").open) { quizAsked = true; openQuiz(); }
 }
 
 $("#noticeOk").onclick = async () => {
@@ -604,7 +607,9 @@ async function refreshStatus() {
 // so nobody is asked "Send this to the printer?" for something that will only be a preview.
 function applyDry() {
   const why = statusNow?.printing_paused ? "Printing is paused by an admin."
-    : me?.prefs?.always_dry_run ? "Always preview only is on in Settings."
+    : me?.prefs?.always_dry_run ? ({ paper: "You print on paper: make a preview, then tap Print on paper.",
+                                    none: "No printer yet, so everything is a preview." }[me.prefs.print_with]
+                                  || "Always preview only is on in Settings.")
     : statusNow?.dry_run_forced ? "This Next Box makes previews only for now."
     : statusNow && !statusNow.printer ? "No label printer yet: print previews on paper."
     : "";
@@ -1007,7 +1012,7 @@ function prefErr(el, msg) {
 }
 
 $$("[data-pref]").forEach((el) => el.onchange = async () => {
-  const k = el.dataset.pref, typed = el.type === "text" || el.type === "number";
+  const k = el.dataset.pref, typed = el.type === "text" || el.type === "number" || el.type === "time";
   let v = el.type === "checkbox" ? el.checked : el.value;
   if (el.type === "number") v = parseInt(v, 10);
   if (el.type === "range") v = parseFloat(v);
@@ -1018,6 +1023,8 @@ $$("[data-pref]").forEach((el) => el.onchange = async () => {
     loadPrefs(prefs);
     if (k === "always_dry_run") refreshStatus();  // the header and the Preview box follow it
     if (k === "time_24h" || k === "gentle_words") { renderList(); loadToday(); }  // times and words on My list follow it
+    if (k === "routine_mode") forgetListView();  // My list opens on its new default view (Schedule when on)
+    if (["routine_mode", "routine_morning", "routine_evening"].includes(k)) renderList();
     toast("Saved");
   } catch (e) {
     if (typed) prefErr(el, errText(e));
@@ -1549,6 +1556,7 @@ function renderList() {
   const spot = listFocus || focusSpot(document.activeElement);
   listFocus = null;
   loadFilter();
+  if (markListView() === "schedule") return renderSchedule(spot);  // List | Schedule (below)
   const now = today();
   const all = listData.tasks.filter((t) => !t.done);  // the server sends them in ticket order
   const shown = filtering() ? matches : () => true;
@@ -1737,7 +1745,8 @@ async function markDone(id, btn) {
     picked.delete(id);
     // A linked app's repeating task has moved on there: Undo can't put its day back.
     const canUndo = r.undo != null && !(t && !String(id).startsWith("nb:") && t.due?.is_recurring);
-    snack(["Done ✓", "Nice. ✓", "That counts. ✓", "One less thing ✓"][Math.floor(Math.random() * 4)],
+    // Same words every time (routine_mode): always "Done ✓", never a surprise.
+    snack(me?.prefs?.routine_mode ? "Done ✓" : ["Done ✓", "Nice. ✓", "That counts. ✓", "One less thing ✓"][Math.floor(Math.random() * 4)],
           canUndo ? () => undoDone(id, r.undo) : null);
     await loadList();
   } catch (err) { listError(err, id); }
@@ -2817,11 +2826,360 @@ $("#calList").addEventListener("click", async (e) => {
 
 async function loadToday() {
   let r;
-  try { r = await api("/calendars/today"); } catch { $("#todayCard").hidden = true; return; }
+  try { r = await api("/calendars/today"); } catch { $("#todayCard").hidden = true; todayCal = { failed: true, events: [], problems: [] }; return calChanged(); }
+  todayCal = r;
   $("#todayCard").hidden = !r.events.length && !r.problems.length;
   $("#todayEvents").innerHTML = r.events.map((e) => `<div class="mini"><b style="display:inline-block;min-width:70px">${e.all_day ? "all day" : esc(fmtClock(e.start))}</b>${esc(e.title)}${e.location ? ` <span class="muted">· ${esc(e.location)}</span>` : ""}</div>`).join("")
     + r.problems.map((p) => `<div class="mini err">${esc(p)}</div>`).join("");
+  calChanged();
 }
+
+
+// ---------------------------------------------------------------- My list: List | Schedule
+// Schedule puts today in one column by time: calendar events (read-only), timed tasks and the routine's
+// "Plan your day" and "Look back", with a Now line and "Next: … in 20 min". Tasks without a time follow
+// under "Any time today" in the order today's label prints them. Anyone can pick it; "Same words every
+// time" (routine_mode) makes it the view My list opens on. The pick is kept on this device.
+let todayCal = null;   // GET /calendars/today as last loaded, { failed: true } if it couldn't load, null before
+let viewPick = "";     // this visit's List/Schedule pick (also kept on this device)
+let schedItems = [], schedTimer = null;
+const myListViewKey = () => (me ? `nb.listView:${me.username}` : "");
+function myListView() {
+  let v = viewPick;
+  if (!v) { try { v = localStorage.getItem(myListViewKey()) || ""; } catch {} }
+  return v === "list" || v === "schedule" ? v : me?.prefs?.routine_mode ? "schedule" : "list";
+}
+function forgetListView() {
+  viewPick = "";
+  try { localStorage.removeItem(myListViewKey()); } catch {}
+}
+// The toggle shows the view, and Today's calendar card steps aside while Schedule shows the events itself.
+function markListView() {
+  const v = myListView();
+  $$("#listView [data-view]").forEach((b) => { b.classList.toggle("on", b.dataset.view === v); b.setAttribute("aria-pressed", String(b.dataset.view === v)); });
+  if (todayCal) $("#todayCard").hidden = v === "schedule" || (!todayCal.events.length && !todayCal.problems.length);
+  return v;
+}
+function calChanged() { if (me && myListView() === "schedule") renderList(); else markListView(); }
+$("#listView").onclick = (e) => {
+  const b = e.target.closest("[data-view]");
+  if (!b || b.getAttribute("aria-pressed") === "true") return;
+  viewPick = b.dataset.view;
+  try { localStorage.setItem(myListViewKey(), viewPick); } catch {}
+  renderList();
+};
+
+const schedMinutes = (hhmm) => +hhmm.slice(0, 2) * 60 + +hhmm.slice(3, 5);
+const schedClock = (min) => { const m = Math.min(Math.max(min, 0), 24 * 60 - 1); return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
+const schedNowMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
+const schedIn = (min) => (min < 60 ? `${min} min` : `${Math.floor(min / 60)} h${min % 60 ? ` ${min % 60} min` : ""}`);
+
+function scheduleHtml() {
+  const now = today(), p = me?.prefs || {};
+  const day = (t) => (t.due ? t.due.date.slice(0, 10) : "");
+  const timed = (t) => day(t) === now && t.due.date.length > 10;
+  const open = [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])];
+  const events = todayCal?.events || [];
+  const items = [];
+  for (const t of open.filter(timed)) {
+    const start = schedMinutes(t.due.date.slice(11, 16));
+    items.push({ kind: "task", start, end: t.minutes ? start + t.minutes : null, name: t.content, t });
+  }
+  for (const e of events.filter((x) => !x.all_day && x.start)) items.push({ kind: "event", start: schedMinutes(e.start), end: e.end ? schedMinutes(e.end) : null, name: e.title, e });
+  items.push({ kind: "plan", start: schedMinutes(p.routine_morning || "08:00"), end: null });
+  items.push({ kind: "look", start: schedMinutes(p.routine_evening || "18:00"), end: null });
+  const order = { plan: 0, look: 0, event: 1, task: 2 };
+  items.sort((a, b) => a.start - b.start || order[a.kind] - order[b.kind]);
+  schedItems = items;
+  // Any time today: as today's label orders them (urgent, today, then waiting, newest first). My list
+  // comes in that order already; the linked app's tasks are slotted in by the same rule.
+  const late = (t) => Math.round((new Date(now) - new Date(day(t))) / 86400000);
+  const key = (t) => [t.priority >= 3 ? 0 : day(t) === now ? 1 : 2, -(t.priority || 1), late(t)];
+  const anytime = open.filter((t) => day(t) && day(t) <= now && !timed(t)).map((t, i) => [t, i])
+    .sort(([a, i], [b, j]) => { const x = key(a), y = key(b); return x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || i - j; })
+    .map(([t]) => t);
+  const later = listData.tasks.filter((t) => !t.done && (!t.due || day(t) > now)).length;
+  const allDay = events.filter((e) => e.all_day);
+  let html = `<p class="schednext" id="schedNext"></p>`;
+  if (!todayCal) html += `<p class="muted">Loading today's calendar…</p>`;
+  else if (todayCal.failed) html += `<p class="err">Couldn't load your calendar, so its events aren't here. <button class="linkish" data-cal-retry>Try again</button></p>`;
+  html += (todayCal?.problems || []).map((x) => `<p class="err">${esc(x)}</p>`).join("");
+  if (allDay.length) html += `<div class="group" id="schedAllDay">All day</div><ul class="sched" aria-labelledby="schedAllDay">${allDay.map((e) => schedEventRow(e)).join("")}</ul>`;
+  html += `<div class="group" id="schedHead">Today by time</div><ol class="sched" id="schedList" aria-labelledby="schedHead">${items.map(schedRow).join("")}</ol>`;
+  if (!items.some((x) => x.kind === "task" || x.kind === "event")) {
+    html += `<p class="muted">Nothing at a set time today. Give a task a time in Brain dump, like “call Sam 3pm”.</p>`;
+  }
+  html += `<div class="group">Any time today (${anytime.length})</div>`
+    + (anytime.length ? anytime.map(taskRow).join("") : `<p class="muted">Nothing else due today.</p>`);
+  if (showingDone) {
+    const done = listData.tasks.filter((t) => t.done);
+    html += `<div class="group">Done (${done.length})</div>`
+      + (done.length ? done.map(taskRow).join("") : `<p class="muted">Nothing finished yet. It'll show here when you tick something.</p>`);
+  }
+  if (later) html += `<p class="muted">Later: ${later === 1 ? "1 more task" : `${later} more tasks`} on your list, coming up or someday. <button class="linkish" data-view-go="list">Show them in List</button></p>`;
+  return html;
+}
+function schedEventRow(e, x = null) {
+  const meta = [e.location, e.calendar].filter(Boolean).map(esc).join(" · ");
+  const time = x ? `${esc(fmtClock(schedClock(x.start)))}${x.end ? `<span>to ${esc(fmtClock(schedClock(x.end)))}</span>` : ""}` : "all day";
+  return `<li class="srow event"${x ? ` data-start="${x.start}" data-end="${x.end ?? ""}"` : ""}><div class="stime">${time}</div>
+    <div class="sbody"><div class="text"><span aria-hidden="true">📅 </span><span class="sr-only">Calendar: </span>${esc(e.title)}<span class="nowtag" hidden>now</span></div>
+    ${meta ? `<div class="meta">${meta}</div>` : ""}</div></li>`;
+}
+function schedRow(x) {
+  const time = esc(fmtClock(schedClock(x.start)));
+  if (x.kind === "event") return schedEventRow(x.e, x);
+  if (x.kind === "task") {
+    // Its time is in the column, so the row doesn't say "today 9:00a" again (the buttons act on the task by its id).
+    return `<li class="srow" data-start="${x.start}" data-end="${x.end ?? ""}"><div class="stime">${time}</div>${taskRow({ ...x.t, due: null })}</li>`;
+  }
+  const [name, what, action] = x.kind === "plan"
+    ? ["Plan your day", "Print today's label and pick your one thing.", `<button class="linkish" data-sched-print>Today's label</button>`]
+    : ["Look back", "Tick your label, write a few notes, snap both pages.", `<button class="linkish" data-go-tab="scan">Open Snap</button>`];
+  return `<li class="srow routine" data-start="${x.start}" data-end=""><div class="stime">${time}</div>
+    <div class="sbody"><div class="text">${name}</div><div class="meta">${what} ${action}</div></div></li>`;
+}
+function renderSchedule(spot) {
+  $("#listBody").innerHTML = scheduleHtml();
+  $("#listBody").classList.remove("muted");
+  updatePicks();
+  renderNow();
+  restoreFocus(spot);
+  tickSchedule();
+  if (!schedTimer) schedTimer = setInterval(tickSchedule, 30000);
+}
+// Every half minute while Schedule shows: the Now line moves, finished events go grey, "Next" counts down.
+// Only these change, so whatever you're reading or have focused stays where it is.
+function tickSchedule() {
+  const list = $("#schedList");
+  if (!list || !me || myListView() !== "schedule" || !$("#mylist").classList.contains("on") || document.visibilityState !== "visible") return;
+  if (lastLoad.day && today() !== lastLoad.day) { loadList(); loadToday(); return; }  // past midnight: a new day
+  const n = schedNowMin();
+  let line = list.querySelector(".nowline");
+  if (!line) { line = document.createElement("li"); line.className = "nowline"; }
+  line.textContent = `Now ${fmtClock(schedClock(n))}`;
+  const rows = [...list.querySelectorAll(":scope > .srow")];
+  const ahead = rows.find((r) => +r.dataset.start > n);
+  if (ahead) { if (line.nextElementSibling !== ahead) list.insertBefore(line, ahead); }
+  else if (list.lastElementChild !== line) list.appendChild(line);
+  for (const r of rows) {
+    const s = +r.dataset.start, e = r.dataset.end === "" ? null : +r.dataset.end;
+    if (!r.querySelector(".task")) r.classList.toggle("past", e != null ? e <= n : s < n);  // a task stays as it is until it's ticked
+    const tag = r.querySelector(".nowtag");
+    if (tag) tag.hidden = !(e != null && s <= n && n < e);
+  }
+  const real = schedItems.filter((x) => x.kind === "task" || x.kind === "event");
+  const cur = real.find((x) => x.end != null && x.start <= n && n < x.end);
+  const next = real.find((x) => x.start > n);
+  const short = (s) => (s.length > 60 ? s.slice(0, 57) + "…" : s);
+  $("#schedNext").innerHTML = [
+    cur ? `<b>Now:</b> ${esc(short(cur.name))}, until ${esc(fmtClock(schedClock(cur.end)))}` : "",
+    next ? `<b>Next:</b> ${esc(short(next.name))} in ${schedIn(next.start - n)} (${esc(fmtClock(schedClock(next.start)))})` : "",
+  ].filter(Boolean).join("<br>") || (real.length ? "Nothing else at a set time today." : "");
+}
+document.addEventListener("visibilitychange", () => tickSchedule());
+$("#listBody").addEventListener("click", (e) => {
+  if (e.target.closest("[data-view-go]")) { viewPick = "list"; try { localStorage.setItem(myListViewKey(), "list"); } catch {} renderList(); $("#listView [data-view=list]").focus(); }
+  else if (e.target.closest("[data-sched-print]")) $("#printTodayList").click();
+  else if (e.target.closest("[data-cal-retry]")) { todayCal = null; renderList(); loadToday(); }
+});
+
+
+// ---------------------------------------------------------------- setup questions
+// New accounts answer these once, after the data notice (Settings → Help runs them again). One question
+// per screen with big buttons; any question, or all of them, can be skipped. The answers are saved
+// together at the end as ordinary settings (POST /setup/quiz), and the last screen says what changed
+// and where to change it later.
+const QUIZ = [
+  { key: "print", q: "How will you print?", hint: "Pick the closest. You can change it any time.",
+    opts: [["label", "Label printer", "A Brother or other label printer"],
+           ["paper", "Regular printer", "Any home or office printer: you print previews on paper"],
+           ["none", "No printer yet", "Use Next Box on screen and add a printer later"]],
+    now: (p) => p.print_with || null },
+  { key: "journal", q: "Do you keep a paper journal or planner?", hint: "Today's label goes on the left page and your notes on the right. Next Box keeps a photo of both.",
+    opts: [["a5", "Yes, A5", "About 6 × 8 inches"], ["half_letter", "Yes, half letter", "5.5 × 8.5 inches"],
+           ["letter", "Yes, letter", "8.5 × 11 inches"], ["a4", "Yes, A4", "21 × 30 cm"], ["none", "No journal", "Just the list, please"]],
+    now: (p) => (p.journal_mode ? p.paper_size : "none") },
+  { key: "rows", q: "How many tasks a day feels doable?", hint: "That many go on your daily label. The rest wait, listed small at the bottom.",
+    opts: [[3, "3 tasks", "A short, calm list"], [5, "5 tasks", "A few more"], [8, "8 tasks", "A full day"]],
+    now: (p) => p.max_rows },
+  { key: "helps", multi: true, q: "What helps you most?", hint: "Pick any that fit.",
+    opts: [["gentle", "Short lists and gentle words", "“Waiting 3 days”, never “overdue”. Often picked by people with ADHD."],
+           ["reading", "Easy-to-read text", "A font made for reading, with more space. Often picked by people with dyslexia."],
+           ["routine", "Same routine every day, no surprises", "The same words every time, and your day in time order. Often picked by autistic people."],
+           ["basics", "Just the basics", "None of these extras"]] },
+  { key: "times", q: "When do you plan your day, and when do you look back?", hint: "Both show on My list's Schedule, so every day has the same shape.", times: true },
+];
+let quiz = { i: 0, answers: {}, rerun: false, saving: false };
+let quizAsked = false;  // shown by itself once per visit at most
+function openQuiz() {
+  quiz = { i: 0, answers: {}, rerun: !!me?.prefs?.setup_quiz_done, saving: false };
+  if (!$("#quizDialog").open) $("#quizDialog").showModal();
+  drawQuiz();
+}
+const quizAnswered = () => Object.keys(quiz.answers).length > 0;
+function drawQuiz() {
+  const q = QUIZ[quiz.i], p = me?.prefs || {};
+  $("#quizMsg").textContent = "";
+  $("#quizStep").textContent = `Question ${quiz.i + 1} of ${QUIZ.length}${quiz.i === 0 && !quiz.rerun ? " · about a minute" : ""}`;
+  $("#quizBar").style.width = `${Math.round(100 * quiz.i / QUIZ.length)}%`;
+  $("#quizSkip").hidden = false;
+  $("#quizSkip").textContent = quizAnswered() ? "Skip the rest" : "Skip setup";
+  $("#quizQ").textContent = q.q;
+  $("#quizHint").textContent = q.hint;
+  const was = quiz.answers[q.key];
+  if (q.times) {
+    $("#quizBody").innerHTML = `<div class="quiztimes">
+      <div class="field"><label for="quizPlan">Plan my day at</label><input type="time" id="quizPlan" value="${esc(quiz.answers.plan_at || p.routine_morning || "08:00")}"></div>
+      <div class="field"><label for="quizLook">Look back at</label><input type="time" id="quizLook" value="${esc(quiz.answers.review_at || p.routine_evening || "18:00")}"></div></div>`;
+  } else {
+    const current = quiz.rerun && q.now ? q.now(p) : null;
+    const on = (v) => (q.multi ? (was || (quiz.rerun ? quizHelpsNow(p) : [])).includes(v) : was === v);
+    $("#quizBody").innerHTML = `<div class="quizopts" role="group" aria-labelledby="quizQ">${q.opts.map(([v, name, sub]) =>
+      // Several to pick: toggle buttons. One to pick: plain buttons that answer and move on (going Back
+      // shows the answer given, and a second run shows the setting as it is now).
+      q.multi ? `<button type="button" class="quizopt" data-answer="${esc(v)}" aria-pressed="${on(v)}">
+        <span class="tick" aria-hidden="true">${on(v) ? "✓" : ""}</span>
+        <span><b>${esc(name)}</b><span class="muted">${esc(sub)}</span></span></button>`
+      : `<button type="button" class="quizopt${on(v) ? " chosen" : ""}" data-answer="${esc(v)}">
+        <span><b>${esc(name)}</b><span class="muted">${esc(sub)}</span></span>
+        ${on(v) ? `<span class="quiznow">Your answer</span>` : current === v && was === undefined ? `<span class="quiznow">Your setting now</span>` : ""}</button>`).join("")}</div>`;
+  }
+  $(".quiznav").hidden = false;
+  $("#quizBack").hidden = quiz.i === 0;
+  $("#quizPass").hidden = false;
+  $("#quizNext").hidden = !q.multi && !q.times;
+  $("#quizNext").textContent = quiz.i === QUIZ.length - 1 ? "Finish" : "Next";
+  $("#quizQ").focus();
+}
+// On a second run, what's already on (so "Next" alone keeps things as they are).
+function quizHelpsNow(p) {
+  const on = [p.gentle_words && "gentle", p.reading_mode && "reading", p.routine_mode && "routine"].filter(Boolean);
+  return on.length ? on : ["basics"];
+}
+function quizStep(delta) {
+  quiz.i += delta;
+  if (quiz.i >= QUIZ.length) return saveQuiz();
+  drawQuiz();
+}
+$("#quizBody").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-answer]");
+  if (!b) return;
+  const q = QUIZ[quiz.i];
+  if (!q.multi) {
+    quiz.answers[q.key] = q.key === "rows" ? +b.dataset.answer : b.dataset.answer;
+    return quizStep(1);
+  }
+  // Several can be picked; "Just the basics" goes on its own.
+  const v = b.dataset.answer, opts = $$("#quizBody [data-answer]");
+  const press = (el, yes) => { el.setAttribute("aria-pressed", String(yes)); el.querySelector(".tick").textContent = yes ? "✓" : ""; };
+  const yes = b.getAttribute("aria-pressed") !== "true";
+  press(b, yes);
+  if (yes) for (const o of opts) if (o !== b && (v === "basics" || o.dataset.answer === "basics")) press(o, false);
+});
+$("#quizNext").onclick = () => {
+  const q = QUIZ[quiz.i];
+  if (q.times) {
+    const plan = $("#quizPlan").value, look = $("#quizLook").value;
+    if (!plan || !look) { $("#quizMsg").textContent = "Pick both times, or skip this question."; return (plan ? $("#quizLook") : $("#quizPlan")).focus(); }
+    Object.assign(quiz.answers, { plan_at: plan, review_at: look });
+  } else if (q.multi) {
+    const picked = $$("#quizBody [data-answer][aria-pressed=true]").map((b) => b.dataset.answer);
+    if (picked.length) quiz.answers.helps = picked; else delete quiz.answers.helps;  // none picked: skipped
+  }
+  quizStep(1);
+};
+$("#quizPass").onclick = () => {  // skip this one: whatever was picked here before is forgotten
+  const q = QUIZ[quiz.i];
+  for (const k of q.times ? ["plan_at", "review_at"] : [q.key]) delete quiz.answers[k];
+  quizStep(1);
+};
+$("#quizBack").onclick = () => quizStep(-1);
+$("#quizSkip").onclick = () => skipQuiz();
+$("#quizDialog").addEventListener("cancel", (e) => {  // Esc does what the Skip button says
+  if (quiz.i >= QUIZ.length && !quiz.saving) return;   // the last screen: Esc just closes it
+  e.preventDefault();
+  if (!quiz.saving) skipQuiz();
+});
+async function skipQuiz() {
+  if (quizAnswered()) { quiz.i = QUIZ.length; return saveQuiz(); }  // "Skip the rest": keep what was answered
+  $("#quizDialog").close();
+  if (quiz.rerun) return toast("Nothing changed.");
+  try {
+    const r = await api("/setup/quiz", { method: "POST", json: { skip: true } });
+    me.prefs = r.prefs;
+    renderGuide();
+    toast("Skipped. These questions are in Settings → Help whenever you want them.");
+  } catch (err) { toast(errText(err)); }
+}
+async function saveQuiz() {
+  quiz.saving = true;
+  $("#quizStep").textContent = "All done";
+  $("#quizBar").style.width = "100%";
+  $("#quizQ").textContent = "Saving your answers…";
+  $("#quizHint").textContent = "";
+  $("#quizBody").innerHTML = "";
+  $(".quiznav").hidden = $("#quizSkip").hidden = true;  // the last screen has its own buttons
+  $("#quizDialog").setAttribute("aria-busy", "true");
+  let r;
+  try { r = await api("/setup/quiz", { method: "POST", json: { answers: quiz.answers } }); }
+  catch (err) {
+    quiz.saving = false;
+    $("#quizDialog").removeAttribute("aria-busy");
+    $("#quizQ").textContent = "Couldn't save your answers";
+    $("#quizHint").textContent = "Nothing was changed yet.";
+    $("#quizMsg").textContent = errText(err);
+    $("#quizBody").innerHTML = `<div class="row"><button type="button" class="go" data-quiz="retry">Try again</button>
+      <button type="button" class="plain" data-quiz="back">Change my answers</button><button type="button" class="plain" data-quiz="close">Not now</button></div>`;
+    return $("#quizQ").focus();
+  }
+  quiz.saving = false;
+  $("#quizDialog").removeAttribute("aria-busy");
+  me.prefs = r.prefs;
+  // Everything that follows the settings shows them now: the look, the Preview box, My list, the guide.
+  loadPrefs(me.prefs); applyLook(); refreshStatus();
+  if ("routine_mode" in r.changed) forgetListView();
+  renderList(); loadGuide();
+  const lines = quizSummary(r.changed);
+  $("#quizQ").textContent = lines.length ? "You're all set" : "Nothing changed";
+  $("#quizHint").textContent = lines.length ? "Here's what changed:" : "Your settings are as they were.";
+  $("#quizBody").innerHTML = (lines.length ? `<ul class="quizsum">${lines.map(([text, where]) =>
+      `<li>${esc(text)}<span class="muted">Change it in ${esc(where)}.</span></li>`).join("")}</ul>` : "")
+    + `<p class="muted">Run these questions again any time from Settings → Help.</p>
+      <div class="row quizfoot"><button type="button" class="go" data-quiz="close">Start using Next Box</button>
+      <button type="button" class="plain" data-quiz="settings">Open Settings</button></div>`;
+  $("#quizQ").focus();
+}
+const PAPER_NAMES = { a5: "A5", half_letter: "half letter", letter: "letter", a4: "A4" };
+function quizSummary(c) {
+  const out = [];
+  if ("print_with" in c) {
+    out.push([{ label: "Printing on your label printer. “Preview only” starts ticked: untick it to really print.",
+                paper: "Printing on paper: make a preview, then tap Print on paper.",
+                none: "No printer yet: everything is a preview, so nothing prints by surprise." }[c.print_with], "Settings → Printing"]);
+  }
+  if ("journal_mode" in c) {
+    out.push(c.journal_mode
+      ? [`Journal, ${PAPER_NAMES[c.paper_size] || "letter"} size: your daily label gets a “Today's win” line, and every page you snap is kept in Journal.`, "Settings → Focus and Printing"]
+      : ["No journal: the daily label has no journal lines, and a snap is kept in Journal only when it has notes.", "Settings → Focus"]);
+  }
+  if ("max_rows" in c) out.push([`${c.max_rows} tasks on your daily label. The rest are listed small at the bottom.`, "Settings → Focus"]);
+  if ("gentle_words" in c) out.push([c.gentle_words ? "Gentle words: “waiting 3d”, never “overdue”." : "Gentle words: off.", "Settings → Focus"]);
+  if ("reading_mode" in c) out.push([c.reading_mode ? "Easy-to-read text: on, here and on your labels." : "Easy-to-read text: off.", "Settings → General"]);
+  if ("routine_mode" in c) out.push([c.routine_mode ? "Same words every time: on. My list opens on Schedule." : "Same words every time: off.", "Settings → Focus"]);
+  if ("routine_morning" in c || "routine_evening" in c) {
+    out.push([`Plan your day at ${fmtClock(me.prefs.routine_morning)} and look back at ${fmtClock(me.prefs.routine_evening)}.`, "Settings → Focus"]);
+  }
+  return out;
+}
+$("#quizBody").addEventListener("click", (e) => {
+  const act = e.target.closest("[data-quiz]")?.dataset.quiz;
+  if (act === "retry") saveQuiz();
+  else if (act === "back") { quiz.i = QUIZ.length - 1; drawQuiz(); }
+  else if (act === "close") $("#quizDialog").close();
+  else if (act === "settings") { $("#quizDialog").close(); goto("settings"); }
+});
+$("#quizAgain").onclick = () => openQuiz();
 
 
 // ---------------------------------------------------------------- Get started guide
@@ -2876,7 +3234,8 @@ const STEPS = {
   snap: { title: "Mark it and snap it", text: "Tick a row with a pen, then take a photo in Snap. Try it on a preview: print it on paper or hold the preview up to your camera.",
           go: ["Open Snap", () => goto("scan")], skip: true },
   focus: { title: "Make it fit your brain", text: "How many tasks per day, gentle wording, yesterday's wins, tiny steps: it's all in Focus & ADHD helpers.",
-           go: ["Open", () => goto("settings", "#focusCard")], mark: "Looks good" },
+           go: () => (me?.prefs?.setup_quiz_done ? ["Open", () => goto("settings", "#focusCard")] : ["Answer 5 quick questions", () => openQuiz()]),
+           mark: "Looks good" },
 };
 const val = (v) => (typeof v === "function" ? v() : v);
 
@@ -3968,6 +4327,7 @@ function applyLook() {
   $("#meBtn").textContent = initial();
   const size = me.prefs.text_size || "normal";
   if (size === "normal") delete document.documentElement.dataset.text; else document.documentElement.dataset.text = size;
+  document.documentElement.toggleAttribute("data-reading", !!me.prefs.reading_mode);  // Easy-to-read text
 }
 function loadProfile() {
   if (!me) return;

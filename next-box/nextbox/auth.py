@@ -59,6 +59,13 @@ PREFS = {
     "color_rules": ({}, lambda v: _valid_rules(v)),     # reason -> label color, e.g. overdue -> red
     "split_overdue": (False, lambda v: isinstance(v, bool)),  # overdue tasks on their own ticket
     "ai_helpers": (True, lambda v: isinstance(v, bool)),  # "Break it down" and "Look back on my week" (only when tapped)
+    # FC: the setup questions, reading-friendly and same-words-every-time modes, the day's routine times
+    "setup_quiz_done": (False, lambda v: isinstance(v, bool)),  # answered or skipped the setup questions
+    "print_with": ("", lambda v: v in ("", "label", "paper", "none")),  # their answer: tailors the preview hints
+    "reading_mode": (False, lambda v: isinstance(v, bool)),  # easy-to-read font and spacing, on screen and labels
+    "routine_mode": (False, lambda v: isinstance(v, bool)),  # same words every time; My list opens on Schedule
+    "routine_morning": ("08:00", lambda v: _is_hhmm(v)),     # when they plan the day
+    "routine_evening": ("18:00", lambda v: _is_hhmm(v)),     # when they look back and snap their pages
 }
 
 # What to tell someone whose setting wasn't saved: plain words, never the setting's key.
@@ -74,7 +81,16 @@ PREF_HINTS = {
     "new_tasks_to": "Pick My list or your linked app.",
     "default_printer": "Pick a printer from the list.",
     "color_rules": "Pick a label color from the list.",
+    "print_with": "Pick how you print from the list.",
+    "routine_morning": "Pick a time, like 08:00.",
+    "routine_evening": "Pick a time, like 18:00.",
 }
+
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def _is_hhmm(v) -> bool:
+    return isinstance(v, str) and bool(_HHMM.match(v))
 
 
 def _valid_rules(v) -> bool:

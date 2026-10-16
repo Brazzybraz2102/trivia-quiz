@@ -31,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import coach as coaching
-from . import jobs, printer, scan, upkeep
+from . import jobs, printer, quiz, scan, upkeep
 from .auth import PREF_HINTS, ROLES, Accounts, AuthError, default_prefs, rank
 from .config import PROJECT_DIR
 from .connections import Builder, Connections, NotConnected
@@ -681,7 +681,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 "notice_changed": consent.get("version") not in (None, DATA_NOTICE_VERSION)
                                   or consent.get("terms") not in (None, TERMS_VERSION),
                 "password_reset": _reset_notice(user),
-                "ai_ready": ai_ready()}  # the AI helpers have a key (or a stand-in) to work with
+                "ai_ready": ai_ready(),  # the AI helpers have a key (or a stand-in) to work with
+                "setup_quiz": _quiz_due(name, user["prefs"])}  # show the setup questions after the notice
 
     def _reset_notice(user: dict) -> dict | None:
         """Once they've chosen their own password: which admin last set a one-time one, and when
@@ -1133,6 +1134,36 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(400, "done or undo")
         accounts.set_prefs(caller.name, {"setup_dismissed": dismissed})
         return {"ok": True}
+
+    # ----------------------------------------------------------- setup questions (SPEC §27)
+    def _quiz_due(name: str, prefs: dict) -> bool:
+        """New accounts get the setup questions once, after the data notice. Anyone who already uses
+        Next Box (their own tasks, a ticket or a linked app) finds them in Settings → Help instead."""
+        if prefs.get("setup_quiz_done"):
+            return False
+        return not (_has_own_tasks(Caller(name)) or ctx.store.list_printed(1, by=name)
+                    or connections.status(name).get("connected"))
+
+    @app.post("/setup/quiz")
+    def setup_quiz(body: dict, caller: Caller = Depends(person)):
+        """{answers: {print, journal, rows, helps, plan_at, review_at}} (any of them), or {skip: true}.
+        Saves the settings the answers mean (quiz.changes_for) and returns them as `changed`, with all
+        the person's settings. Answering how many tasks or what helps ticks the Get started guide's "Make it
+        fit your brain" step; printing on paper or having no printer yet puts away its printer step."""
+        skip = body.get("skip") is True
+        try:
+            changes = {} if skip else quiz.changes_for(body.get("answers") or {})
+        except quiz.QuizError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        extra: dict = {"setup_quiz_done": True}
+        if changes.keys() & {"max_rows", "gentle_words", "reading_mode", "routine_mode"}:
+            extra["setup_done"] = sorted(set(caller.prefs.get("setup_done") or []) | {"focus"})
+        if changes.get("print_with") in ("paper", "none"):
+            extra["setup_dismissed"] = sorted(set(caller.prefs.get("setup_dismissed") or []) | {"printer"})
+        prefs = accounts.set_prefs(caller.name, {**changes, **extra})
+        # Which settings changed, never the answers themselves (what helps can hint at a diagnosis).
+        events.log(caller.name, "setup_quiz", detail={"skipped": skip, "changed": sorted(changes)})
+        return {"prefs": prefs, "changed": changes}
 
     @app.post("/list")
     def add_list_task(body: TaskIn, caller: Caller = Depends(person)):

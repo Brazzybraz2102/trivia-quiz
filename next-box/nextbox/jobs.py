@@ -15,8 +15,8 @@ from .auth import default_prefs
 from .config import Settings
 from .printer import PrinterConfig, legacy_config
 from .printers import Printers, choose, choose_color
-from .render import (DayRow, Row, Sticker, finalize, render_day, render_focus, render_label, render_sticker,
-                     render_strips, stack_with_cuts)
+from .render import (DayRow, Row, Sticker, finalize, reading_font, render_day, render_focus, render_label,
+                     render_sticker, render_strips, stack_with_cuts)
 from .journal import SLUG_MOVES
 from .mylist import LocalTasks, Tags, parse_line
 from .store import Store
@@ -146,6 +146,9 @@ def _is_late(task: dict, today: date) -> bool:
 NO_PRINTER = "No label printer in your household yet. Tap Print on paper to print it on any printer."
 NO_PRINTER_ADMIN = ("No label printer in your household yet. Add one under Admin → Printers, "
                     "or tap Print on paper to print it on any printer.")
+# Always preview only, as the setup questions set it (prefs.print_with): say what to do next.
+PREVIEW_NOTES = {"paper": "You print on paper: tap Print on paper to print this on any printer.",
+                 "none": "No printer yet, so this is a preview. Once you have one, Print on paper works with any printer."}
 
 
 def _available(ctx: Context) -> list[PrinterConfig]:
@@ -194,9 +197,11 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
         if ctx.printing_paused:
             note = "Printing is paused by an admin, so this is a preview."
         elif ctx.prefs.get("always_dry_run"):
-            note = "Always preview only is on in Settings, so this is a preview."
+            note = PREVIEW_NOTES.get(ctx.prefs.get("print_with"),
+                                     "Always preview only is on in Settings, so this is a preview.")
     red = cfg.ink == "black_red"
-    drawn = draw(red)
+    with reading_font(bool(ctx.prefs.get("reading_mode"))):  # Easy-to-read text: the same font on the label
+        drawn = draw(red)
     parts = [finalize(i, cfg.width_px, red=red) for i in (drawn if isinstance(drawn, list) else [drawn])]
     img = parts[0] if len(parts) == 1 else stack_with_cuts([p.convert("RGB") for p in parts])
     record = {
