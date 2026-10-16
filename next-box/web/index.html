@@ -131,7 +131,7 @@
   /* FC: setup questions, Easy-to-read text, My list's Schedule view */
   #quizDialog { max-width:560px; max-height:calc(100dvh - 24px); }
   #quizDialog h2 { font-size:1.375rem; margin:10px 0 4px; }
-  #quizDialog h2:focus { outline:none; }
+  #quizDialog h2:focus, #noticeTitle:focus { outline:none; }
   .quizhead { display:flex; justify-content:space-between; align-items:center; gap:8px; }
   .quizbar { height:6px; background:var(--line); border-radius:99px; overflow:hidden; margin:8px 0 0; }
   .quizbar div { height:100%; background:var(--accent); border-radius:99px; }
@@ -189,7 +189,7 @@
   .srow > .task { border-top:0; }
   .srow > .sbody { padding:10px 0; }
   .srow .sbody .text { font-size:1.0625rem; overflow-wrap:anywhere; }
-  .srow .sbody .meta { font-size:.8125rem; color:var(--muted); margin-top:2px; }
+  .srow .sbody .meta { font-size:.8125rem; color:var(--muted); margin-top:2px; overflow-wrap:anywhere; }
   .srow.routine .sbody .text { font-weight:600; }
   .srow.past .stime, .srow.past .sbody .text { color:var(--muted); }
   .srow .nowtag { display:inline-block; font-size:.75rem; font-weight:700; padding:1px 7px; border-radius:99px; background:var(--accent); color:var(--onAccent); margin-left:6px; vertical-align:1px; }
@@ -226,7 +226,7 @@
   .tag.solid { background:var(--t); color:#fff; }
   .now { border:2px solid var(--accent); }
   .now .big { font-size:26px; font-weight:700; line-height:1.2; margin:6px 0; overflow-wrap:anywhere; }
-  .now .nowstep { font-size:16px; margin:4px 0 10px; }
+  .now .nowstep { font-size:16px; margin:4px 0 10px; overflow-wrap:anywhere; }  /* a pasted link wraps, never pushes the page sideways */
   .now .nowstep:empty { display:none; }
   .now .big.clamp { display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; }
   .now .big.long { font-size:clamp(18px, 1.25em, 22px); }
@@ -410,12 +410,16 @@
   #nowCard:not([data-id]) #nowBreak, #nowCard[data-id=""] #nowBreak { display:none; }
   #journal.searching #lookCard { display:none; }
   #breakDialog { max-width:560px; }
+  /* The sheet's buttons stay in view at the bottom while the steps scroll (big text, small phones),
+     as the setup questions' do (.quizfoot). */
+  #breakActs { position:sticky; bottom:-18px; z-index:1; background:var(--card); margin:8px -18px -18px; padding:10px 18px 18px; border-top:1px solid var(--line); }
+  #breakActs:empty { display:none; }
   .btask { font-weight:700; font-size:1.05em; margin:0 0 6px; overflow-wrap:anywhere; }
   .bsteps { list-style:none; margin:8px 0 0; padding:0; max-height:52vh; overflow:auto; }
   .bsteps li { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
   .bsteps li:first-child { border-top:0; }
   .bsteps input[type=checkbox] { width:22px; height:22px; flex:none; }
-  .bsteps textarea { min-height:0; padding:7px 9px; resize:none; overflow:hidden; line-height:1.35; }
+  .bsteps textarea { min-height:0; padding:7px 9px; resize:none; overflow:hidden; line-height:1.35; overflow-wrap:anywhere; }
   .bsteps li.off textarea { color:var(--muted); text-decoration:line-through; }
   #breakBody img { display:block; max-width:100%; max-height:50vh; margin-top:8px; border:1px solid var(--line); border-radius:6px; background:#fff; }
   .bnum { flex:none; min-width:1.4em; color:var(--muted); font-size:.875em; text-align:right; }
@@ -539,13 +543,16 @@
   #dumpDropped { margin:6px 0 0; }
   #dumpDropped:empty { display:none; }
   .snack { width:max-content; max-width:calc(100vw - 32px); }
-  /* While picked tasks keep the print bar at the bottom, messages show above it, not over its buttons. */
-  body:has(#mylist.on .printbar.sticky) .snack, body:has(#mylist.on .printbar.sticky) #toast { bottom:124px; }
+  /* Messages sit above the phone tab bar and, while picked tasks keep the print bar at the bottom, above
+     that too, not over its buttons. app.js measures both (--tabH, --barH), at any text size or width. */
+  .snack, #toast { bottom:20px; }
+  body:has(#mylist.on .printbar.sticky) :is(.snack, body > #toast) { bottom:calc(var(--barH, 0px) + 20px); }
   @media (max-width:720px) {
-    body:has(#mylist.on .printbar.sticky) .snack, body:has(#mylist.on .printbar.sticky) #toast { bottom:calc(196px + env(safe-area-inset-bottom)); }
+    .snack, #toast { bottom:calc(var(--tabH, calc(64px + env(safe-area-inset-bottom))) + 12px); }
+    body:has(#mylist.on .printbar.sticky) :is(.snack, body > #toast) { bottom:calc(var(--tabH, calc(64px + env(safe-area-inset-bottom))) + var(--barH, 0px) + 12px); }
   }
   .snack .linkish { white-space:nowrap; }
-  .stepedit textarea { flex:1; min-width:0; min-height:0; height:auto; padding:8px; resize:none; overflow:hidden; line-height:1.3; }
+  .stepedit textarea { flex:1; min-width:0; min-height:0; height:auto; padding:8px; resize:none; overflow:hidden; line-height:1.3; overflow-wrap:anywhere; }
   .stepedit li.done textarea { text-decoration:line-through; color:var(--muted); }
   @media (max-width:720px) {
     .datechips button, .listtags button, .bulktags .chips button, .stepedit button, .listfind .go { min-height:44px; }
@@ -567,6 +574,21 @@
     .task .meta { grid-area:meta; align-self:start; margin-top:2px; }
     .task .rowsteps { grid-area:steps; }
     .task .acts { grid-area:acts; justify-self:end; margin-top:2px; }
+    /* The Edit dialog's steps: the tick and the words get the whole line, ↑ ↓ ✕ go under them on the right. */
+    .stepedit li { flex-wrap:wrap; row-gap:2px; }
+    .stepedit li textarea { flex:1 1 calc(100% - 42px); }
+    .stepedit li [data-smove="-1"] { margin-left:auto; }
+    /* Schedule: the time sits above each row, so the task, its when, steps and buttons get the full width. */
+    .srow { flex-wrap:wrap; column-gap:6px; }
+    .srow .stime { width:100%; padding:8px 0 0; }
+    .srow .stime span { display:inline; margin-left:6px; }
+    .srow > .task { padding-top:4px; }
+    .srow > .sbody { padding-top:2px; }
+  }
+  /* The smallest phones: beside Edit, → and ✓ the when and steps had a sliver left ("~60m ·" over three
+     lines). They get their own line, and the buttons go under them (List and Schedule). */
+  @media (max-width:359px) {
+    .task { grid-template-areas:"pick text text" ". meta meta" ". acts acts" ". steps steps"; }
   }
   /* FE: the routine card, the focus timer on Just one thing, reminders, Quick add and keyboard shortcuts */
   .quickbtn { flex:none; width:38px; height:38px; padding:0 0 2px; border-radius:50%; border:2px solid var(--accent); background:none; color:var(--accent);
@@ -1027,17 +1049,17 @@
     </div>
 
     <div class="card" id="focusCard"><h2>Focus &amp; ADHD helpers</h2>
-      <label class="setting"><div class="label"><b>Tasks on the daily ticket</b><span>A short list is one you start. The rest are listed small at the bottom. 1–20.</span></div><input type="number" min="1" max="20" data-pref="max_rows"></label>
+      <label class="setting"><div class="label"><b>Tasks on the daily label</b><span>A short list is one you start. The rest are listed small at the bottom. 1–20.</span></div><input type="number" min="1" max="20" data-pref="max_rows"></label>
       <label class="setting"><div class="label"><b>Gentle words</b><span>"waiting 3d" instead of "overdue 3d", and "Not today" for the rest.</span></div><input type="checkbox" data-pref="gentle_words"></label>
-      <label class="setting"><div class="label"><b>Show yesterday's wins</b><span>"Yesterday you finished 4. ✓" on the daily ticket.</span></div><input type="checkbox" data-pref="show_wins"></label>
+      <label class="setting"><div class="label"><b>Show yesterday's wins</b><span>"Yesterday you finished 4. ✓" on the daily label.</span></div><input type="checkbox" data-pref="show_wins"></label>
       <label class="setting"><div class="label"><b>Print the next tiny step</b><span>Under each task that has steps.</span></div><input type="checkbox" data-pref="show_next_step"></label>
       <label class="setting"><div class="label"><b>Journal mode</b><span>The daily label gets a "Today's win" line for your journal, and every page you snap is kept in your Journal. With it off, a photo is kept only when it has handwriting (notes or a win).</span></div><input type="checkbox" data-pref="journal_mode"></label>
       <label class="setting"><div class="label"><b>Call it a slug after</b><span>How many moves before a task shows under Slugs and prints "slid 3×". 2–10.</span></div><input type="number" min="2" max="10" data-pref="slug_after"></label>
       <label class="setting"><div class="label"><b>AI helpers</b><span>"Break it down" (tiny first steps) and "Look back on my week". They only run when you tap them, and send only what that one needs to Anthropic's AI.</span></div><input type="checkbox" data-pref="ai_helpers"></label>
       <label class="setting"><div class="label"><b>Same words every time</b><span>Messages always say the same thing, and My list opens on Schedule: your day in time order.</span></div><input type="checkbox" data-pref="routine_mode"></label>
       <label class="setting"><div class="label"><b>Plan my day at</b><span>Shows on Schedule as “Plan your day”.</span></div><input type="time" data-pref="routine_morning"></label>
-      <label class="setting"><div class="label"><b>Look back at</b><span>Shows on Schedule as “Look back”: snap your pages.</span></div><input type="time" data-pref="routine_evening"></label>
-      <label class="setting"><div class="label"><b>Routine card</b><span>At the top of My list: “Print today's label” from your plan time, “Snap your pages” from your look-back time. It never prints by itself.</span></div><input type="checkbox" data-pref="routine_card"></label>
+      <label class="setting"><div class="label"><b>Snap your pages at</b><span>Shows on Schedule as “Snap your pages”.</span></div><input type="time" data-pref="routine_evening"></label>
+      <label class="setting"><div class="label"><b>Routine card</b><span>At the top of My list: “Print today's label” from your plan time, “Snap your pages” from your snap time. It never prints by itself.</span></div><input type="checkbox" data-pref="routine_card"></label>
       <label class="setting"><div class="label"><b>Remind me before timed tasks</b><span>A note at the top of Next Box while it's open, with Done, Tomorrow and Snooze.</span></div>
         <select data-pref="remind_before" data-int aria-label="Remind me before timed tasks"><option value="0">Off</option><option value="5">5 minutes before</option><option value="10">10 minutes before</option>
           <option value="15">15 minutes before</option><option value="30">30 minutes before</option><option value="60">1 hour before</option></select></label>
@@ -1046,14 +1068,14 @@
     </div>
 
     <div class="card" id="calCard"><h2>Calendars</h2>
-      <p class="muted">Today's events show on My list and print at the top of your daily ticket. Next Box only reads them.</p>
+      <p class="muted">Today's events show on My list and print at the top of your daily label. Next Box only reads them.</p>
       <div id="calList">…</div>
       <h3>Add a calendar</h3>
       <div class="row"><select id="calKind" aria-label="Kind of calendar"></select></div>
       <div id="calFields"></div>
       <div class="row"><button class="go" id="calGo">Add calendar</button><span id="calMsg" class="err" role="status"></span></div>
       <details class="muted" style="margin-top:10px"><summary>Which calendars work?</summary><div id="calOther"></div></details>
-      <label class="setting"><div class="label"><b>Print today's calendar</b><span>At the top of the daily ticket.</span></div><input type="checkbox" data-pref="show_calendar"></label>
+      <label class="setting"><div class="label"><b>Print today's calendar</b><span>At the top of the daily label.</span></div><input type="checkbox" data-pref="show_calendar"></label>
     </div>
 
     <div class="card" id="appCard"><h2>Linked to-do app (optional)</h2>
@@ -1298,6 +1320,7 @@
     <dt><kbd>g</kbd> then <kbd>s</kbd></dt><dd>Go to Snap</dd>
     <dt><kbd>g</kbd> then <kbd>j</kbd></dt><dd>Go to Journal</dd>
     <dt><kbd class="modkey">Ctrl</kbd>+<kbd>Enter</kbd></dt><dd>Add what you typed in Brain dump or Quick add, or save a journal note</dd>
+    <dt><kbd class="modkey">Ctrl</kbd>+<kbd>Z</kbd></dt><dd>Undo, while My list shows an Undo message (after Done, → Tomorrow and the like)</dd>
     <dt><kbd>?</kbd></dt><dd>This list</dd>
     <dt><kbd>Esc</kbd></dt><dd>Close a sheet, like this one</dd>
   </dl>
@@ -1307,7 +1330,7 @@
 </div>
 
 <dialog id="noticeDialog" aria-labelledby="noticeTitle" aria-describedby="noticeBody">
-  <h2 id="noticeTitle">Before you start</h2>
+  <h2 id="noticeTitle" tabindex="-1" autofocus>Before you start</h2>
   <p class="muted" id="noticeChanged" hidden>This changed since you last agreed. Have a quick look before you carry on.</p>
   <p id="noticeBody"></p>
   <p class="muted">This also means you agree to the <a href="terms.html" target="_blank" rel="noopener">Terms of Use</a>

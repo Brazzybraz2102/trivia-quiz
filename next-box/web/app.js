@@ -45,10 +45,31 @@ function toast(msg, opts = {}) {
   t.classList.toggle("err", error);
   $("#toastClose").hidden = !error;
   text.textContent = "";  // cleared first, so the same message twice is announced twice
-  requestAnimationFrame(() => { text.textContent = msg; });
+  requestAnimationFrame(() => { text.textContent = msg; placeToast(); });
   t.classList.add("show");
+  placeToast();
   toastLeft = Math.max(error ? 10000 : 4000, 60 * msg.length, opts.ms || 0);
   runToast();
+}
+// With My list's Undo message showing too, this one goes just above it, so neither covers the other.
+function placeToast() {
+  const t = $("#toast"), s = $("#snack");
+  const both = t.parentElement === document.body && s.classList.contains("show") && $("#mylist").classList.contains("on");
+  t.style.bottom = both ? `${Math.round(innerHeight - s.getBoundingClientRect().top + 8)}px` : "";
+}
+// The phone tab bar and the print bar (while picked tasks keep it at the bottom), measured for the CSS:
+// messages at the bottom sit above both, at any text size or screen width (the CSS uses --barH only
+// while My list shows with the bar stuck).
+function placeBars() {
+  const bar = $(".printbar"), tabs = $(".bottombar");
+  document.body.style.setProperty("--barH", `${bar.classList.contains("sticky") ? bar.offsetHeight : 0}px`);
+  if (tabs?.offsetHeight) document.body.style.setProperty("--tabH", `${tabs.offsetHeight}px`);
+  else document.body.style.removeProperty("--tabH");
+  placeToast();
+}
+if (window.ResizeObserver) {
+  const ro = new ResizeObserver(() => placeBars());
+  for (const el of [$(".printbar"), $(".bottombar")]) if (el) ro.observe(el, { box: "border-box" });
 }
 function runToast() {
   clearTimeout(toastTimer);
@@ -136,7 +157,20 @@ async function signOut(box) {
   try { await api("/auth/logout", { method: "POST" }); }
   catch { return say(failed); }  // still signed in: don't pretend otherwise
   forgetDraft();  // an unsent Brain dump stays on this device only while you're signed in
+  forgetMyKeysHere();  // and so do your search words and List/Schedule pick
   startOver("Signed out.");
+}
+// What this device keeps per person that says something about them: an unsent Brain dump, the search
+// words, List or Schedule. Signing out takes the person's own; anyone signing in here takes everyone
+// else's (a session that ended without Sign out left them behind).
+const PERSON_KEYS = /^nb\.(dumpDraft|listFilter|listView):/;
+function forgetMyKeysHere() {
+  try { for (const k of [filterKey(), myListViewKey()]) if (k) localStorage.removeItem(k); } catch {}
+}
+function forgetOthersHere(name) {
+  try {
+    for (const k of Object.keys(localStorage)) if (PERSON_KEYS.test(k) && k.slice(k.indexOf(":") + 1) !== name) localStorage.removeItem(k);
+  } catch {}
 }
 // Belt and braces for the reload above: wipe what's on screen right away.
 function clearPerson() {
@@ -187,6 +221,7 @@ async function boot() {
   applyLook();
   if (!boot.started) {  // just signed in: open where they asked to
     boot.started = true;
+    forgetOthersHere(me.username);  // a shared phone: nobody else's draft or search words stay behind
     const start = me.prefs.start_tab || "mylist";
     if (signinMsg) { toast(signinMsg, 4000); signinMsg = ""; goto("settings"); }
     else if (start === "mylist") markTab("mylist");
@@ -221,6 +256,10 @@ async function boot() {
   if (!me.consented || me.terms_ok === false) {  // new, or the notice or Terms changed since they agreed
     $("#noticeBody").textContent = me.data_notice;
     $("#noticeChanged").hidden = !me.notice_changed;
+    // What's new in the Privacy Policy (TERMS_VERSION 3), when that's what changed.
+    $("#noticeChanged").textContent = "This changed since you last agreed. " + (me.terms_ok === false
+      ? "The Privacy Policy now says just what the AI helpers (Break it down and Look back on my week) send to Anthropic, and that they only do it when you tap them. " : "")
+      + "Have a quick look before you carry on.";
     $("#noticeMsg").textContent = "";
     if (!$("#noticeDialog").open) $("#noticeDialog").showModal();
   }
@@ -1545,6 +1584,21 @@ $("#listSearch").addEventListener("input", () => {
   searchTimer = setTimeout(() => setFilter({ q: $("#listSearch").value.slice(0, 200) }), 150);
 });
 $("#listFilterClear").onclick = () => { $("#listSearch").value = ""; setFilter({ q: "", tag: "" }); $("#listSearch").focus(); };
+// List and Schedule both: the chips, "Showing 2 of 9 matching …" and what "Prints the N shown" prints
+// (the open tasks on screen now).
+function applyFilterUi(openShown, total) {
+  shownOpen = openShown;
+  renderTagFilter();
+  const words = listFilter.q.trim();
+  $("#listFilterSay").textContent = !filtering() ? "" : `Showing ${shownOpen.length} of ${total}` +
+    (listFilter.tag ? ` with #${listFilter.tag}` : "") + (words ? ` matching “${words}”` : "");
+  $("#listFilterClear").hidden = !filtering();
+}
+function noMatchHtml(where) {  // where: "on your list", "today"
+  const words = listFilter.q.trim();
+  return `<p class="muted">Nothing ${where} matches ${[words && `“${esc(words)}”`, listFilter.tag && `#${esc(listFilter.tag)}`].filter(Boolean).join(" with ")}.
+    <button class="linkish" data-clear-filter>Show everything</button></p>`;
+}
 function forgetListExtras() {  // signing out: nothing of this person's list stays on screen
   listFilter = { q: "", tag: "" }; filterFor = ""; shownOpen = []; openSteps.clear(); nowAsk = null;
   clearTimeout(previewTimer); previewN++;
@@ -1575,6 +1629,14 @@ function restoreFocus(spot) {
   }
   $("#listTitle").focus({ preventScroll: true });
 }
+// Keyboard focus somewhere sensible when what had it went away (a sheet closed over a screen it didn't
+// open from): the routine card or Just one thing on My list, else the screen's first heading.
+function focusMain() {
+  const el = [$("#routineCard:not([hidden]) h2"), $("#nowText"), ...$$("section.on h2")].find((x) => x?.offsetParent);
+  if (!el) return;
+  if (!el.hasAttribute("tabindex")) el.tabIndex = -1;
+  el.focus({ preventScroll: true });
+}
 
 function renderList() {
   const spot = listFocus || focusSpot(document.activeElement);
@@ -1594,22 +1656,15 @@ function renderList() {
     [`From ${listData.linked_name || "linked app"} (today)`, linked],
     ["Done", showingDone ? done : [], "done"],
   ];
-  shownOpen = groups.filter(([, , key]) => key !== "done").flatMap(([, ts]) => ts);
   const html = groups.filter(([, ts, key]) => ts.length || (key === "done" && showingDone && !filtering()))
     .map(([name, ts, key]) => `<div class="group">${esc(name)} (${ts.length})${key === "today" && ts.length > 1
         ? ` <button class="linkish" data-pickall>Pick all</button>` : ""}</div>`
       + (ts.length ? ts.map(taskRow).join("") : `<p class="muted">Nothing finished yet. It'll show here when you tick something.</p>`)).join("");
   const total = all.length + (listData.linked || []).length;
-  const words = listFilter.q.trim();
-  $("#listBody").innerHTML = html || (filtering() && total
-    ? `<p class="muted">Nothing on your list matches ${[words && `“${esc(words)}”`, listFilter.tag && `#${esc(listFilter.tag)}`].filter(Boolean).join(" with ")}.
-       <button class="linkish" data-clear-filter>Show everything</button></p>`
+  $("#listBody").innerHTML = html || (filtering() && total ? noMatchHtml("on your list")
     : `<p class="muted">Your list is empty. Use Brain dump above, or + Add task.</p>`);
   $("#listBody").classList.toggle("muted", !html);
-  renderTagFilter();
-  $("#listFilterSay").textContent = !filtering() ? "" : `Showing ${shownOpen.length} of ${total}` +
-    (listFilter.tag ? ` with #${listFilter.tag}` : "") + (words ? ` matching “${words}”` : "");
-  $("#listFilterClear").hidden = !filtering();
+  applyFilterUi(groups.filter(([, , key]) => key !== "done").flatMap(([, ts]) => ts), total);
   updatePicks();
   renderNow();
   restoreFocus(spot);
@@ -1619,7 +1674,7 @@ function renderList() {
 // or a tag on and nothing picked, it prints what's shown. Picked tasks get Done, → Tomorrow, Tag… and Delete….
 function updatePicks() {
   const n = picked.size;
-  const hidden = filtering() ? [...picked].filter((id) => !shownOpen.some((t) => t.id === id)).length : 0;
+  const hidden = filtering() || myListView() === "schedule" ? [...picked].filter((id) => !shownOpen.some((t) => t.id === id)).length : 0;
   const m = Math.min(shownOpen.length, MAX_PICK);
   $("#pickCount").textContent = n ? (n >= MAX_PICK ? `${n} picked (the most at once)` : `${n} picked`) + (hidden ? ` · ${hidden} not shown` : "")
     : !filtering() ? "Nothing picked: stickers for today's tasks"
@@ -1628,6 +1683,7 @@ function updatePicks() {
   $("#bulkActs").hidden = !n;
   $$("#listBody .pick").forEach((b) => { b.disabled = !b.checked && n >= MAX_PICK; });
   $(".printbar").classList.toggle("sticky", n > 0);  // it follows you down the list only while something is picked
+  placeBars();
 }
 // What Stickers and Tear-off strips print: the picked tasks, else the ones shown, else today's.
 function printPicks() {
@@ -1637,6 +1693,7 @@ function printPicks() {
 }
 
 function renderNow() {
+  const hadFocus = $("#nowCard").contains(document.activeElement);
   const open = [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])];
   const dueNow = open.filter((x) => x.due && x.due.date.slice(0, 10) <= today());
   const one = listData.one_thing;
@@ -1644,7 +1701,8 @@ function renderNow() {
   let t = timerTask(open) || (one && !skipped.has(one.id) ? open.find((x) => x.id === one.id) || null : null);
   if (!t) t = dueNow.find((x) => !skipped.has(x.id)) || null;  // next in ticket order
   const setAside = dueNow.filter((x) => skipped.has(x.id)).length;
-  const brandNew = !listData.tasks.length && !(listData.linked || []).length;
+  // Brand new: nothing on the list now or ever (finishing your last task is a win, not a fresh start).
+  const brandNew = !listData.tasks.length && !(listData.linked || []).length && !listData.has_tasks && !listData.done_today;
   $("#nowCard").dataset.id = t ? t.id : "";
   const text = $("#nowText");
   text.textContent = t ? t.content
@@ -1670,6 +1728,7 @@ function renderNow() {
   $("#nowDone").className = step && !asking ? "plain" : "go";
   $("#nowDone").textContent = asking ? "Yes, finish it ✓" : step ? "Whole task done" : "Done ✓";
   $("#nowNotYet").hidden = !asking;
+  $("#nowBreak").hidden = !aiOn() || !t || asking;  // "Finish the task?" is a yes/no question: nothing else beside it
   $("#nowRepeatSkip").hidden = !t || asking || !String(t.id).startsWith("nb:") || !t.repeat || !t.due;
   if (t?.due && t.due.date.slice(0, 10) > today()) $("#nowTomorrow").hidden = true;  // never moves it sooner
   $("#nowAgain").hidden = !!t || !setAside;
@@ -1678,6 +1737,13 @@ function renderNow() {
   timerSync(t);     // the focus timer follows the card's task (FE, below)
   routineRender();  // and the routine card above it
   remindRender();   // and the reminders at the top, from the list as it is now
+  // The button you pressed went away (the last "Not now", Done on the last task): focus stays on the card.
+  const f = document.activeElement;
+  if (hadFocus && (f === document.body || !f || (f.closest?.("#nowCard") && !f.offsetParent))) {
+    const b = [...$$("#nowCard > .row button"), ...$$("#nowCard button")].find((x) => x.offsetParent && !x.disabled);
+    if (b) b.focus({ preventScroll: true });
+    else { $("#nowText").tabIndex = -1; $("#nowText").focus({ preventScroll: true }); }
+  }
 }
 $("#nowMore").onclick = () => { $("#nowText").classList.remove("clamp"); $("#nowMore").hidden = true; };
 $("#nowAgain").onclick = () => { skipped.clear(); renderNow(); $("#nowDone").focus(); };
@@ -1798,7 +1864,7 @@ async function moveTask(id, to, btn) {
   if (btn?.closest("#listBody")) listFocus = focusSpot(btn);
   try {
     const r = await api(`/list/${encodeURIComponent(id)}/move`, { method: "POST", json: { to } });
-    if (!r.moved) return toast(`It's on ${dayWords(r.to)} already`);
+    if (!r.moved) return toast(r.later ? `It isn't due till ${dayWords(r.to)}, so it stays there` : `It's on ${dayWords(r.to)} already`);
     snack(`Moved to ${dayWords(r.to)}`, () => undoMove(id, r.undo));
     await loadList();
   } catch (err) { listError(err, id); }
@@ -1857,23 +1923,55 @@ async function skipRepeat(id, btn) {
 }
 
 // A message with an Undo button (or another action) that stays long enough to use it (longer with bigger text).
-let snackTimer = null;
+// After something done from the keyboard it stays until the next action or Esc, and Ctrl+Z (⌘Z on a Mac)
+// undoes from anywhere on the page. Undo puts focus back where the action was.
+let snackTimer = null, snackUndo = null, snackHide = null, snackKeys = false;
 function snack(msg, undo, label = "Undo") {
   const box = $("#snack");
   clearTimeout(snackTimer);
+  const from = document.activeElement, spot = focusSpot(from);  // where the action was done
+  const goBack = () => {
+    if (from?.isConnected && from.offsetParent && !box.contains(from)) return from.focus({ preventScroll: true });
+    if (spot) listFocus = spot;  // the row is back once the list is drawn again after the undo
+    const near = from?.closest?.(".printbar") ? $("#printStickers") : from?.closest?.("#nowCard") ? $("#nowText") : $("#listTitle");
+    if (!near.matches("button") && !near.hasAttribute("tabindex")) near.tabIndex = -1;
+    near.focus({ preventScroll: true });
+  };
   $("#snackUndo").hidden = !undo;
   $("#snackUndo").textContent = label;
   $("#snackUndo").onclick = undo ? () => { hide(true); undo(); } : null;
+  snackUndo = undo && label === "Undo" ? $("#snackUndo").onclick : null;  // Ctrl+Z: an undo, never "Finish the task"
   box.classList.add("show");
   $("#snackText").textContent = "";
-  requestAnimationFrame(() => { $("#snackText").textContent = msg; });  // said again even if it's the same words
+  const keys = snackUndo ? `<span class="sr-only"> (Undo: ${keysMac() ? "⌘" : "Ctrl"}+Z)</span>` : "";
+  requestAnimationFrame(() => { $("#snackText").innerHTML = esc(msg) + keys; placeToast(); });  // said again even if it's the same words
+  placeToast();
   function hide(now) {
     if (!now && box.contains(document.activeElement)) { snackTimer = setTimeout(hide, 2000); return; }
-    if (box.contains(document.activeElement)) $("#listTitle").focus({ preventScroll: true });
+    clearTimeout(snackTimer);
+    if (box.contains(document.activeElement)) goBack();
     box.classList.remove("show");
+    if (snackHide === hide) { snackUndo = null; snackHide = null; }
+    placeToast();
   }
-  snackTimer = setTimeout(hide, ["large", "xlarge"].includes(me?.prefs?.text_size) ? 10000 : 6000);
+  snackHide = hide;
+  hide.waits = snackKeys;
+  if (!snackKeys) snackTimer = setTimeout(hide, ["large", "xlarge"].includes(me?.prefs?.text_size) ? 10000 : 6000);
 }
+// Was the last thing done with the keyboard (Enter, Space) or a pointer (tap, click)?
+document.addEventListener("keydown", (e) => { if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) snackKeys = true; }, true);
+document.addEventListener("pointerdown", () => { snackKeys = false; }, true);
+// A message that waits (from the keyboard) goes on the next action anywhere else, or with Esc.
+document.addEventListener("click", (e) => { if (snackHide?.waits && !e.target.closest?.("#snack")) snackHide(true); }, true);
+document.addEventListener("keydown", (e) => {
+  if (!snackHide || e.defaultPrevented || $$("dialog[open]").length) return;
+  if (e.key === "Escape") return snackHide(true);
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "z" && snackUndo && !keysTyping(e.target)
+      && $("#mylist").classList.contains("on")) {  // only an Undo you can see
+    e.preventDefault();
+    snackUndo();
+  }
+});
 
 $("#nowDone").onclick = () => $("#nowCard").dataset.id && markDone($("#nowCard").dataset.id, $("#nowDone"));
 $("#nowStepDone").onclick = async () => {
@@ -1969,15 +2067,23 @@ $("#bulkDone").onclick = async () => {
 };
 $("#bulkTomorrow").onclick = async () => {
   if (bulkBusy() || !picked.size) return;
-  const ok = await eachPicked("Moving", pickedTasks(), (t) => api(`/list/${encodeURIComponent(t.id)}/move`, { method: "POST", json: { to: "tomorrow" } }));
+  // Like a row's →, it never moves a task sooner: one that isn't due yet stays where it is (and picked).
+  const all = pickedTasks(), now = today();
+  const tasks = all.filter((t) => !t.due || t.due.date.slice(0, 10) <= now);
+  const waits = all.length - tasks.length, notYet = waits ? ` · ${waits} ${waits === 1 ? "wasn't" : "weren't"} due yet` : "";
+  if (!tasks.length) return toast(waits === 1 ? "That one isn't due yet, so it stays where it is." : "None of them are due yet, so they stay where they are.");
+  const ok = await eachPicked("Moving", tasks, (t) => api(`/list/${encodeURIComponent(t.id)}/move`, { method: "POST", json: { to: "tomorrow" } }));
   if (!ok.length) return;
   const moved = ok.filter(([, r]) => r.moved);
-  if (moved.length) snack(`Moved ${moved.length} to tomorrow${ok.missed}`, async () => {
+  // Where they went, as a row's → says it: a weekday repeat moved on a Friday goes to Monday.
+  const days = [...new Set(moved.map(([, r]) => r.to))];
+  const where = days.length <= 2 ? days.map(dayWords).join(" and ") : "later days";
+  if (moved.length) snack(`Moved ${moved.length} to ${where}${notYet}${ok.missed}`, async () => {
     for (const [t, r] of moved) { try { await api(`/list/${encodeURIComponent(t.id)}/move`, { method: "POST", json: r.undo }); } catch {} }
     toast("Back where they were");
     loadList();
   });
-  else toast(`They're on tomorrow already${ok.missed}`);
+  else toast(`They're on tomorrow already${notYet}${ok.missed}`);
   await loadList();
   $("#printStickers").focus();
 };
@@ -2045,14 +2151,26 @@ $("#showDone").onclick = () => {
   loadList();
 };
 
-// Brain dump. An unsent draft is kept on this device for the person who typed it (until it's added
-// or they sign out), so a phone that drops the page in the background doesn't lose it.
+// Brain dump. An unsent draft is kept on this device for the person who typed it (until it's added,
+// they sign out, someone else signs in here, or a day goes by), so a phone that drops the page in the
+// background, or a session that ends, doesn't lose it.
 const draftKey = () => (me ? `nb.dumpDraft:${me.username}` : "");
+const DRAFT_KEEP = 24 * 3600 * 1000;
 function saveDraft() {
-  try { const v = $("#dumpText").value; if (draftKey()) v.trim() ? localStorage.setItem(draftKey(), v) : localStorage.removeItem(draftKey()); } catch {}
+  try {
+    const v = $("#dumpText").value;
+    if (draftKey()) v.trim() ? localStorage.setItem(draftKey(), JSON.stringify({ text: v, at: Date.now() })) : localStorage.removeItem(draftKey());
+  } catch {}
 }
 function restoreDraft() {
-  try { const v = draftKey() && localStorage.getItem(draftKey()); if (v && !$("#dumpText").value.trim()) { $("#dumpText").value = v; runPreview(); } } catch {}
+  try {
+    const raw = draftKey() && localStorage.getItem(draftKey());
+    if (!raw) return;
+    let v = raw;  // older copies kept the words only
+    if (raw.startsWith("{")) { try { const d = JSON.parse(raw); v = Date.now() - (+d.at || 0) < DRAFT_KEEP ? String(d.text || "") : ""; } catch {} }
+    if (!v) return forgetDraft();  // a day old: gone
+    if (!$("#dumpText").value.trim()) { $("#dumpText").value = v; runPreview(); }
+  } catch {}
 }
 function forgetDraft() {
   try { if (draftKey()) localStorage.removeItem(draftKey()); } catch {}
@@ -2221,6 +2339,7 @@ function drawSteps(focus = null) {
 }
 // Each step's box grows to show all of it (once the dialog is open and the boxes have a size).
 const fitSteps = () => { if ($("#taskDialog").open) $$("#tdStepList textarea").forEach(fitText); };
+window.addEventListener("resize", fitSteps);  // turning the phone, or a new text size: the boxes follow
 function setEditSteps(texts, done = false) {  // fill the step list from elsewhere (e.g. "Make it smaller")
   editSteps = texts.map((x) => String(x).trim()).filter(Boolean).slice(0, MAX_STEPS).map((text) => ({ text, done }));
   drawSteps();
@@ -2310,9 +2429,9 @@ for (const id of ["#tdDate", "#tdRepeat"]) for (const ev of ["input", "change"])
 // Skip this time (a repeating task): unsaved changes are saved first, then it moves on to its next day.
 $("#tdSkipRepeat").onclick = async () => {
   const id = editing?.id;
-  if (!id) return;
+  if (!id || tdBusy()) return;
   if (!$("#tdContent").value.trim()) return $("#taskForm").reportValidity();
-  try { await saveEditing(); } catch (err) { return listError(err, id); }
+  try { await tdHold(saveEditing); } catch (err) { return listError(err, id); }
   $("#taskDialog").close();
   await loadList();
   skipRepeat(id, null);
@@ -2367,12 +2486,35 @@ async function saveEditing() {
   if (!editing.id) {  // + Add task: made now, on My list (a tag it started with counts as chosen)
     const task = await api("/list", { method: "POST", json: { ...body, content: $("#tdContent").value.trim(),
       tags: $$("#tdTags [data-tag].on").map((b) => b.dataset.tag), steps: stepsNow() } });
-    editing = { ...editing, id: task.id };
+    editing = { ...editing, ...task };  // as saved: a dialog that stays open (Break it down) has nothing unsaved now
     return { ...body, created: task };
   }
-  if (Object.keys(body).length) await api(`/list/${encodeURIComponent(editing.id)}`, { method: "PATCH", json: body });
+  if (Object.keys(body).length) {
+    const task = await api(`/list/${encodeURIComponent(editing.id)}`, { method: "PATCH", json: body });
+    if (task?.id) editing = { ...editing, ...task };
+  }
   return body;
 }
+// Save, "Save & print just this", Break it down and Skip this time all save first. While one is
+// saving, none of them can be pressed (aria-disabled: the page ignores clicks on it), so a double tap
+// never adds the task twice or prints it twice.
+const TD_SAVERS = ["#tdSave", "#tdFocus", "#tdBreak", "#tdSkipRepeat"];
+const tdBusy = () => TD_SAVERS.some((s) => $(s).getAttribute("aria-disabled") === "true");
+async function tdHold(fn) {
+  TD_SAVERS.forEach((s) => $(s).setAttribute("aria-disabled", "true"));
+  try { return await fn(); } finally { TD_SAVERS.forEach((s) => $(s).removeAttribute("aria-disabled")); }
+}
+// Unsaved words, steps or settings in the task dialog (a new task: anything typed at all).
+function tdDirty() {
+  if (!editing) return false;
+  return editing.id ? Object.keys(editBody()).length > 0
+    : !!($("#tdContent").value.trim() || stepsNow().length || $("#tdNotes").value.trim());
+}
+// Esc, or the phone's back gesture: never throws away what was typed without asking.
+$("#taskDialog").addEventListener("cancel", (e) => {
+  if (tdBusy()) return e.preventDefault();  // saving: it closes by itself in a moment
+  if (tdDirty() && !confirm("Close without saving? Your changes will be lost.")) e.preventDefault();
+});
 // While there are unsaved changes, the print button says it saves them first.
 const FOCUS_LABEL = $("#tdFocus").textContent;
 function focusLabel() {
@@ -2385,24 +2527,23 @@ $("#taskForm").onsubmit = async (e) => {
   if (e.submitter?.value !== "save" || !editing) return;
   e.preventDefault();
   const autoDay = !$("#tdDate").value && !editing.due && ($("#tdTime").value || $("#tdRepeat").value);
-  const save = $("#tdSave");
-  if (save.getAttribute("aria-disabled") === "true") return;  // a double tap mustn't add it twice
-  save.setAttribute("aria-disabled", "true");
-  try {
-    const body = await saveEditing();
-    $("#taskDialog").close();
-    if (body.created) {
-      await loadList();
-      const hidden = filtering() && !matches(body.created);
-      toast(hidden ? "Added. Your search hides it: tap Show all to see it." : autoDay ? "Added for today" : "Added");
-      flashRows([body.created.id]);
-      return;
+  if (tdBusy()) return;  // a double tap mustn't add it twice
+  await tdHold(async () => {
+    try {
+      const body = await saveEditing();
+      $("#taskDialog").close();
+      if (body.created) {
+        await loadList();
+        const hidden = filtering() && !matches(body.created);
+        toast(hidden ? "Added. Your search hides it: tap Show all to see it." : autoDay ? "Added for today" : "Added");
+        flashRows([body.created.id]);
+        return;
+      }
+      toast(!Object.keys(body).length ? "Nothing changed" : autoDay ? "Saved for today" : "Saved");
+      loadList();
     }
-    toast(!Object.keys(body).length ? "Nothing changed" : autoDay ? "Saved for today" : "Saved");
-    loadList();
-  }
-  catch (err) { listError(err, editing?.id); }
-  finally { save.removeAttribute("aria-disabled"); }
+    catch (err) { listError(err, editing?.id); }
+  });
 };
 $("#tdDelete").onclick = async () => {
   if (!editing || !confirm(`Delete "${editing.content}"? This can't be undone.`)) return;
@@ -2411,9 +2552,9 @@ $("#tdDelete").onclick = async () => {
 };
 // Print just this task. Unsaved changes are saved first, so what prints is what you see.
 $("#tdFocus").onclick = async () => {
-  if (!editing) return;
+  if (!editing || tdBusy()) return;
   if (!$("#tdContent").value.trim()) return $("#taskForm").reportValidity();
-  try { await saveEditing(); } catch (err) { return listError(err, editing?.id); }
+  try { await tdHold(saveEditing); } catch (err) { return listError(err, editing?.id); }
   const id = editing.id;  // a new task has one now
   $("#taskDialog").close();
   loadList();
@@ -2794,7 +2935,7 @@ async function loadCalendars() {
       <div style="flex:1;min-width:0"><b class="calname">${esc(c.name)}</b><div class="muted">${esc((calKinds.find((k) => k.key === c.provider) || {}).name || c.provider)}${c.calendars?.length ? " · " + c.calendars.map(esc).join(", ") : ""}</div></div>
       <button class="plain small" data-rename aria-label="Rename ${esc(c.name)}">Rename</button>
       <button class="plain small" data-remove aria-label="Remove calendar ${esc(c.name)}">Remove</button>
-      <div class="calstatus" style="flex-basis:100%"></div></div>`).join("") || `<p class="muted">No calendars yet. Add one to see today's events here and on your daily ticket.</p>`;
+      <div class="calstatus" style="flex-basis:100%"></div></div>`).join("") || `<p class="muted">No calendars yet. Add one to see today's events here and on your daily label.</p>`;
   // Which ones aren't working right now (otherwise that only shows on My list).
   if (r.calendars.length) api("/calendars/today").then((t) => {
     for (const [id, msg] of Object.entries(t.failing || {})) {
@@ -2881,7 +3022,7 @@ async function loadToday() {
 
 // ---------------------------------------------------------------- My list: List | Schedule
 // Schedule puts today in one column by time: calendar events (read-only), timed tasks and the routine's
-// "Plan your day" and "Look back", with a Now line and "Next: … in 20 min". Tasks without a time follow
+// "Plan your day" and "Snap your pages", with a Now line and "Next: … in 20 min". Tasks without a time follow
 // under "Any time today" in the order today's label prints them. Anyone can pick it; "Same words every
 // time" (routine_mode) makes it the view My list opens on. The pick is kept on this device.
 let todayCal = null;   // GET /calendars/today as last loaded, { failed: true } if it couldn't load, null before
@@ -2918,11 +3059,16 @@ const schedClock = (min) => { const m = Math.min(Math.max(min, 0), 24 * 60 - 1);
 const schedNowMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
 const schedIn = (min) => (min < 60 ? `${min} min` : `${Math.floor(min / 60)} h${min % 60 ? ` ${min % 60} min` : ""}`);
 
+// Returns { html, shown: the open tasks it draws, total: today's open tasks }. Search my list and the
+// tag chips work here too, on today's tasks; "Later" says how many more match in List.
 function scheduleHtml() {
   const now = today(), p = me?.prefs || {};
   const day = (t) => (t.due ? t.due.date.slice(0, 10) : "");
   const timed = (t) => day(t) === now && t.due.date.length > 10;
-  const open = [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])];
+  const shown = filtering() ? matches : () => true;
+  const all = [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])];
+  const total = all.filter((t) => day(t) && day(t) <= now).length;
+  const open = all.filter(shown);
   const events = todayCal?.events || [];
   const items = [];
   for (const t of open.filter(timed)) {
@@ -2942,26 +3088,28 @@ function scheduleHtml() {
   const anytime = open.filter((t) => day(t) && day(t) <= now && !timed(t)).map((t, i) => [t, i])
     .sort(([a, i], [b, j]) => { const x = key(a), y = key(b); return x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || i - j; })
     .map(([t]) => t);
-  const later = listData.tasks.filter((t) => !t.done && (!t.due || day(t) > now)).length;
+  const later = listData.tasks.filter((t) => !t.done && (!t.due || day(t) > now) && shown(t)).length;
+  const drawn = [...open.filter(timed), ...anytime];
   const allDay = events.filter((e) => e.all_day);
   let html = `<p class="schednext" id="schedNext"></p>`;
+  if (filtering() && !drawn.length && total) html += noMatchHtml("today");
   if (!todayCal) html += `<p class="muted">Loading today's calendar…</p>`;
   else if (todayCal.failed) html += `<p class="err">Couldn't load your calendar, so its events aren't here. <button class="linkish" data-cal-retry>Try again</button></p>`;
   html += (todayCal?.problems || []).map((x) => `<p class="err">${esc(x)}</p>`).join("");
   if (allDay.length) html += `<div class="group" id="schedAllDay">All day</div><ul class="sched" aria-labelledby="schedAllDay">${allDay.map((e) => schedEventRow(e)).join("")}</ul>`;
   html += `<div class="group" id="schedHead">Today by time</div><ol class="sched" id="schedList" aria-labelledby="schedHead">${items.map(schedRow).join("")}</ol>`;
-  if (!items.some((x) => x.kind === "task" || x.kind === "event")) {
+  if (!filtering() && !items.some((x) => x.kind === "task" || x.kind === "event")) {
     html += `<p class="muted">Nothing at a set time today. Give a task a time in Brain dump, like “call Sam 3pm”.</p>`;
   }
   html += `<div class="group">Any time today (${anytime.length})</div>`
-    + (anytime.length ? anytime.map(taskRow).join("") : `<p class="muted">Nothing else due today.</p>`);
+    + (anytime.length ? anytime.map(taskRow).join("") : `<p class="muted">${filtering() ? "Nothing here matches." : "Nothing else due today."}</p>`);
   if (showingDone) {
-    const done = listData.tasks.filter((t) => t.done);
+    const done = listData.tasks.filter((t) => t.done && shown(t));
     html += `<div class="group">Done (${done.length})</div>`
-      + (done.length ? done.map(taskRow).join("") : `<p class="muted">Nothing finished yet. It'll show here when you tick something.</p>`);
+      + (done.length ? done.map(taskRow).join("") : `<p class="muted">${filtering() ? "Nothing here matches." : "Nothing finished yet. It'll show here when you tick something."}</p>`);
   }
-  if (later) html += `<p class="muted">Later: ${later === 1 ? "1 more task" : `${later} more tasks`} on your list, coming up or someday. <button class="linkish" data-view-go="list">Show them in List</button></p>`;
-  return html;
+  if (later) html += `<p class="muted">Later: ${later === 1 ? "1 more task" : `${later} more tasks`} ${filtering() ? (later === 1 ? "matches" : "match") : "on your list"}, coming up or someday. <button class="linkish" data-view-go="list">Show them in List</button></p>`;
+  return { html, shown: drawn, total };
 }
 function schedEventRow(e, x = null) {
   const meta = [e.location, e.calendar].filter(Boolean).map(esc).join(" · ");
@@ -2977,15 +3125,25 @@ function schedRow(x) {
     // Its time is in the column, so the row doesn't say "today 9:00a" again (the buttons act on the task by its id).
     return `<li class="srow" data-start="${x.start}" data-end="${x.end ?? ""}"><div class="stime">${time}</div>${taskRow({ ...x.t, due: null })}</li>`;
   }
+  // The words follow their setup answers: no printer yet (a preview), no journal (nothing to write in).
+  const p = me?.prefs || {}, paper = p.print_with !== "none", journal = p.journal_mode !== false;
+  const preview = !paper || $("#dry").checked;
   const [name, what, action] = x.kind === "plan"
-    ? ["Plan your day", "Print today's label and pick your one thing.", `<button class="linkish" data-sched-print>Today's label</button>`]
-    : ["Look back", "Tick your label, write a few notes, snap both pages.", `<button class="linkish" data-go-tab="scan">Open Snap</button>`];
+    ? ["Plan your day", paper ? "Print today's label and pick your one thing." : "Pick your one thing. Preview today's label if you like.",
+       `<button class="linkish" data-sched-print>${preview ? "Preview today's label" : "Print today's label"}</button>`]
+    : journal || paper
+      ? ["Snap your pages", journal ? (paper ? "Tick your label, write a few notes, snap both pages." : "Write a few notes, then snap your journal page.")
+          : "Tick your label with a pen, then snap it.", `<button class="linkish" data-go-tab="scan">Open Snap</button>`]
+      : ["Wrap up your day", "Tick off what you did today on My list.",
+         aiOn() ? `<button class="linkish" data-sched-look>Look back on my week</button>` : ""];
   return `<li class="srow routine" data-start="${x.start}" data-end=""><div class="stime">${time}</div>
     <div class="sbody"><div class="text">${name}</div><div class="meta">${what} ${action}</div></div></li>`;
 }
 function renderSchedule(spot) {
-  $("#listBody").innerHTML = scheduleHtml();
+  const s = scheduleHtml();
+  $("#listBody").innerHTML = s.html;
   $("#listBody").classList.remove("muted");
+  applyFilterUi(s.shown, s.total);
   updatePicks();
   renderNow();
   restoreFocus(spot);
@@ -3025,8 +3183,10 @@ document.addEventListener("visibilitychange", () => tickSchedule());
 $("#listBody").addEventListener("click", (e) => {
   if (e.target.closest("[data-view-go]")) { viewPick = "list"; try { localStorage.setItem(myListViewKey(), "list"); } catch {} renderList(); $("#listView [data-view=list]").focus(); }
   else if (e.target.closest("[data-sched-print]")) $("#printTodayList").click();
+  else if (e.target.closest("[data-sched-look]")) goto("journal", "#lookCard");
   else if (e.target.closest("[data-cal-retry]")) { todayCal = null; renderList(); loadToday(); }
 });
+$("#dry").addEventListener("change", () => { if (me && myListView() === "schedule") renderList(); });  // "Preview" or "Print today's label"
 
 
 // ---------------------------------------------------------------- setup questions
@@ -3052,12 +3212,14 @@ const QUIZ = [
            ["reading", "Easy-to-read text", "A font made for reading, with more space. Often picked by people with dyslexia."],
            ["routine", "Same routine every day, no surprises", "The same words every time, and your day in time order. Often picked by autistic people."],
            ["basics", "Just the basics", "None of these extras"]] },
-  { key: "times", q: "When do you plan your day, and when do you look back?", hint: "Both show on My list's Schedule, so every day has the same shape.", times: true },
+  { key: "times", q: "When do you plan your day, and when do you snap your pages?", hint: "Both show on My list's Schedule, so every day has the same shape.", times: true },
 ];
 let quiz = { i: 0, answers: {}, rerun: false, saving: false };
 let quizAsked = false;  // shown by itself once per visit at most
-function openQuiz() {
-  quiz = { i: 0, answers: {}, rerun: !!me?.prefs?.setup_quiz_done, saving: false };
+// manual: opened from Settings → Help or the guide. It starts from their settings as they are now (an
+// account from before the questions existed has some on), and Esc or Skip changes nothing.
+function openQuiz(manual = false) {
+  quiz = { i: 0, answers: {}, rerun: manual || !!me?.prefs?.setup_quiz_done, saving: false };
   if (!$("#quizDialog").open) $("#quizDialog").showModal();
   drawQuiz();
 }
@@ -3075,7 +3237,7 @@ function drawQuiz() {
   if (q.times) {
     $("#quizBody").innerHTML = `<div class="quiztimes">
       <div class="field"><label for="quizPlan">Plan my day at</label><input type="time" id="quizPlan" value="${esc(quiz.answers.plan_at || p.routine_morning || "08:00")}"></div>
-      <div class="field"><label for="quizLook">Look back at</label><input type="time" id="quizLook" value="${esc(quiz.answers.review_at || p.routine_evening || "18:00")}"></div></div>`;
+      <div class="field"><label for="quizLook">Snap my pages at</label><input type="time" id="quizLook" value="${esc(quiz.answers.review_at || p.routine_evening || "18:00")}"></div></div>`;
   } else {
     const current = quiz.rerun && q.now ? q.now(p) : null;
     const on = (v) => (q.multi ? (was || (quiz.rerun ? quizHelpsNow(p) : [])).includes(v) : was === v);
@@ -3212,7 +3374,7 @@ function quizSummary(c) {
   if ("reading_mode" in c) out.push([c.reading_mode ? "Easy-to-read text: on, here and on your labels." : "Easy-to-read text: off.", "Settings → General"]);
   if ("routine_mode" in c) out.push([c.routine_mode ? "Same words every time: on. My list opens on Schedule." : "Same words every time: off.", "Settings → Focus"]);
   if ("routine_morning" in c || "routine_evening" in c) {
-    out.push([`Plan your day at ${fmtClock(me.prefs.routine_morning)} and look back at ${fmtClock(me.prefs.routine_evening)}.`, "Settings → Focus"]);
+    out.push([`Plan your day at ${fmtClock(me.prefs.routine_morning)} and snap your pages at ${fmtClock(me.prefs.routine_evening)}.`, "Settings → Focus"]);
   }
   return out;
 }
@@ -3223,7 +3385,9 @@ $("#quizBody").addEventListener("click", (e) => {
   else if (act === "close") $("#quizDialog").close();
   else if (act === "settings") { $("#quizDialog").close(); goto("settings"); }
 });
-$("#quizAgain").onclick = () => openQuiz();
+$("#quizAgain").onclick = () => openQuiz(true);
+// Opened by itself (a new account), it had nothing to give focus back to: Just one thing, or the screen's heading.
+$("#quizDialog").addEventListener("close", () => setTimeout(() => { if (document.activeElement === document.body || !document.activeElement) focusMain(); }, 0));
 
 
 // ---------------------------------------------------------------- Get started guide
@@ -3265,7 +3429,7 @@ const STEPS = {
           mark: "I did it" },
   app: { title: "Link your to-do app (optional)", text: () => `Already use ${appNames()}? Its tasks show up here too.`,
          go: ["Link an app", () => goto("settings", "#appCard")], skip: true },
-  calendar: { title: "Add your calendar (optional)", text: "Today's events show here and print at the top of your daily ticket. Google, Outlook and iCloud all work.",
+  calendar: { title: "Add your calendar (optional)", text: "Today's events show here and print at the top of your daily label. Google, Outlook and iCloud all work.",
               go: ["Add a calendar", () => goto("settings", "#calCard")], skip: true },
   printer: { title: () => guide?.can_add_printer ? "Add your label printer" : "Your printer",
              text: () => guide?.can_add_printer ? "Admin → Printers for a label printer. No label printer? Every ticket has Print on paper, which works with any printer."
@@ -3273,12 +3437,12 @@ const STEPS = {
              go: () => guide?.can_add_printer ? ["Add printer", () => goto("admin", "#printerList")] : null, skip: true },
   preview: { title: "Make your first stickers", text: "Tick a task or two and tap Stickers. With “Preview only” on, nothing prints: you just see how it looks.",
              go: ["Show me", () => $(".printbar").scrollIntoView({ behavior: smooth(), block: "center" })] },
-  today: { title: "Print today's ticket", text: "Today's tasks on one label, with the next tiny step under each. Tap Print today. With “Preview only” on, you just see it.",
+  today: { title: "Print today's label", text: "Today's tasks on one label, with the next tiny step under each. Tap Print today. With “Preview only” on, you just see it.",
            go: ["Show me", () => { goto("print"); setTimeout(() => $("[data-act=today]").focus(), 200); }] },
   snap: { title: "Mark it and snap it", text: "Tick a row with a pen, then take a photo in Snap. Try it on a preview: print it on paper or hold the preview up to your camera.",
           go: ["Open Snap", () => goto("scan")], skip: true },
   focus: { title: "Make it fit your brain", text: "How many tasks per day, gentle wording, yesterday's wins, tiny steps: it's all in Focus & ADHD helpers.",
-           go: () => (me?.prefs?.setup_quiz_done ? ["Open", () => goto("settings", "#focusCard")] : ["Answer 5 quick questions", () => openQuiz()]),
+           go: () => (me?.prefs?.setup_quiz_done ? ["Open", () => goto("settings", "#focusCard")] : ["Answer 5 quick questions", () => openQuiz(true)]),
            mark: "Looks good" },
 };
 const val = (v) => (typeof v === "function" ? v() : v);
@@ -3446,7 +3610,7 @@ function changesHtml(c) {
 function ticketHtml(d) {
   const t = d.ticket;
   if (!t) return "";
-  const what = t.kind === "today" ? "Daily ticket" : KIND_NAMES[t.kind] || "Ticket";
+  const what = KIND_NAMES[t.kind] || "Ticket";  // the daily one: "Daily label", as everywhere
   const size = me?.prefs?.paper_size || "letter";
   return `<div class="jticket"><button type="button" data-jticket="${esc(t.id)}" aria-label="Open ${esc(what.toLowerCase())} #${esc(t.id)}">
       <img src="${png(t.id)}" alt="" loading="lazy"></button>
@@ -3872,17 +4036,23 @@ $("#linesAdd").onclick = async () => {
     msg.className = "ok";
     msg.innerHTML = `Added ${esc(plural(r.added?.length ?? chosen.length, "task"))} to ${esc(r.to || "your list")}. ✓
       <button class="linkish" data-go-tab="mylist">Open My list</button>`;
+    msg.querySelector("[data-go-tab]").focus();  // the Add button is off now: focus stays in the sheet
     loadList();
   } catch (e) {
     msg.className = "err";
     msg.textContent = e.status && typeof e.message === "string" && e.message !== "[object Object]" ? e.message
       : e.status ? "Some lines couldn't be added. Check them and try again." : OFFLINE;
     drawLines();
+    ($("#linesAdd").disabled ? $("#linesClose") : $("#linesAdd")).focus();
   }
 };
 $("#linesClose").onclick = () => $("#linesDialog").close();
 $("#linesDialog").addEventListener("click", (e) => { if (e.target.closest("[data-go-tab]")) $("#linesDialog").close(); });
-$("#linesDialog").addEventListener("close", () => { if (lines.opener?.isConnected) lines.opener.focus(); });
+$("#linesDialog").addEventListener("close", () => {
+  const o = lines.opener;
+  if (o?.isConnected && o.offsetParent) return o.focus();
+  setTimeout(() => ($("#mylist").classList.contains("on") ? $("#listTitle").focus() : focusMain()), 0);  // "Open My list": the list, where they went
+});
 
 // ---------------------------------------------------------------- download my journal
 // From the Journal tab, Profile and the delete-account panel. The summary says what's in it (and
@@ -3948,7 +4118,12 @@ function applyAi(on = aiOn()) {
   $("#lookNoKey").hidden = ready; $("#lookAsk").hidden = !ready;
 }  // loadPrefs calls it, so it follows the setting once it's saved (or put back if saving failed)
 
-const BREAK_SENT = "This sends the task's name and steps to Anthropic's AI. Nothing is kept unless you save the steps.";
+// Exactly what coach.breakdown_message sends (privacy.html says the same).
+const BREAK_SENT = "This sends the task's name, how long it takes, its day, its steps and anything you type in “What makes it hard?” to Anthropic's AI. Nothing is kept unless you save the steps.";
+// The first time on this device it says that before anything is sent, and asks only on "Suggest steps".
+const breakSeenKey = () => (me ? `nb.breakSeen:${me.username}` : "");
+function breakSeen() { try { return localStorage.getItem(breakSeenKey()) === "1"; } catch { return false; } }
+function breakSeenNow() { try { localStorage.setItem(breakSeenKey(), "1"); } catch {} }
 let brk = null;  // the sheet that's open: { id, content, from: edit|now|slug, opener, task, steps, replace, hint, ctl, changed }
 
 // The Edit dialog's tiny steps: the one place this sheet reads or changes that dialog.
@@ -3966,6 +4141,7 @@ function openBreak(id, content, from, opener) {
   $("#breakTask").textContent = content || "";
   if (!$("#breakDialog").open) $("#breakDialog").showModal();
   if (!me?.ai_ready) return drawBreak("nokey");
+  if (!breakSeen()) return drawBreak("intro");  // first time: what's sent, before it's sent
   askBreak();
 }
 
@@ -4019,7 +4195,7 @@ function reviewActs() {
   const b = brk, n = keptSteps().length, off = n ? "" : " disabled";
   if (b.from === "edit") return `<button class="go" data-b="use"${off}>Use ${n ? plural(n, "step") : "steps"}</button>`;
   if (b.task.local) return `<button class="go" data-b="save"${off}>Save ${n ? plural(n, "step") : "steps"}</button>`;
-  return `<button class="go" data-b="copy"${off}>Add to My list</button><button class="plain" data-b="print"${off}>Print on a card</button>`;
+  return `<button class="go" data-b="copy"${off}>Add to My list</button><button class="plain" data-b="print"${off}>Print just this</button>`;
 }
 function drawBreakSteps() {  // each step's box is as tall as its words, so nothing is cut off
   $("#breakBody").innerHTML = reviewHtml();
@@ -4039,8 +4215,12 @@ function drawBreak(state, info = "") {
   if (state === "nokey") {
     body.innerHTML = `<p>Break it down uses an AI helper to suggest tiny first steps.</p><p class="muted">${esc(noKeyText())}</p>`;
     acts.innerHTML = close("OK", "go");
+  } else if (state === "intro") {
+    body.innerHTML = `<p>Break it down asks an AI helper (Claude, by Anthropic) for a few tiny first steps. You pick the ones to keep.</p>
+      <p class="muted">${esc(BREAK_SENT)}</p><p class="muted">You can turn the AI helpers off in Settings → Focus.</p>`;
+    acts.innerHTML = `<button class="go" data-b="ask">Suggest steps</button>${close("Not now")}`;
   } else if (state === "loading") {
-    body.innerHTML = `<p role="status"><span class="spin" aria-hidden="true"></span>Thinking of tiny first steps…</p><p class="muted">${BREAK_SENT}</p>`;
+    body.innerHTML = `<p role="status"><span class="spin" aria-hidden="true"></span>Thinking of tiny first steps…</p><p class="muted">${esc(BREAK_SENT)}</p>`;
     acts.innerHTML = close("Cancel");
   } else if (state === "error") {
     body.innerHTML = `<p class="err" role="alert">${esc(info)}</p>`;
@@ -4055,9 +4235,10 @@ function drawBreak(state, info = "") {
     const first = (info.steps || []).find((s) => !s.done);
     body.innerHTML = `<div class="bnote" role="status"><p><b>Saved ✓</b> It has ${plural((info.steps || []).length, "tiny step")} now.</p>
       ${first ? `<p>Start with: ${esc(first.text)}</p>` : ""}</div>${info.cut ? `<p class="muted">A task holds 12 steps, so the last ones were left off.</p>` : ""}`;
-    acts.innerHTML = `${close("Done", "go")}<button class="plain" data-b="print">Print it big</button><button class="plain" data-b="undo">Undo</button>`;
+    acts.innerHTML = `${close("Done", "go")}<button class="plain" data-b="print">Print just this</button><button class="plain" data-b="undo">Undo</button>`;
   } else if (state === "copied") {
-    body.innerHTML = `<div class="bnote" role="status"><p><b>Added to My list ✓</b> “${esc(info.content)}”, with ${plural((info.steps || []).length, "tiny step")}.</p></div>`;
+    body.innerHTML = `<div class="bnote" role="status"><p><b>Added to My list ✓</b> “${esc(info.content)}”, with ${plural((info.steps || []).length, "tiny step")}.</p>
+      <p class="muted">The task in ${esc(b.task?.app || "your linked app")} is still there.</p></div>`;
     acts.innerHTML = `${close("Done", "go")}<button class="plain" data-b="mylist">Open My list</button>`;
   } else if (state === "printed") {
     body.innerHTML = `<h3 tabindex="-1">${esc(resultHeading(info))}</h3>${ticketResult(info)}`;
@@ -4113,7 +4294,9 @@ async function copyBreak(button) {
   await breakDo(button, "Adding…", async (b) => {
     const content = `${b.task.content.slice(0, 492)}: steps`;
     const steps = keptSteps().map((text) => ({ text, done: false }));
-    const r = await api("/list", { method: "POST", json: { content, steps, due_date: b.task.due_date || null } });
+    // A fresh start: a task that was waiting comes over for today, not already late (and not a slug).
+    const due = b.task.due_date && b.task.due_date < today() ? today() : (b.task.due_date || null);
+    const r = await api("/list", { method: "POST", json: { content, steps, due_date: due } });
     b.changed = true;
     if (brk !== b) return loadList();
     drawBreak("copied", r);
@@ -4137,6 +4320,7 @@ $("#breakDialog").addEventListener("click", (e) => {
   if (!button || !b) return;
   const what = button.dataset.b;
   if (what === "close") $("#breakDialog").close();
+  else if (what === "ask") { breakSeenNow(); askBreak(); }
   else if (what === "retry") askBreak(b.hint);
   else if (what === "again") askBreak($("#bHint").value.trim());
   else if (what === "add") {
@@ -4195,7 +4379,23 @@ $("#nowBreak").onclick = () => {
   const id = $("#nowCard").dataset.id;
   if (id) openBreak(id, $("#nowText").textContent, "now", $("#nowBreak"));
 };
-$("#tdBreak").onclick = () => { if (editing) openBreak(editing.id, editing.content, "edit", $("#tdBreak")); };
+// From the task dialog: a new task, or changed words, are saved first, so the steps are for the task
+// as it reads now (the dialog stays open, and "Use N steps" fills its step list as before).
+$("#tdBreak").onclick = async () => {
+  if (!editing || tdBusy()) return;
+  if (!$("#tdContent").value.trim()) return $("#taskForm").reportValidity();
+  let said = "";
+  if (!editing.id || tdDirty()) {
+    const creating = !editing.id;
+    try { await tdHold(saveEditing); } catch (err) { return listError(err, editing?.id); }
+    if (creating) { $("#tdTitle").textContent = "Edit task"; $("#tdDelete").hidden = false; }
+    focusLabel();
+    loadList();
+    said = creating ? "Added to My list" : "Your changes are saved";
+  }
+  openBreak(editing.id, editing.content, "edit", $("#tdBreak"));
+  if (said) toast(said);  // said in the sheet, so it's seen
+};
 $("#slugList").addEventListener("click", (e) => {
   const b = e.target.closest("[data-slug-break]"), s = b?.closest("[data-task]");
   if (s) openBreak(s.dataset.task, s.dataset.content, "slug", b);
@@ -4336,6 +4536,9 @@ function closeOnBackdrop(dlg, ok = () => true) {
 closeOnBackdrop($("#meDialog"));
 closeOnBackdrop($("#moreDialog"));
 closeOnBackdrop($("#fbDialog"), () => !$("#fbDone").hidden || !$$("#fbDialog textarea").some((t) => t.value.trim()));  // nothing typed is lost
+$("#fbDialog").addEventListener("cancel", (e) => {  // nor with Esc or the phone's back gesture, without asking
+  if ($("#fbDone").hidden && $$("#fbDialog textarea").some((t) => t.value.trim()) && !confirm("Close without sending? What you typed will be lost.")) e.preventDefault();
+});
 // What deleting your account removes, and how to keep a copy first.
 const DELETE_WARNING = `<p class="err">This deletes your account, your list, tags, journal pages and journal photos, tickets and history from Next Box. It can't be undone. Apps you linked (like Todoist) aren't touched.</p>
   <p class="muted">Want a copy first? <a href="/auth/export?format=zip">Download my data</a>: one .zip file with your list, settings, journal pages and photos, and ticket images.</p>
@@ -4547,12 +4750,12 @@ function routineView() {
     sub: journal ? "Today's tasks on one label, for the left page of your journal." : "Today's tasks on one label.",
     acts: `<button class="go" data-routine="print">${$("#dry").checked ? "Preview today's label" : "Print today's label"}</button>
       <button class="plain" data-routine="hide">Not today</button>` };
-  if (state === "snap") return { state, kick: `Look back · ${fmtClock(p.routine_evening || "18:00")}`,
-    head: "How did today go? Snap your pages",
+  if (state === "snap") return { state, kick: `Snap your pages · ${fmtClock(p.routine_evening || "18:00")}`,
+    head: "How did today go?",
     sub: journal ? "Tick your label, write a few notes, then take one photo of both pages." : "Tick your label with a pen, then take a photo of it.",
     acts: `<button class="go" data-routine="snap">Snap my pages</button><button class="plain" data-routine="hide">Not today</button>` };
   const n = listData.done_today || 0;
-  return { state, kick: "Look back", head: n ? `You finished ${n} today ✓` : "Pages snapped ✓",
+  return { state, kick: "Snap your pages", head: n ? `You finished ${n} today ✓` : "Pages snapped ✓",
     sub: snap.journal_id ? "Today's page is in your journal." : "",
     acts: `${journal ? `<button class="plain" data-go-tab="journal">Open Journal</button>` : ""}<button class="plain" data-routine="hide">Hide</button>` };
 }

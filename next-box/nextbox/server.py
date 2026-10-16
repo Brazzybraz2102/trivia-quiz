@@ -302,10 +302,11 @@ class SignupBody(BaseModel):
     agree: bool = False  # the Terms of Use and Privacy Policy
 
 
-TERMS_VERSION = 3  # bump when terms.html or privacy.html change in a way people should re-read
+TERMS_VERSION = 4  # bump when terms.html or privacy.html change in a way people should re-read
 #   2: the Privacy Policy covers the Journal (photos and handwriting kept, private to you) and says
 #      Claude (Anthropic) reads your handwriting as well as your marks.
 #   3: with Journal mode off, a photo with handwriting (notes or a win) is still kept as a journal page.
+#   4: it says what the AI helpers (Break it down, Look back on my week) send, only when tapped.
 DB_NAMES = {"sqlite": "SQLite", "postgresql": "PostgreSQL"}  # for the About page
 
 
@@ -1067,6 +1068,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 "slides": slides, "slug_after": slug_after,
                 "linked_error": linked_error, "linked_undo": linked_undo, "tags": _tags_with_uses(caller.name),
                 "done_today": len(Wins(accounts.db, caller.name).between(today.isoformat(), today.isoformat())),
+                # Ever had a task here, open or done: finishing the last one isn't a brand-new start.
+                "has_tasks": bool(tasks) or _has_own_tasks(caller),
                 "one_thing": min(candidates, key=lambda t: jobs._sort_key(t, today), default=None),
                 "marks_waiting": sum(len(_waiting(r)) for r in ctx.store.list_scans(50, by=caller.name))}
 
@@ -1425,6 +1428,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             prev = ((task.get("due") or {}).get("date") or "")[:10] or None
             if prev == target:
                 return {"ok": True, "moved": False, "from": prev, "to": target, "task": task if local else None}
+            if to == "tomorrow" and not body.undo and prev and target and prev > target:
+                # → Tomorrow never moves a task sooner: one due later stays where it is.
+                return {"ok": True, "moved": False, "later": True, "from": prev, "to": prev,
+                        "task": task if local else None}
             if local:
                 # This time only: keeps its time, a weekday repeat skips weekends, a repeat keeps its own day.
                 task = tasks.move(task_id, target)
