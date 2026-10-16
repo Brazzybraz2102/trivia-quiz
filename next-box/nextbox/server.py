@@ -30,6 +30,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import coach as coaching
 from . import jobs, printer, scan, upkeep
 from .auth import PREF_HINTS, ROLES, Accounts, AuthError, default_prefs, rank
 from .config import PROJECT_DIR
@@ -199,6 +200,16 @@ class LinesBody(BaseModel):
 class FocusBody(BaseModel):
     task_id: str | None = Field(default=None, max_length=200)
     dry_run: bool | None = None
+    # A linked app's task: tiny steps to print on the card only (never written to the app or kept).
+    steps: list[str] | None = Field(default=None, max_length=12)
+
+
+class BreakBody(BaseModel):
+    hint: str = Field(default="", max_length=coaching.HINT_CHARS)  # what makes it hard (optional)
+
+
+class LookBackBody(BaseModel):
+    include_notes: bool = False  # the week's journal notes go too only when the person ticks it
 
 
 class ConnectBody(BaseModel):
@@ -291,9 +302,9 @@ class Caller:
 
 def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                accounts: Accounts | None = None, builder: Builder | None = None,
-               calendar_builder=None) -> FastAPI:
+               calendar_builder=None, coach: coaching.Coach | None = None) -> FastAPI:
     """`ctx.tasks_factory`, when set, is one to-do app shared by everyone (tests only).
-    Otherwise each person's own connection is used."""
+    Otherwise each person's own connection is used. `coach` stands in for the AI helpers in tests."""
     # The API explorer is off unless asked for: once Next Box is on the internet, nobody needs a map.
     show_docs = os.environ.get("NEXTBOX_API_DOCS", "").strip() in ("1", "true", "yes")
     app = FastAPI(title="Next Box", docs_url="/docs" if show_docs else None, redoc_url=None,
@@ -334,6 +345,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     scan_window, calendar_window, connect_window = _Window(30, 3600), _Window(20, 3600), _Window(20, 3600)
     # Downloading the whole journal builds a big file: 10 an hour. One day's page to print: 60.
     journal_window, journal_day_window = _Window(10, 3600), _Window(60, 3600)
+    coach_window = _Window(20, 3600)  # the AI helpers, both together: each one is a paid call
+    ai = {"coach": coach}             # the real one is made on first use
     connections = Connections(ctx.settings, accounts, vault, **({"builder": builder} if builder else {}),
                               **({"calendar_builder": calendar_builder} if calendar_builder else {}))
 
@@ -644,7 +657,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 # They agreed to an older notice or older terms: say what's new.
                 "notice_changed": consent.get("version") not in (None, DATA_NOTICE_VERSION)
                                   or consent.get("terms") not in (None, TERMS_VERSION),
-                "password_reset": _reset_notice(user)}
+                "password_reset": _reset_notice(user),
+                "ai_ready": ai_ready()}  # the AI helpers have a key (or a stand-in) to work with
 
     def _reset_notice(user: dict) -> dict | None:
         """Once they've chosen their own password: which admin last set a one-time one, and when
@@ -1207,7 +1221,11 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.post("/print/focus")
     def p_focus(body: FocusBody, caller: Caller = Depends(auth)):
-        return run(caller, "print_focus", jobs.print_focus, rctx(caller), body.task_id, dry_run=body.dry_run)
+        steps = body.steps
+        if steps is not None and (not body.task_id or is_local(body.task_id)):
+            steps = None  # My list prints its own saved steps
+        return run(caller, "print_focus", jobs.print_focus, rctx(caller), body.task_id, dry_run=body.dry_run,
+                   steps=steps)
 
     @app.get("/printed")
     def printed(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0, le=100_000),
@@ -1417,6 +1435,106 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             return {"slugs": [], "error": str(exc)[:200]}
         moves = Slides(accounts.db, caller.name).counts()
         return {"slugs": find_slugs(tasks, moves, ctx.today(), int(caller.prefs.get("slug_after", 3)))}
+
+    # ----------------------------------------------------------- AI helpers (nextbox/coach.py)
+    # Only when the person taps: never automatic. Only that a helper ran is logged, never what was
+    # sent or what came back; journal notes go only when the person ticks "include my journal notes".
+    def ai_ready() -> bool:
+        return ai["coach"] is not None or bool(ctx.settings.anthropic_api_key)
+
+    def helper(caller: Caller) -> coaching.Coach:
+        if not caller.prefs.get("ai_helpers", True):
+            raise HTTPException(409, coaching.TURNED_OFF)
+        if not ai_ready():
+            raise HTTPException(503, coaching.NO_KEY)
+        if ai["coach"] is None:
+            ai["coach"] = coaching.claude_coach(ctx.settings)
+        return ai["coach"]
+
+    def ask(caller: Caller, action: str, fn, message: str):
+        """One call to the AI. Returns (answer, ms)."""
+        if not coach_window.allow(caller.name):
+            raise HTTPException(429, coaching.TOO_MANY)
+        start = time.time()
+        try:
+            out = fn(message)
+        except coaching.CoachError as exc:
+            events.log(caller.name, action, ok=False, error=exc.kind, household=caller.household)
+            raise HTTPException(exc.status, exc.message) from None
+        except Exception as exc:  # noqa: BLE001 - the type only: a message could quote what was sent
+            events.log(caller.name, action, ok=False, kind="error", error=type(exc).__name__,
+                       household=caller.household)
+            raise HTTPException(500, "Something went wrong with the AI helper. Try again in a bit.") from None
+        return out, int((time.time() - start) * 1000)
+
+    @app.post("/list/{task_id}/breakdown")
+    def break_it_down(task_id: str, body: BreakBody | None = None, caller: Caller = Depends(person)):
+        """"Break it down": 3-6 tiny first steps for a task, to review before anything is saved.
+        Sends only the task's name, how long it takes, its day and steps (and the optional hint)."""
+        coach_fn = helper(caller)
+        if not task_id.strip() or len(task_id) > 200:
+            raise HTTPException(404)
+        c = rctx(caller)
+        try:
+            task = c.tasks.get_task(task_id)
+        except TaskNotFound as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except NotConnected as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ProviderError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        hint = (body.hint if body else "").strip()
+        local = is_local(task_id)
+        named = getattr(c.tasks, "linked_name", None)
+        about = {"id": str(task["id"]), "content": task.get("content", ""), "local": local,
+                 "steps": list(task.get("steps") or []) if local else [],
+                 "due_date": ((task.get("due") or {}).get("date") or "")[:10] or None,
+                 "app": None if local else (named() if named else "your linked app")}
+        if coaching.crisis(about["content"], hint):  # not sent anywhere, and not logged
+            return {"task": about, "steps": [], "support": coaching.SUPPORT}
+        result, ms = ask(caller, "ai_breakdown", coach_fn.breakdown, coaching.breakdown_message(task, hint))
+        steps = coaching.clean_steps(result.steps)
+        if not steps:
+            events.log(caller.name, "ai_breakdown", ok=False, error="empty", household=caller.household)
+            raise HTTPException(422, coaching.CANT_HELP)
+        events.log(caller.name, "ai_breakdown", detail={"ms": ms, "steps": len(steps)}, household=caller.household)
+        return {"task": about, "steps": steps}
+
+    @app.post("/journal/look-back")
+    def look_back(body: LookBackBody, caller: Caller = Depends(person)):
+        """"Look back on my week": a short, kind note about the last 7 days. Sends the week's wins
+        (counts and task names) and slugs, and the journal notes only with include_notes. Nothing is
+        kept: "Save to my journal" saves the returned `text` through POST /journal."""
+        coach_fn = helper(caller)
+        last = ctx.today()
+        first = last - timedelta(days=6)
+        wins = wins_by_day(caller.name, first, last)
+        try:
+            slug_list = find_slugs(rctx(caller).tasks.today(), Slides(accounts.db, caller.name).counts(), last,
+                                   int(caller.prefs.get("slug_after", 3)))
+        except Exception:  # noqa: BLE001 - a linked app that's down: the week's wins still count
+            slug_list = []
+        pages = _journal(caller).pages(first.isoformat(), last.isoformat())
+        has_notes = any((p.get("notes") or "").strip() or p.get("win") for p in pages)
+        notes = body.include_notes and has_notes
+        week = {"first": first.isoformat(), "last": last.isoformat(),
+                "wins": sum(w["count"] for w in wins.values()), "slugs": len(slug_list), "notes": notes}
+        if notes and coaching.crisis(*(f"{p.get('win') or ''}\n{p.get('notes') or ''}" for p in pages)):
+            return {"week": week, "concern": True, "support": coaching.SUPPORT}  # not sent, not logged
+        if not week["wins"] and not slug_list and not notes:
+            return {"week": week, "empty": True, "has_notes": has_notes}
+        message = coaching.week_message(first, last, wins, slug_list, pages if notes else None)
+        note, ms = ask(caller, "ai_look_back", coach_fn.week_note, message)
+        events.log(caller.name, "ai_look_back", detail={"ms": ms}, household=caller.household)
+        if note.concern:
+            return {"week": week, "concern": True, "support": coaching.SUPPORT}
+        if not slug_list:
+            note = note.model_copy(update={"slug": ""})  # nothing slid: no observation about it
+        note = note.model_copy(update={k: getattr(note, k).strip() for k in ("went_well", "slug", "suggestion")})
+        if not note.went_well and not note.suggestion:
+            raise HTTPException(422, coaching.CANT_HELP)
+        return {"week": week, "note": {"went_well": note.went_well, "slug": note.slug, "suggestion": note.suggestion},
+                "text": coaching.note_text(note, first, last)}
 
     @app.post("/journal")
     def journal_add(body: JournalBody, caller: Caller = Depends(person)):
@@ -2367,6 +2485,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             "todoist": todoist,
             "apps": apps,
             "vision": {"model": ctx.settings.vision_model, "key_set": bool(ctx.settings.anthropic_api_key)},
+            "coach": {"model": ctx.settings.coach_model, "key_set": bool(ctx.settings.anthropic_api_key)},
             "data_dir": {"path": str(data_dir), "used_mb": round(size / 1e6, 1),
                          "disk_free_gb": round(usage.free / 1e9, 1)},
             "counts": {"users": len(accounts.list_users()), "printed": len(ctx.store.list_printed(100_000)),

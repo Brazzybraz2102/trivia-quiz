@@ -58,6 +58,7 @@ PREFS = {
     "default_printer": ("", lambda v: isinstance(v, str) and len(v) <= 40),
     "color_rules": ({}, lambda v: _valid_rules(v)),     # reason -> label color, e.g. overdue -> red
     "split_overdue": (False, lambda v: isinstance(v, bool)),  # overdue tasks on their own ticket
+    "ai_helpers": (True, lambda v: isinstance(v, bool)),  # "Break it down" and "Look back on my week" (only when tapped)
 }
 
 # What to tell someone whose setting wasn't saved: plain words, never the setting's key.

@@ -207,6 +207,13 @@ Next Box has its own to-do list, so it works without Todoist. Open the web app o
   yellow is dots, blue is stripes...), so you can still tell them apart at a glance.
 - The **daily ticket** shows 5 tasks at most, the next tiny step under each, gentle wording and
   yesterday's wins. Change any of it under Settings → Focus & ADHD helpers.
+- **Break it down** (on Just one thing, a task's Edit and each slug): an AI helper suggests 3-6 tiny
+  first steps. Tick the ones you want, change the words, then Save (Undo is right there). A linked
+  app's task isn't changed: add the steps to My list as a new task, or print them on a Just one thing
+  card. **Look back on my week** (Journal) writes a short, kind note about your week; your journal
+  notes go only if you tick "Include my journal notes", and nothing is kept unless you tap Save to my
+  journal. Both need `ANTHROPIC_API_KEY` in `.env` and only run when tapped (20 an hour per person).
+  Turn them off under Settings → Focus → AI helpers.
 
 Linking Todoist or a CalDAV app (Settings) is optional: its tasks show up next to yours and stay
 in that app.
@@ -250,10 +257,12 @@ Later projects: add another public hostname to the same tunnel (e.g. `next` → 
 | Todoist | paste an API token | yes |
 | Notion (a to-do database) | paste an integration token + the database link | yes |
 | Asana (tasks assigned to you) | paste a personal access token | yes |
+| monday.com (items assigned to you, on boards with a person, a date and a status column) | paste a personal API token (optional: one board's link) | yes |
 | Nextcloud, Fastmail, Synology, Zoho task lists | CalDAV address + app password | yes |
 | Google Tasks | Sign in with Google | after the owner setup below |
 | Microsoft To Do (Outlook tasks) | Sign in with Microsoft | after the owner setup below |
 | TickTick | Sign in with TickTick | after the owner setup below |
+| ClickUp, Trello | not yet: tap "Ask for it" under Settings → Linked app → Other apps | use My list |
 | Apple Reminders, Things, Any.do, Google Keep | not possible: these apps don't let other apps in | use My list |
 
 | Calendar | How | Works today? |
@@ -351,6 +360,8 @@ Closing the loop:
 | Notes → tasks | Snap result or a journal page → Add lines to my list → tick → Add |
 | Find something you wrote | Journal → Search your journal |
 | A copy of your journal | Journal → Download my journal (.zip or PDF); one day: Print my journal page |
+| A task that won't start | Just one thing, Edit or a slug → Break it down → tick the steps → Save |
+| How did my week go? | Journal → Look back on my week (tick "Include my journal notes" if you like) → Save to my journal |
 | History | web app → Printed, or `nextbox printed` |
 | Sign out | web app → Account → Sign out |
 
