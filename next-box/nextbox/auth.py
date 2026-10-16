@@ -39,6 +39,8 @@ PREFS = {
     "setup_dismissed": ([], lambda v: isinstance(v, list) and len(v) <= 20
                         and all(isinstance(x, str) and len(x) <= 20 for x in v)),  # guide steps marked done/skipped
     "setup_hidden": (False, lambda v: isinstance(v, bool)),  # the Get started guide is put away
+    "setup_done": ([], lambda v: isinstance(v, list) and len(v) <= 20
+                   and all(isinstance(x, str) and len(x) <= 20 for x in v)),  # guide steps that ticked themselves (they stay ticked)
     "paper_size": ("letter", lambda v: v in ("letter", "a4", "a5", "half_letter")),  # for Print on paper
     "journal_mode": (True, lambda v: isinstance(v, bool)),   # daily label for a journal page; keep every read-back photo
     "slug_after": (3, lambda v: isinstance(v, int) and 2 <= v <= 10),  # moves before a task counts as a slug
@@ -83,6 +85,13 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def norm_code(code: str) -> str:
+    """An invite code as stored (3F9A-07C2-B1E4), however it was typed: lowercase, spaces instead of
+    dashes, no dashes, or O/I/L for 0/1 (codes are hex, so those letters never appear)."""
+    raw = re.sub(r"[^0-9A-F]", "", code.upper().translate(str.maketrans("OIL", "011")))
+    return "-".join(raw[i:i + 4] for i in range(0, len(raw), 4))
+
+
 class AuthError(ValueError):
     pass
 
@@ -90,7 +99,7 @@ class AuthError(ValueError):
 class Accounts:
     def __init__(self, root):
         self.db = db.database(root)
-        self._failures: dict[str, list[float]] = {}
+        self._failures: dict[str, list[tuple[float, str]]] = {}
         self._failures_lock = threading.Lock()
 
     # --- rows ----------------------------------------------------------------
@@ -193,14 +202,16 @@ class Accounts:
 
     def revoke_invite(self, code: str) -> None:
         with self.db.begin() as conn:
-            conn.execute(delete(db.invites).where(and_(db.invites.c.code == code.strip().upper(),
+            conn.execute(delete(db.invites).where(and_(db.invites.c.code == norm_code(code),
                                                        db.invites.c.used_by.is_(None))))
 
     def _redeem(self, conn, code: str, username: str) -> dict:
-        code = code.strip().upper()
+        code = norm_code(code)
         row = conn.execute(select(db.invites).where(db.invites.c.code == code)).mappings().first()
-        if not row or row["used_by"] or row["expires"] < time.time():
-            raise AuthError("that invite code isn't valid any more; ask for a new one")
+        if not row:
+            raise AuthError("We don't recognize that invite code. Check it and try again.")
+        if row["used_by"] or row["expires"] < time.time():
+            raise AuthError("That invite code was already used or has expired. Ask for a new one.")
         conn.execute(update(db.invites).where(db.invites.c.code == code).values(used_by=username))
         return dict(row)
 
@@ -268,11 +279,13 @@ class Accounts:
         beta, made_household = False, False
         if invite:
             with self.db.begin() as conn:
+                # The code first, so a bad code never reveals which names or emails have accounts.
+                # A name or email error below rolls this back, so the code still works.
+                inv = self._redeem(conn, invite, username)
                 if self._row(conn, username):
                     raise AuthError(f"user {username} already exists")
                 if email and conn.execute(select(db.users.c.username).where(db.users.c.email == email)).first():
                     raise AuthError("another account already uses that email")
-                inv = self._redeem(conn, invite, username)
             beta = bool(inv.get("beta"))
             if inv.get("own_household"):
                 household_id, role, made_household = self.create_household(household_name or f"{username}'s home"), "admin", True
@@ -456,10 +469,18 @@ class Accounts:
             return False
         return not self.get(username)["disabled"]
 
-    def record_consent(self, username: str, version: int) -> None:
+    def record_consent(self, username: str, version: int | None, terms: int | None = None) -> None:
+        """`version`: the data notice they accepted. `terms`: the Terms of Use and Privacy Policy
+        version they agreed to. Either can be None to leave it as it was."""
         with self.db.begin() as conn:
-            conn.execute(update(db.users).where(db.users.c.username == username).values(
-                consent={"version": version, "at": int(time.time())}))
+            row = self._row(conn, username)
+            consent = dict((row["consent"] if row else None) or {})
+            now = int(time.time())
+            if version is not None:
+                consent.update(version=version, at=now)
+            if terms is not None:
+                consent.update(terms=terms, terms_at=now)
+            conn.execute(update(db.users).where(db.users.c.username == username).values(consent=consent))
 
     def touch_login(self, username: str) -> None:
         with self.db.begin() as conn:
@@ -482,20 +503,38 @@ class Accounts:
         return "-".join(secrets.token_hex(2) for _ in range(3))  # e.g. 3f9a-07c2-b1e4
 
     # --- rate limit -------------------------------------------------------
-    def too_many_failures(self, client: str, limit: int = 5, window: int = 300) -> bool:
+    # Each bucket (a client address, or a key like "user:..." or "pw:mike") keeps (time, tag) for
+    # recent failures. The tag says whose sign-in failed, so signing in to your own account doesn't
+    # wipe the record of guesses at someone else's password from the same address.
+    def failure_count(self, client: str, window: int = 300) -> int:
         now = time.time()
         with self._failures_lock:
-            recent = [t for t in self._failures.get(client, []) if now - t < window]
-            self._failures[client] = recent
-            return len(recent) >= limit
+            recent = [f for f in self._failures.get(client, []) if now - f[0] < window]
+            if recent:
+                self._failures[client] = recent
+            else:
+                self._failures.pop(client, None)
+            return len(recent)
 
-    def record_failure(self, client: str) -> None:
-        with self._failures_lock:
-            self._failures.setdefault(client, []).append(time.time())
+    def too_many_failures(self, client: str, limit: int = 5, window: int = 300) -> bool:
+        return self.failure_count(client, window) >= limit
 
-    def clear_failures(self, client: str) -> None:
+    def record_failure(self, client: str, tag: str = "?") -> None:
+        now = time.time()
         with self._failures_lock:
-            self._failures.pop(client, None)
+            if len(self._failures) > 10_000:  # forget buckets nobody has touched for a day
+                for k in [k for k, v in self._failures.items() if not v or now - v[-1][0] > 86400]:
+                    del self._failures[k]
+            self._failures.setdefault(client, []).append((now, tag))
+
+    def clear_failures(self, client: str, tag: str | None = None) -> None:
+        """Forget a bucket's failures, or only the ones with this tag."""
+        with self._failures_lock:
+            left = [] if tag is None else [f for f in self._failures.get(client, []) if f[1] != tag]
+            if left:
+                self._failures[client] = left
+            else:
+                self._failures.pop(client, None)
 
     # --- sessions ---------------------------------------------------------
     def create_session(self, username: str, ip: str = "", agent: str = "") -> str:

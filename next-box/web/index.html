@@ -91,6 +91,14 @@
   .center { max-width:400px; margin:12vh auto 0; padding:0 16px; }
   .center label { display:block; margin-top:10px; font-size:14px; }
   .center input { margin-top:4px; }
+  .center .hint { display:block; font-size:13px; margin-top:3px; }
+  .brand { text-align:center; margin:0 0 16px; }
+  .brand img { display:block; margin:0 auto; border-radius:14px; }
+  .brand h1 { font-size:26px; margin:8px 0 4px; }
+  .brand p { margin:0 auto; max-width:340px; }
+  #login a, #mustChange a, #noticeDialog a { color:var(--accent); }  /* readable in dark mode too */
+  .guidemini { display:block; width:100%; background:none; border:0; padding:0; font:inherit; font-weight:600; color:var(--fg); text-align:left; cursor:pointer; }
+  .guidemini[hidden], #guideHead[hidden] { display:none; }
   /* Super admin: users */
   .tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(118px, 1fr)); gap:8px; }
   .tile { background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:10px; text-align:left; font:inherit; color:var(--fg); cursor:pointer; }
@@ -147,7 +155,8 @@
   .menu button, .menu a { display:flex; width:100%; align-items:center; gap:10px; background:none; border:0; border-top:1px solid var(--line); padding:12px 4px; font:inherit; color:var(--fg); text-align:left; cursor:pointer; text-decoration:none; }
   .menu button:first-child { border-top:0; }
   .menu .warn { color:var(--warn); }
-  .pwrow { position:relative; }
+  .pwrow { position:relative; display:block; }
+  .pwrow input { padding-right:64px; }
   .pwrow button { position:absolute; right:6px; top:50%; transform:translateY(-50%); background:none; border:0; color:var(--accent); font:inherit; font-size:14px; cursor:pointer; padding:6px; }
   html[data-text="large"] { font-size:19px; } html[data-text="xlarge"] { font-size:22px; }
   html[data-text="large"] body { font-size:19px; } html[data-text="xlarge"] body { font-size:22px; }
@@ -182,42 +191,51 @@
 </head>
 <body>
 <div id="login" class="center" hidden>
+  <div class="brand"><img src="icons/icon-192.png" alt="" width="64" height="64"><h1>Next Box</h1>
+    <p class="muted">Your to-do list on paper: print it, tick it with a pen, snap a photo, and your list updates.</p></div>
   <form class="card" id="loginForm" autocomplete="on">
     <h2>Sign in</h2>
-    <p class="muted" id="loginMsg"></p>
+    <p class="muted" id="loginMsg" role="alert"></p>
     <label>Username or email<input type="text" id="user" name="username" autocomplete="username" autocapitalize="none" required></label>
-    <label>Password<span class="pwrow" style="display:block"><input type="password" id="pass" name="password" autocomplete="current-password" required>
+    <label>Password<span class="pwrow"><input type="password" id="pass" name="password" autocomplete="current-password" required>
       <button type="button" data-show="pass">Show</button></span></label>
     <div class="row"><button class="go" type="submit">Sign in</button></div>
     <details class="muted" style="margin-top:10px"><summary>Forgot your password?</summary>
       <p>Ask whoever invited you (your Next Box admin). They can give you a one-time password from <b>Users</b> or <b>Admin</b>, and you'll pick a new one when you sign in.</p></details>
   </form>
-  <p class="muted" style="text-align:center"><button class="linkish" id="showJoin">Have an invite code? Join</button>
-    · <a href="guide.html" target="_blank" rel="noopener">New here? Quick start</a></p>
-  <p class="muted" style="text-align:center;font-size:13px"><a href="about.html">About</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a></p>
   <form class="card" id="joinForm" hidden autocomplete="on">
     <h2>Join Next Box</h2>
     <p class="muted">Someone gave you an invite code. It works once.</p>
-    <label>Invite code<input type="text" id="joinCode" autocapitalize="characters" placeholder="3F9A-07C2-B1E4" required></label>
-    <label>Pick a username<input type="text" id="joinUser" autocomplete="username" autocapitalize="none" placeholder="lowercase, e.g. sam" required></label>
+    <label>Invite code<input type="text" id="joinCode" autocapitalize="characters" autocomplete="one-time-code" spellcheck="false" placeholder="e.g. ABCD-1234-EF56" required></label>
+    <label>Pick a username<input type="text" id="joinUser" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="e.g. sam" required
+        pattern="[A-Za-z0-9_.\-]{2,32}" title="2–32 characters: lowercase letters, numbers, . _ -">
+      <span class="muted hint">2–32 characters: lowercase letters, numbers, . _ -</span></label>
     <label>Email (optional, you can sign in with it too)<input type="email" id="joinEmail" autocomplete="email" autocapitalize="none"></label>
-    <label>Password (8+ characters)<input type="password" id="joinPass" autocomplete="new-password" minlength="8" required></label>
+    <label>Password (8+ characters)<span class="pwrow"><input type="password" id="joinPass" autocomplete="new-password" minlength="8" required>
+      <button type="button" data-show="joinPass">Show</button></span></label>
     <label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px"><input type="checkbox" id="joinAgree" required style="width:20px;height:20px;flex:none;margin-top:2px">
       <span>I agree to the <a href="terms.html" target="_blank" rel="noopener">Terms of Use</a> and <a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.</span></label>
-    <p class="err" id="joinMsg"></p>
+    <p class="err" id="joinMsg" role="alert"></p>
     <div class="row"><button class="go" type="submit">Create my account</button></div>
   </form>
+  <p class="muted" style="text-align:center"><button class="linkish" id="showJoin">Have an invite code? Join</button>
+    · <a href="guide.html" target="_blank" rel="noopener">New here? Quick start</a></p>
+  <p class="muted" style="text-align:center;font-size:13px"><a href="about.html">About</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a></p>
   <p class="muted" style="text-align:center"><button class="linkish" data-feedback>Having trouble? Send feedback</button></p>
 </div>
 
 <div id="mustChange" class="center" hidden>
+  <div class="brand"><img src="icons/icon-192.png" alt="" width="64" height="64"><h1>Next Box</h1></div>
   <form class="card" id="mustForm">
     <h2>Choose your own password</h2>
     <p class="muted">You signed in with a temporary password. Pick a new one (8+ characters) to continue.</p>
-    <label>Temporary password<input type="password" id="mcCur" autocomplete="current-password" required></label>
-    <label>New password<input type="password" id="mcNew" autocomplete="new-password" minlength="8" required></label>
-    <p class="err" id="mcMsg"></p>
-    <div class="row"><button class="go" type="submit">Save and continue</button></div>
+    <label>Temporary password<span class="pwrow"><input type="password" id="mcCur" autocomplete="current-password" required>
+      <button type="button" data-show="mcCur">Show</button></span></label>
+    <label>New password<span class="pwrow"><input type="password" id="mcNew" autocomplete="new-password" minlength="8" required>
+      <button type="button" data-show="mcNew">Show</button></span></label>
+    <p class="err" id="mcMsg" role="alert"></p>
+    <div class="row"><button class="go" type="submit">Save and continue</button>
+      <button type="button" class="linkish" id="mcSignOut" style="margin-left:auto">Not you? Sign out</button></div>
   </form>
 </div>
 
@@ -245,13 +263,6 @@
 <main>
   <label class="dry" id="dryRow"><input type="checkbox" id="dry" checked> Preview only (don't send to the printer)</label>
   <section id="mylist" class="on">
-    <div class="card guide" id="guideCard" hidden>
-      <div class="row" style="margin:0;justify-content:space-between"><h2 style="margin:0">Get started</h2>
-        <button class="linkish" id="guideHide">Hide</button></div>
-      <div class="bar"><div id="guideBar" style="width:0"></div></div>
-      <div class="muted" id="guideCount"></div>
-      <div id="guideSteps"></div>
-    </div>
     <div class="card now" id="nowCard">
       <div class="muted">Just one thing</div>
       <div class="big" id="nowText">…</div>
@@ -260,6 +271,17 @@
         <button class="go" id="nowDone">Done ✓</button>
         <button class="plain" id="nowPrint">Print it big</button>
         <button class="plain" id="nowSkip">Not now</button>
+      </div>
+    </div>
+    <div class="card guide" id="guideCard" hidden>
+      <div class="row" id="guideHead" style="margin:0;justify-content:space-between"><h2 style="margin:0">Get started</h2>
+        <button class="linkish" id="guideHide">Hide</button></div>
+      <button class="guidemini" id="guideMini" hidden></button>
+      <div id="guideFull">
+        <div class="bar"><div id="guideBar" style="width:0"></div></div>
+        <div class="muted" id="guideCount"></div>
+        <div id="guideSteps"></div>
+        <button class="linkish" id="guideLess" hidden>Show less</button>
       </div>
     </div>
 
@@ -365,9 +387,11 @@
 
     <div class="card"><h2>Password</h2>
       <form id="pwForm" autocomplete="on">
-        <div class="row"><input type="password" id="pwCur" placeholder="Current password" autocomplete="current-password" required></div>
-        <div class="row"><input type="password" id="pwNew" placeholder="New password (8+ characters)" autocomplete="new-password" minlength="8" required></div>
-        <div class="row"><button class="go" type="submit">Change password</button><span id="pwMsg" class="muted"></span></div>
+        <div class="row"><span class="pwrow" style="flex:1"><input type="password" id="pwCur" placeholder="Current password" aria-label="Current password" autocomplete="current-password" required>
+          <button type="button" data-show="pwCur">Show</button></span></div>
+        <div class="row"><span class="pwrow" style="flex:1"><input type="password" id="pwNew" placeholder="New password (8+ characters)" aria-label="New password" autocomplete="new-password" minlength="8" required>
+          <button type="button" data-show="pwNew">Show</button></span></div>
+        <div class="row"><button class="go" type="submit">Change password</button><span id="pwMsg" class="muted" role="alert"></span></div>
       </form>
     </div>
 
@@ -435,7 +459,7 @@
     </div>
 
     <div class="card" id="appCard"><h2>Linked to-do app (optional)</h2>
-      <p class="muted">Your list works on its own. Link Todoist or a CalDAV app to see its tasks here too; they stay in that app.</p>
+      <p class="muted">Your list works on its own. Link Todoist, Notion, Asana or a CalDAV app to see its tasks here too; they stay in that app.</p>
       <div id="appStatus" class="muted">…</div>
       <div id="appConnect" hidden>
         <div class="row"><select id="provSel" aria-label="To-do app"></select></div>
@@ -583,12 +607,34 @@
   </section>
 </main>
 <button class="go" id="fb" data-feedback>Feedback</button>
+<nav class="bottombar" aria-label="Main (phone)">
+  <button data-go="mylist" class="on"><span aria-hidden="true">✓</span>My list</button>
+  <button data-go="print"><span aria-hidden="true">🖨</span>Print</button>
+  <button data-go="scan"><span aria-hidden="true">📷</span>Snap</button>
+  <button data-go="journal"><span aria-hidden="true">📓</span>Journal</button>
+  <button id="moreBtn" aria-haspopup="dialog"><span aria-hidden="true">☰</span>More</button>
+</nav>
+<dialog id="moreDialog" aria-label="More">
+  <div class="menu" id="moreMenu"></div>
+  <div class="menu" style="margin-top:6px">
+    <a href="guide.html" target="_blank" rel="noopener">❓ Help and quick start</a>
+    <a href="about.html" target="_blank" rel="noopener">ℹ️ About and contact</a>
+    <a href="privacy.html" target="_blank" rel="noopener">🔒 Privacy Policy</a>
+    <a href="terms.html" target="_blank" rel="noopener">📄 Terms of Use</a>
+  </div>
+  <div class="row" style="justify-content:flex-end"><button class="plain" id="moreClose">Close</button></div>
+</dialog>
 </div>
 
 <dialog id="noticeDialog" aria-labelledby="noticeTitle">
   <h2 id="noticeTitle">Before you start</h2>
+  <p class="muted" id="noticeChanged" hidden>This changed since you last agreed. Have a quick look before you carry on.</p>
   <p id="noticeBody"></p>
-  <div class="row"><button class="go" id="noticeOk">I understand</button></div>
+  <p class="muted">This also means you agree to the <a href="terms.html" target="_blank" rel="noopener">Terms of Use</a>
+    and <a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.</p>
+  <p class="err" id="noticeMsg" role="alert"></p>
+  <div class="row"><button class="go" id="noticeOk">I understand and agree</button>
+    <button class="plain" id="noticeNo">No thanks, sign me out</button></div>
 </dialog>
 
 <dialog id="fbDialog" aria-labelledby="fbTitle">
@@ -695,23 +741,6 @@
       <button class="go warn" id="tdDelete" type="button" style="margin-left:auto">Delete</button>
     </div>
   </form>
-</dialog>
-<nav class="bottombar" aria-label="Main (phone)">
-  <button data-go="mylist" class="on"><span aria-hidden="true">✓</span>My list</button>
-  <button data-go="print"><span aria-hidden="true">🖨</span>Print</button>
-  <button data-go="scan"><span aria-hidden="true">📷</span>Snap</button>
-  <button data-go="journal"><span aria-hidden="true">📓</span>Journal</button>
-  <button id="moreBtn" aria-haspopup="dialog"><span aria-hidden="true">☰</span>More</button>
-</nav>
-<dialog id="moreDialog" aria-label="More">
-  <div class="menu" id="moreMenu"></div>
-  <div class="menu" style="margin-top:6px">
-    <a href="guide.html" target="_blank" rel="noopener">❓ Help and quick start</a>
-    <a href="about.html" target="_blank" rel="noopener">ℹ️ About and contact</a>
-    <a href="privacy.html" target="_blank" rel="noopener">🔒 Privacy Policy</a>
-    <a href="terms.html" target="_blank" rel="noopener">📄 Terms of Use</a>
-  </div>
-  <div class="row" style="justify-content:flex-end"><button class="plain" id="moreClose">Close</button></div>
 </dialog>
 <footer id="revmark" aria-label="About this app"><a href="about.html">About</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="guide.html">Help</a><br><span id="revText"></span></footer>
 <div id="toast"></div>

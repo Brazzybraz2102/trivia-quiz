@@ -10,18 +10,20 @@ async function api(path, opts = {}) {
   const r = await fetch(path, { ...opts, headers, credentials: "same-origin" });
   const body = await r.json().catch(() => ({}));
   if (r.status === 401 && !path.startsWith("/auth/")) { showLogin("Your session ended. Sign in again."); }
-  if (!r.ok) throw new Error(body.detail || `${r.status}`);
+  if (!r.ok) throw Object.assign(new Error(body.detail || `${r.status}`), { status: r.status });
   return body;
 }
+const OFFLINE = "Can't reach Next Box. Check your connection.";
+const errText = (e) => (e.status ? e.message : OFFLINE);  // a fetch that never got an answer has no status
 const png = (id) => `/printed/${id}/png?t=${Date.now()}`;
 const when = (ts) => ts ? new Date(ts * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "never";
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, ms = 1800) {
   $("#toast").textContent = msg;
   $("#toast").classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => $("#toast").classList.remove("show"), 1800);
+  toastTimer = setTimeout(() => $("#toast").classList.remove("show"), ms);
 }
 
 // ---------------------------------------------------------------- theme
@@ -35,21 +37,99 @@ $("#theme").onchange = () => { applyTheme($("#theme").value); try { localStorage
 function showOnly(id) {
   for (const x of ["login", "mustChange", "appShell"]) $("#" + x).hidden = x !== id;
 }
+
+// Coming back from "Sign in with ..." (#settings&signin=...) or opening an invite link (#join=CODE).
+// Only messages the app itself sends are shown, so a made-up link can't put words in its mouth.
+const SIGNIN_MSGS = ["Sign-in was cancelled.", "That sign-in expired. Try again.", "That sign-in didn't work. Try again.",
+  "That sign-in was started somewhere else. Start it again from Settings.",
+  "Connected Google", "Connected Microsoft", "Connected TickTick"];
+let signinMsg = "", pendingJoin = "";
+{
+  const hash = location.hash;
+  if (/(signin|join)=/.test(hash)) history.replaceState(null, "", location.pathname + location.search);
+  const s = hash.match(/signin=([^&]*)/);
+  if (s) { let msg = ""; try { msg = decodeURIComponent(s[1]); } catch {} if (SIGNIN_MSGS.includes(msg)) signinMsg = msg; }
+  // An invite is kept for this tab until it's used, so it survives signing someone else out first.
+  const j = hash.match(/join=([A-Za-z0-9-]{4,20})/);
+  try {
+    if (j) sessionStorage.setItem("nb_join", j[1].toUpperCase());
+    pendingJoin = sessionStorage.getItem("nb_join") || "";
+  } catch { pendingJoin = j ? j[1].toUpperCase() : ""; }
+}
+function forgetJoin() { pendingJoin = ""; try { sessionStorage.removeItem("nb_join"); } catch {} }
+
 function showLogin(msg = "") {
-  me = null;
+  if (me) return startOver(msg);  // someone was signed in: nothing of theirs may stay on the page
   showOnly("login");
+  if (pendingJoin) showJoin(pendingJoin);
   $("#loginMsg").textContent = msg;
-  $("#user").focus();
+  $("#loginMsg").className = "muted";
+  if (msg && $("#loginForm").hidden) toast(msg, 4000);
+  if (!pendingJoin) $("#user").focus();
+}
+
+// Signing out (or the session ending) loads the page again from scratch, so the next person on this
+// device never sees the last person's screens, notes or chosen photo. The message survives the reload.
+function startOver(msg) {
+  try { sessionStorage.setItem("nb_msg", msg); } catch {}
+  clearPerson();
+  location.replace(location.pathname);
+}
+async function signOut(box) {
+  const say = (m) => { if (box) { box.textContent = m; box.className = "err"; } else toast(m, 4000); };
+  const failed = "Couldn't sign out. Check your connection and try again.";
+  if (!navigator.onLine) return say(failed);
+  try { await api("/auth/logout", { method: "POST" }); }
+  catch { return say(failed); }  // still signed in: don't pretend otherwise
+  startOver("Signed out.");
+}
+// Belt and braces for the reload above: wipe what's on screen right away.
+function clearPerson() {
+  me = null; boot.started = false;
+  $$("dialog[open]").forEach((d) => d.close());
+  showOnly("login");
+  $$("#appShell input:not([type=checkbox]):not([type=range]), #appShell textarea, dialog input, dialog textarea").forEach((el) => { el.value = ""; });
+  for (const id of ["#scanResult", "#printResult", "#listResult", "#listBody", "#nowText", "#nowStep", "#todayEvents", "#guideSteps",
+    "#jDays", "#slugList", "#winsChart", "#winsTotal", "#hist", "#boardList", "#tagList", "#calList", "#appStatus", "#provFields",
+    "#calFields", "#sessions", "#pName", "#pFacts", "#pDeletePanel", "#mePanel", "#suTiles", "#suList", "#suNew", "#users",
+    "#activity", "#events", "#diag", "#nuOut", "#ivOut", "#ivList", "#printerList", "#uPeople", "#uTickets", "#udInfo", "#udTempOut"]) {
+    const el = $(id); if (el) el.innerHTML = "";
+  }
+  for (const id of ["#printResult", "#listResult", "#todayCard", "#guideCard", "#slugCard", "#jNew", "#activityCard", "#uDetail"]) $(id).hidden = true;
+  listData = { tasks: [], linked: [], tags: [] }; picked = new Set(); skipped = new Set(); guide = null; showingDone = false;
+  conn = null; printOpts = null; update = null; editing = null; suRows = []; suPicked = new Set(); suOpen = null;
+  markTab("mylist");
+  resetSignIn();
+}
+function resetSignIn() {
+  $("#joinForm").reset(); $("#joinForm").hidden = true; $("#loginForm").hidden = false;
+  $("#showJoin").textContent = "Have an invite code? Join";
+  $("#joinMsg").textContent = "";
+  $("#user").value = ""; $("#pass").value = "";
+  resetShow();
 }
 
 async function boot() {
+  let note = "";
+  try { note = sessionStorage.getItem("nb_msg") || ""; sessionStorage.removeItem("nb_msg"); } catch {}
   try { me = await api("/auth/me"); }
-  catch (e) { return showLogin(e.message === "sign in required" ? "" : e.message); }
+  catch (e) {
+    // Already in, and it's only a hiccup (offline, server busy): stay as you are.
+    if (me) return e.status === 401 ? showLogin("Your session ended. Sign in again.") : toast(errText(e), 4000);
+    return showLogin(note || (e.message === "sign in required" ? "" : e.message));
+  }
   if (me.must_change) { showOnly("mustChange"); $("#mcCur").focus(); return; }
   showOnly("appShell");
   $("#who").textContent = me.username;
   applyLook();
-  if (!boot.started) { boot.started = true; if ((me.prefs.start_tab || "mylist") !== "mylist") goto(me.prefs.start_tab); }
+  if (!boot.started) {  // just signed in: open where they asked to
+    boot.started = true;
+    const start = me.prefs.start_tab || "mylist";
+    if (signinMsg) { toast(signinMsg, 4000); signinMsg = ""; goto("settings"); }
+    else if (start === "mylist") markTab("mylist");
+    else goto(start);
+    if (pendingJoin) toast(`You're signed in as ${me.username}. Sign out to use this invite.`, 6000);
+  }
   if (me.role === "superadmin") checkUpdate();
   for (const el of [$("#roleBadge"), $("#whoRole")]) {
     el.textContent = me.role;
@@ -73,14 +153,20 @@ async function boot() {
   loadGuide();
   $("#noticeText").textContent = me.data_notice;
   $("#noticeWhen").textContent = me.consented ? `You accepted this on ${when(me.consented_at)}.` : "";
-  if (!me.consented) { $("#noticeBody").textContent = me.data_notice; $("#noticeDialog").showModal(); }
+  if (!me.consented || me.terms_ok === false) {  // new, or the notice or Terms changed since they agreed
+    $("#noticeBody").textContent = me.data_notice;
+    $("#noticeChanged").hidden = !me.notice_changed;
+    $("#noticeMsg").textContent = "";
+    if (!$("#noticeDialog").open) $("#noticeDialog").showModal();
+  }
 }
 
 $("#noticeOk").onclick = async () => {
   try { await api("/auth/consent", { method: "POST" }); $("#noticeDialog").close(); boot(); }
-  catch (e) { toast(e.message); }
+  catch (e) { $("#noticeMsg").textContent = errText(e); }
 };
-$("#noticeDialog").addEventListener("cancel", (e) => e.preventDefault());  // must be acknowledged
+$("#noticeNo").onclick = () => signOut($("#noticeMsg"));
+$("#noticeDialog").addEventListener("cancel", (e) => e.preventDefault());  // agree, or sign out
 
 // ---------------------------------------------------------------- revision mark
 api("/version").then((v) => {
@@ -213,6 +299,7 @@ async function loadConnection() {
     [providers, conn] = await Promise.all([providers.length ? providers : api("/providers"), api("/connection")]);
   } catch (e) { $("#appStatus").textContent = e.message; return; }
   const ready = providers.filter((p) => p.status === "ready" || p.status === "oauth");
+  renderGuide();  // the "Link your to-do app" step names only the apps on offer
   const spec = providers.find((p) => p.key === conn.provider);
   $$(".appName").forEach((el) => el.textContent = conn.connected ? conn.name : "my list");
   $("#filterHelp").textContent = spec?.filter_help || "";
@@ -235,7 +322,7 @@ async function loadConnection() {
   if (!$("#provSel").options.length) {
     $("#provSel").innerHTML = ready.map((p) => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join("");
     $("#provSel").onchange = renderProviderFields;
-    $("#provOther").innerHTML = (ready.filter((p) => p.also).map((p) => `<p><b>${esc(p.name)}</b> also covers ${esc(p.also)}.</p>`).join("")) +
+    $("#provOther").innerHTML = (ready.filter((p) => p.also).map((p) => `<p><b>${esc(p.name)}</b>: ${esc(p.also)}.</p>`).join("")) +
       providers.filter((p) => p.status !== "ready" && p.status !== "oauth").map((p) => `<p><b>${esc(p.name)}</b>: ${p.status === "needs_setup" ? "not switched on yet." : "not possible."} ${esc(p.reason)}</p>`).join("");
     renderProviderFields();
   }
@@ -274,32 +361,40 @@ $("#loginForm").onsubmit = async (e) => {
   e.preventDefault();
   try {
     await api("/auth/login", { method: "POST", json: { username: $("#user").value, password: $("#pass").value } });
-    $("#pass").value = "";
+    $("#pass").value = ""; $("#loginMsg").textContent = "";
+    resetShow();
     boot();
-  } catch (err) { $("#loginMsg").textContent = err.message; }
+  } catch (err) { $("#loginMsg").textContent = errText(err); $("#loginMsg").className = "err"; }
 };
 $("#mustForm").onsubmit = async (e) => {
   e.preventDefault();
   try {
     await api("/auth/password", { method: "POST", json: { current: $("#mcCur").value, new: $("#mcNew").value } });
-    $("#mcCur").value = $("#mcNew").value = "";
+    $("#mcCur").value = $("#mcNew").value = ""; $("#mcMsg").textContent = "";
+    resetShow();
     toast("Password saved");
     boot();
-  } catch (err) { $("#mcMsg").textContent = err.message; }
+  } catch (err) { $("#mcMsg").textContent = errText(err); }
 };
-$("#logout").onclick = async () => { await api("/auth/logout", { method: "POST" }).catch(() => {}); showLogin("Signed out."); };
+$("#mustForm").addEventListener("input", () => { $("#mcMsg").textContent = ""; });
+$("#mcSignOut").onclick = () => signOut($("#mcMsg"));
+$("#logout").onclick = () => signOut();
 
 // ---------------------------------------------------------------- tabs
 const loaders = { mylist: () => { loadList(); loadToday(); loadGuide(); }, printed: loadHistory, profile: () => loadProfile(),
                   settings: () => { loadLabels(); loadTags(); loadCalendars(); }, admin: () => { loadAdmin(); loadPrinters(); loadInvites(); },
                   debug: loadDebug, board: () => loadBoard(), usage: () => loadUsage(), journal: () => loadJournal() };
+function markTab(tab) {  // which screen shows, without loading anything
+  $$("#topnav button").forEach((x) => { x.classList.toggle("on", x.dataset.tab === tab); x.toggleAttribute("aria-current", x.dataset.tab === tab); if (x.dataset.tab === tab) x.setAttribute("aria-current", "page"); });
+  $$(".bottombar [data-go]").forEach((x) => x.classList.toggle("on", x.dataset.go === tab));
+  $("#moreBtn").classList.toggle("on", !["mylist", "print", "scan", "journal"].includes(tab));
+  $$("section").forEach((s) => s.classList.toggle("on", s.id === tab));
+  $("#dryRow").hidden = !["mylist", "print"].includes(tab);  // only where things get printed
+}
 $$("#topnav button").forEach((b) => b.onclick = () => {
-  $$("#topnav button").forEach((x) => { x.classList.toggle("on", x === b); x.toggleAttribute("aria-current", x === b); if (x === b) x.setAttribute("aria-current", "page"); });
-  $$(".bottombar [data-go]").forEach((x) => x.classList.toggle("on", x.dataset.go === b.dataset.tab));
-  $("#moreBtn").classList.toggle("on", !["mylist", "print", "scan", "journal"].includes(b.dataset.tab));
+  if (!me) return;  // nothing to open before signing in
+  markTab(b.dataset.tab);
   window.scrollTo(0, 0);
-  $$("section").forEach((s) => s.classList.toggle("on", s.id === b.dataset.tab));
-  $("#dryRow").hidden = !["mylist", "print"].includes(b.dataset.tab);  // only where things get printed
   loaders[b.dataset.tab]?.();
 });
 
@@ -425,10 +520,12 @@ $("#pwForm").onsubmit = async (e) => {
   try {
     await api("/auth/password", { method: "POST", json: { current: $("#pwCur").value, new: $("#pwNew").value } });
     $("#pwCur").value = $("#pwNew").value = "";
-    $("#pwMsg").textContent = "Changed. Your other devices were signed out.";
+    resetShow();
+    $("#pwMsg").textContent = "Changed. Your other devices were signed out."; $("#pwMsg").className = "muted";
     loadSessions();
-  } catch (err) { $("#pwMsg").textContent = err.message; }
+  } catch (err) { $("#pwMsg").textContent = errText(err); $("#pwMsg").className = "err"; }
 };
+$("#pwForm").addEventListener("input", () => { $("#pwMsg").textContent = ""; });
 
 async function loadSessions() {
   try {
@@ -1101,8 +1198,10 @@ function showJoin(code = "") {
   ($("#joinCode").value ? $("#joinUser") : $("#joinCode")).focus();
 }
 $("#showJoin").onclick = () => {
-  if ($("#joinForm").hidden) return showJoin();
+  if ($("#joinForm").hidden) return showJoin(pendingJoin);
+  forgetJoin();  // they chose to sign in instead
   $("#joinForm").hidden = true; $("#loginForm").hidden = false; $("#showJoin").textContent = "Have an invite code? Join";
+  $("#user").focus();
 };
 $("#joinForm").onsubmit = async (e) => {
   e.preventDefault();
@@ -1110,15 +1209,18 @@ $("#joinForm").onsubmit = async (e) => {
   try {
     await api("/auth/signup", { method: "POST", json: { invite: $("#joinCode").value, username: $("#joinUser").value,
       email: $("#joinEmail").value || null, password: $("#joinPass").value, agree: $("#joinAgree").checked } });
-    $("#joinPass").value = "";
-    history.replaceState(null, "", location.pathname);
+    forgetJoin();
+    $("#joinForm").reset();
+    resetShow();
     boot();
-  } catch (err) { $("#joinMsg").textContent = err.message; }
+  } catch (err) { $("#joinMsg").textContent = errText(err); }
 };
-{
-  const m = location.hash.match(/join=([A-Za-z0-9-]{4,20})/);
-  if (m) setTimeout(() => { if (!me) showJoin(m[1].toUpperCase()); }, 300);
-}
+$("#joinForm").addEventListener("input", () => { $("#joinMsg").textContent = ""; });
+$("#joinCode").addEventListener("input", (e) => {  // 817fe370f205 or "817F E370 F205" → 817F-E370-F205
+  const raw = e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, "").slice(0, 12);
+  const v = (raw.match(/.{1,4}/g) || []).join("-");
+  if (v !== e.target.value) e.target.value = v;
+});
 
 // ---------------------------------------------------------------- invites (Admin tab)
 async function loadInvites() {
@@ -1218,20 +1320,30 @@ async function loadToday() {
     + r.problems.map((p) => `<div class="mini err">${esc(p)}</div>`).join("");
 }
 
-// Coming back from "Sign in with ...": show what happened and open Settings.
-{
-  const m = location.hash.match(/signin=([^&]*)/);
-  if (m) {
-    const msg = decodeURIComponent(m[1]);
-    history.replaceState(null, "", location.pathname);
-    setTimeout(() => { toast(msg); $("#topnav button[data-tab=settings]")?.click(); }, 600);
-  }
-}
-
 
 // ---------------------------------------------------------------- Get started guide
 const isApp = () => window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
-const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+const isAndroid = () => /Android/.test(navigator.userAgent);
+let installPrompt = null;  // Chrome and Edge's own "Install app", when they offer it (https only)
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installPrompt = e; renderGuide(); });
+window.addEventListener("appinstalled", () => {
+  installPrompt = null;
+  if (me) api("/setup/home/done", { method: "POST" }).then(loadGuide).catch(() => {});
+});
+async function install() {
+  const p = installPrompt;
+  installPrompt = null;
+  p.prompt();
+  try { if ((await p.userChoice).outcome === "accepted") await api("/setup/home/done", { method: "POST" }); } catch {}
+  loadGuide();
+}
+function appNames() {  // only the apps this Next Box offers right now
+  const names = providers.filter((p) => p.status === "ready" || p.status === "oauth")
+    .sort((a, b) => (a.key === "caldav") - (b.key === "caldav")).map((p) => (p.key === "caldav" ? "a CalDAV app" : p.name));
+  if (!names.length) return "Todoist, Notion, Asana or a CalDAV app";
+  return names.length === 1 ? names[0] : names.slice(0, -1).join(", ") + " or " + names[names.length - 1];
+}
 function goto(tab, selector) {
   $(`#topnav button[data-tab=${tab}]`)?.click();
   setTimeout(() => { const el = selector && $(selector); if (el) { el.scrollIntoView({ behavior: "smooth", block: "start" }); el.querySelector?.("textarea,input,select")?.focus?.(); } }, 150);
@@ -1240,11 +1352,13 @@ let guide = null;
 const STEPS = {
   tasks: { title: "Empty your head", text: "Type everything on your mind into Brain dump, one thing per line. Don't sort it.",
            go: ["Go to Brain dump", () => { $("#dumpText").scrollIntoView({ behavior: "smooth", block: "center" }); $("#dumpText").focus(); }] },
-  home: { title: "Put Next Box on your home screen",
+  home: { title: () => (isIOS() || isAndroid() ? "Put Next Box on your home screen" : "Install Next Box as an app"),
           text: () => isIOS() ? "In Safari tap Share (the square with the arrow) → Add to Home Screen. Then open Next Box from that icon."
-                              : "In Chrome tap ⋮ → Add to Home screen (or Install app). Then open Next Box from that icon.",
+                    : isAndroid() ? "In Chrome tap ⋮ → Add to Home screen (or Install app). Then open Next Box from that icon."
+                    : "In Chrome or Edge, click the install icon at the right of the address bar. No icon? A bookmark works too.",
+          go: () => (installPrompt ? ["Install", install] : null),
           mark: "I did it" },
-  app: { title: "Link your to-do app (optional)", text: "Already use Todoist, Google Tasks, Microsoft To Do, TickTick, Notion or Asana? Its tasks show up here too.",
+  app: { title: "Link your to-do app (optional)", text: () => `Already use ${appNames()}? Its tasks show up here too.`,
          go: ["Link an app", () => goto("settings", "#appCard")], skip: true },
   calendar: { title: "Add your calendar (optional)", text: "Today's events show here and print at the top of your daily ticket. Google, Outlook and iCloud all work.",
               go: ["Add a calendar", () => goto("settings", "#calCard")], skip: true },
@@ -1254,6 +1368,10 @@ const STEPS = {
              go: () => guide?.can_add_printer ? ["Add printer", () => goto("admin", "#printerList")] : null, skip: true },
   preview: { title: "Make your first stickers", text: "Tick a task or two and tap Stickers. With “Preview only” on, nothing prints: you just see how it looks.",
              go: ["Show me", () => $(".printbar").scrollIntoView({ behavior: "smooth", block: "center" })] },
+  today: { title: "Print today's ticket", text: "Today's tasks on one label, with the next tiny step under each. Tap Print today. With “Preview only” on, you just see it.",
+           go: ["Show me", () => { goto("print"); setTimeout(() => $("[data-act=today]").focus(), 200); }] },
+  snap: { title: "Mark it and snap it", text: "Tick a row with a pen, then take a photo in Snap. Try it on a preview: print it on paper or hold the preview up to your camera.",
+          go: ["Open Snap", () => goto("scan")], skip: true },
   focus: { title: "Make it fit your brain", text: "How many tasks per day, gentle wording, yesterday's wins, tiny steps: it's all in Focus & ADHD helpers.",
            go: ["Open", () => goto("settings", "#focusCard")], mark: "Looks good" },
 };
@@ -1272,6 +1390,12 @@ function renderGuide() {
   $("#guideBar").style.width = `${Math.round(100 * done / total)}%`;
   $("#guideCount").textContent = done === total ? "You're all set. 🎉 You can hide this now." : `${done} of ${total} done`;
   const next = guide.steps.find((s) => !s.done);
+  // Once there's a list, the checklist shrinks to one line so "Just one thing" stays on top.
+  const open = guideOpen();
+  $("#guideHead").hidden = $("#guideFull").hidden = !open;
+  $("#guideMini").hidden = open;
+  $("#guideLess").hidden = !open || !guide.steps.find((s) => s.key === "tasks")?.done;
+  $("#guideMini").textContent = next ? `Get started: ${done} of ${total} · Next: ${val(STEPS[next.key].title)} ›` : "Get started: you're all set 🎉 ›";
   $("#guideSteps").innerHTML = guide.steps.map((s, i) => {
     const d = STEPS[s.key], go = val(d.go);
     const isNext = next && s.key === next.key;
@@ -1295,6 +1419,13 @@ $("#guideSteps").addEventListener("click", async (e) => {
   if (!action) return;
   try { await api(`/setup/${key}/${action}`, { method: "POST" }); loadGuide(); } catch (err) { toast(err.message); }
 });
+function guideOpen() {
+  if (!guide.steps.find((s) => s.key === "tasks")?.done) return true;  // brand new: show every step
+  try { return localStorage.getItem("nb_guide_open") === "1"; } catch { return false; }
+}
+function setGuideOpen(open) { try { localStorage.setItem("nb_guide_open", open ? "1" : "0"); } catch {} renderGuide(); }
+$("#guideMini").onclick = () => setGuideOpen(true);
+$("#guideLess").onclick = () => setGuideOpen(false);
 $("#guideHide").onclick = async () => {
   await api("/setup/guide/hide", { method: "POST" }).catch(() => {});
   $("#guideCard").hidden = true;
@@ -1302,6 +1433,7 @@ $("#guideHide").onclick = async () => {
 };
 $("#guideShow").onclick = async () => {
   await api("/setup/guide/show", { method: "POST" }).catch(() => {});
+  try { localStorage.setItem("nb_guide_open", "1"); } catch {}
   goto("mylist", "#guideCard");
   loadGuide();
 };
@@ -1420,6 +1552,9 @@ $$("[data-show]").forEach((b) => b.onclick = () => {
   input.type = input.type === "password" ? "text" : "password";
   b.textContent = input.type === "password" ? "Show" : "Hide";
 });
+function resetShow() {  // passwords go back to dots once they've been used
+  $$("[data-show]").forEach((b) => { const input = $("#" + b.dataset.show); if (input) input.type = "password"; b.textContent = "Show"; });
+}
 let update = null;
 async function checkUpdate() {
   try { update = await api("/super/update-check"); } catch { return; }
@@ -1446,7 +1581,7 @@ $("#meDialog").addEventListener("click", async (e) => {
   if (what === "feedback") { $("#meDialog").close(); return document.querySelector("[data-feedback]")?.click(); }
   if (what === "refresh") return location.reload();
   if (what === "export") { location.href = "/auth/export"; return; }
-  if (what === "signout") { await api("/auth/logout", { method: "POST" }).catch(() => {}); $("#meDialog").close(); return showLogin("Signed out."); }
+  if (what === "signout") return signOut(panel);
   if (what === "profile") {
     panel.innerHTML = `<div class="field"><label for="meEmail">Email</label><input type="email" id="meEmail" autocapitalize="none" value="${esc(me.email || "")}">
       <div class="muted">You can sign in with it instead of your username.</div></div>
@@ -1480,7 +1615,7 @@ $("#meDialog").addEventListener("click", async (e) => {
       <div class="row"><button class="go warn small" id="meDelGo">Delete my account forever</button><span class="err" id="meMsg"></span></div>`;
     $("#meDelGo").onclick = async () => {
       try { await api("/auth/delete-account", { method: "POST", json: { password: $("#meDelPw").value, confirm: $("#meDelName").value } });
-            $("#meDialog").close(); showLogin("Your account was deleted."); }
+            startOver("Your account was deleted."); }
       catch (err) { $("#meMsg").textContent = err.message; }
     };
   }
@@ -1527,7 +1662,7 @@ $("#pDelete").onclick = () => {
     <div class="row"><button class="go warn" id="pDelGo">Delete my account forever</button><span class="err" id="pDelMsg"></span></div>`;
   $("#pDelGo").onclick = async () => {
     try { await api("/auth/delete-account", { method: "POST", json: { password: $("#pDelPw").value, confirm: $("#pDelName").value } });
-          showLogin("Your account was deleted."); }
+          startOver("Your account was deleted."); }
     catch (err) { $("#pDelMsg").textContent = err.message; }
   };
 };
@@ -1540,6 +1675,7 @@ $("#setJump").onclick = (e) => {
 // ---------------------------------------------------------------- phone navigation, offline
 $$(".bottombar [data-go]").forEach((b) => b.onclick = () => $(`#topnav button[data-tab=${b.dataset.go}]`).click());
 $("#moreBtn").onclick = () => {
+  if (!me) return;
   const tabs = $$("#topnav button").filter((b) => !b.hidden && !["mylist", "print", "scan", "journal"].includes(b.dataset.tab));
   const icons = { printed: "🧾", board: "💬", profile: "👤", settings: "⚙️", admin: "🛠️", superusers: "👥", usage: "📊", debug: "🐞" };
   $("#moreMenu").innerHTML = tabs.map((b) => `<button data-more="${b.dataset.tab}">${icons[b.dataset.tab] || "•"} ${esc(b.textContent)}</button>`).join("");
