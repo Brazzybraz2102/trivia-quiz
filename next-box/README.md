@@ -1,7 +1,8 @@
 # Next Box
 
 Print your to-do list on a thermal label printer. Mark it up with a pen, snap a photo, and the
-changes go back to your to-do app. Everything runs on your desktop, on your home network only.
+changes go back to your list. Everything runs on your desktop: on your home network, or online
+through your own Cloudflare Tunnel (see [Online](#online-at-nextboxbraznarkelcom-cloudflare-tunnel)).
 
 **Printers:**
 - Brother QL / PT
@@ -15,19 +16,21 @@ Bluetooth-only phone printers like Phomemo and Niimbot can't be used: they keep 
 Load different **label colors** in different printers and send each kind of ticket to its color.
 The default sends overdue tasks to red labels.
 
-Each person signs in and connects **their own** to-do app:
-- **Todoist**
+Everyone gets **My list**, built in, and can link **their own** to-do app if they like:
+- **Todoist**, **Notion** (a to-do database), **Asana** and **monday.com**
 - **any CalDAV task list**: Nextcloud Tasks, Fastmail, Synology, Zoho, Radicale, DAVx⁵, and older
   iCloud Reminders lists
+- **Google Tasks**, **Microsoft To Do** and **TickTick**, after a one-time owner setup
 
-Google Tasks, Microsoft To Do and TickTick are next. Each needs a one-time sign-in setup.
 Apple Reminders (current lists), Things, Any.do and Google Keep don't allow other apps to connect.
+The full list, and calendars: [Which apps and calendars work](#which-apps-and-calendars-work).
 
 ## Install on the desktop (about 15 minutes)
 
 You'll need:
 - the printer's IP address (hold the printer's info button to print its settings, or check your router)
-- an Anthropic API key, for photo read-back (console.anthropic.com)
+- an Anthropic API key, for Snap (marks and handwriting) and the AI helpers (console.anthropic.com →
+  API keys). Without it Snap and the AI helpers are off and the app says so.
 
 Everyone connects their own to-do app later, from the web app.
 
@@ -45,9 +48,14 @@ sudo apt install -y python3-venv wl-clipboard libnotify-bin   # Fedora: sudo dnf
 scripts/install.sh          # builds everything, makes your NEXTBOX_KEY, starts the service
 .venv/bin/nextbox doctor    # checks it all and says what to fix
 ```
-Later, when you have them, put `PRINTER_IP` (and `ANTHROPIC_API_KEY` for photo read-back) in
+Later, when you have them, put `PRINTER_IP` and `ANTHROPIC_API_KEY` (for Snap and the AI helpers) in
 `.env` with `nano .env`, delete the `NEXTBOX_DRY_RUN=1` line, and run
 `systemctl --user restart nextbox`. Until then Next Box makes previews instead of printing.
+No label printer? Delete the `PRINTER_IP` line instead: everyone can still **Print on paper**.
+
+`install.sh` also adds iPhone (HEIC) photo support for Snap (the `heic` extra, `pillow-heif`). If
+that can't be installed on your computer, it says so and carries on; people then send JPEGs
+(on an iPhone: Settings app → Camera → Formats → Most Compatible).
 
 ### 3. Create your accounts
 Keep running Next Box separate from using it: one admin account that always stays in charge, and
@@ -58,7 +66,7 @@ your everyday account.
 .venv/bin/nextbox user add mike user                   # your everyday account
 .venv/bin/nextbox user owner mike                      # Home Assistant prints Mike's list
 ```
-Linking Todoist is optional: Settings → Linked to-do app, or `nextbox connect mike todoist`.
+Linking Todoist is optional: Settings → Linked app, or `nextbox connect mike todoist`.
 
 ### Let other people in to test
 Sign in as `usersuperadmin` → **Admin → Invite people** → **Make invite**, and send them the
@@ -124,9 +132,9 @@ and devices, or delete them (type their username to confirm). Tick several peopl
 turn off/on, or change beta for all of them at once. **Export CSV** downloads the list.
 
 ### Helping a beta tester
-1. Admin tab: mark them **beta**. Everyone has a **Feedback** button on every screen, guided
+1. Admin tab: mark them **beta**. Everyone has a **Send feedback** button on every screen, guided
    or open-ended.
-2. Problems show up on the **Feedback tab** for everyone, without names. Set a status and reply
+2. Problems show up on the **Feedback board** for everyone, without names. Set a status and reply
    publicly. If you need to know who sent a post (for example, to look at their errors), a
    superadmin taps **Who sent this?**. That's recorded in the audit log. The private details,
    including any errors the person chose to attach, live only in the `feedback_identities` table.
@@ -136,7 +144,7 @@ turn off/on, or change beta for all of them at once. **Export CSV** downloads th
    - or downloads their **Debug bundle** and hands it to Claude
 4. To stop real prints while you investigate, use **Debug tab → Pause all printing**.
 
-Everyone connects their own to-do app under **Settings → Your to-do app**. Tokens and passwords
+Everyone can link their own to-do app under **Settings → Linked app**. Tokens and passwords
 are checked first, then stored encrypted. Each person sees and prints only their own tasks and
 tickets. Home Assistant and the hotkey use the owner's app (the first superadmin, which is you).
 The key that encrypts those secrets is `secret.key` in the data folder, so back up the whole
@@ -194,8 +202,9 @@ The small mark at the bottom of every page shows the version and build. Change i
 Next Box has its own to-do list, so it works without Todoist. Open the web app on your phone:
 **My list** is the first screen.
 
-- **Just one thing** at the top: the one task to do now, with its next tiny step. Tap **Done ✓**,
-  **Print it big**, or **Not now** to see the next one.
+- **Just one thing** at the top: the one task to do now, with its next tiny step. Tap **Done ✓**
+  (or **Step done ✓**), **→ Tomorrow**, **Print just this**, **Break it down**, **⏱ Start 5 min**,
+  or **Not now** to see the next one.
 - **Brain dump**: type everything on your mind, one per line. Shortcuts are optional:
   `#errand` tag, `!` urgent, `tomorrow` / `fri`, `3pm`, `~15m` how long, `every day`.
 - **Edit** a task to add tiny steps (the first one should take two minutes), a time, a repeat or tags.
@@ -205,7 +214,7 @@ Next Box has its own to-do list, so it works without Todoist. Open the web app o
 - **Tags & colors** (Settings): each tag has a color. Stickers go to the printer loaded with that
   color of labels. On plain white labels each color prints as its own pattern (red is solid black,
   yellow is dots, blue is stripes...), so you can still tell them apart at a glance.
-- The **daily ticket** shows 5 tasks at most, the next tiny step under each, gentle wording and
+- The **daily label** shows 5 tasks at most, the next tiny step under each, gentle wording and
   yesterday's wins. Change any of it under Settings → Focus & ADHD helpers.
 - **Break it down** (on Just one thing, a task's Edit and each slug): an AI helper suggests 3-6 tiny
   first steps. Tick the ones you want, change the words, then Save (Undo is right there). A linked
@@ -213,7 +222,8 @@ Next Box has its own to-do list, so it works without Todoist. Open the web app o
   card. **Look back on my week** (Journal) writes a short, kind note about your week; your journal
   notes go only if you tick "Include my journal notes", and nothing is kept unless you tap Save to my
   journal. Both need `ANTHROPIC_API_KEY` in `.env` and only run when tapped (20 an hour per person).
-  Turn them off under Settings → Focus → AI helpers.
+  Without the key their buttons don't show, and Look back on my week says what's missing (to a
+  superadmin: how to add the key). Turn them off under Settings → Focus → AI helpers.
 
 Linking Todoist or a CalDAV app (Settings) is optional: its tasks show up next to yours and stay
 in that app.
@@ -244,9 +254,18 @@ use each visitor's real address.
    command is a secret: don't share it.)
 3. **Public hostname**: subdomain `nextbox`, domain `braznarkel.com`, type `HTTP`, URL
    `localhost:8787` → Save.
-4. In `~/next-box/.env` add `NEXTBOX_PUBLIC_URL=https://nextbox.braznarkel.com`, then
-   `systemctl --user restart nextbox`.
+4. In `.env` in your Next Box folder (`nano ~/.local/share/nextbox/app/.env`) add these two lines,
+   then run `systemctl --user restart nextbox`:
+   ```
+   NEXTBOX_PUBLIC_URL=https://nextbox.braznarkel.com
+   NEXTBOX_HOSTING=Cloudflare
+   ```
+   `NEXTBOX_HOSTING` names Cloudflare on the Privacy and About pages, since it now carries everyone's
+   traffic.
 5. Open `https://nextbox.braznarkel.com/app/` on your phone with Wi-Fi off.
+
+Steps 2 and 4 in one go, after steps 1 and 3: `scripts/go-online.sh` installs `cloudflared`, asks
+you to paste the command from step 2 (it's never shown), and adds both lines to `.env`.
 
 Later projects: add another public hostname to the same tunnel (e.g. `next` → `localhost:9000`).
 
@@ -272,7 +291,7 @@ Later projects: add another public hostname to the same tunnel (e.g. `next` → 
 | Google Calendar, Outlook / Microsoft 365 | Sign in with Google / Microsoft | after the owner setup below |
 
 Each person links one to-do app and up to 8 calendars (Settings). Calendars are read-only: today's
-events show on My list and print in a SCHEDULE box at the top of the daily ticket.
+events show on My list and print in a SCHEDULE box at the top of the daily label.
 
 ### Sign-in apps: one-time owner setup
 "Sign in with Google / Microsoft / TickTick" needs Next Box registered with each company (free)
@@ -301,7 +320,7 @@ Then `systemctl --user restart nextbox` and `.venv/bin/nextbox doctor` shows whi
 - Set who runs it and how to reach you in `.env`: `NEXTBOX_OPERATOR=Braznarkel` and
   `NEXTBOX_CONTACT=mike@braznarkel.com`.
 - Joining needs "I agree to the Terms of Use and Privacy Policy" (recorded with the sign-up).
-- On phones: a bottom tab bar (My list, Print, Read back, More) like other apps; an offline notice
+- On phones: a bottom tab bar (My list, Print, Snap, Journal, More) like other apps; an offline notice
   when the connection drops.
 
 ## Print on any printer
@@ -322,7 +341,8 @@ notes about the day on the **right page**. Then **Snap** both pages in one photo
   sliding (moved 3+ times or waiting 7+ days). Slugs also print "slid 3×" on the daily label.
 
 Journal mode (Settings → Focus, on by default) adds a "Today's win" line to the daily label and keeps
-every snapped photo. Paper sizes include **A5** and **half letter** for printing the day's list on a
+every snapped photo. With it off, a photo is kept only when it has handwriting (notes or a win), as
+that day's journal page. Paper sizes include **A5** and **half letter** for printing the day's list on a
 regular printer and pasting it in. Journal pages are private: admins can't read them, and `nextbox db
 sql` hides their notes and photos.
 
@@ -341,11 +361,11 @@ Closing the loop:
   7/30/90/365 days.
 
 ## Getting new people started
-- **Quick start page:** `https://nextbox.braznarkel.com/app/guide.html` explains everything in 10 short
+- **Quick start page:** `https://nextbox.braznarkel.com/app/guide.html` explains everything in 11 short
   sections. Send it with an invite. It's also linked from the sign-in page and Settings → Help.
-- **Get started checklist:** the top of My list shows 7 steps that tick themselves off: brain dump,
-  home screen, link an app, add a calendar, printer, first stickers, and focus settings. The optional
-  ones can be skipped. Hide it with **Hide** and bring it back in Settings → Help.
+- **Get started checklist:** the top of My list shows 9 steps that tick themselves off: brain dump,
+  home screen, link an app, add a calendar, printer, first stickers, today's label, mark it and snap
+  it, and focus settings (the 5 quick questions, if they were skipped). The optional ones can be skipped. Hide it with **Hide** and bring it back in Settings → Help.
 - **Home screen:** Next Box has its own icon and opens full screen when added to the home screen.
 
 ## Everyday use
@@ -356,7 +376,7 @@ Closing the loop:
 | One task | `nextbox task <id>` |
 | A note | `nextbox text "Call Sam back"` |
 | Clipboard → to-do app + ticket | your hotkey |
-| Read back | Mark ✓ done, → tomorrow or ✗ drop, then web app → Read back → photo. Deletes and anything uncertain wait for Confirm/Skip. CLI: `nextbox scan photo.jpg`, then `nextbox confirm <scan-id>` |
+| Read back | Mark ✓ done, → tomorrow or ✗ drop, then web app → Snap → Take a photo → Read back. Deletes and anything uncertain wait for Confirm/Skip. CLI: `nextbox scan photo.jpg`, then `nextbox confirm <scan-id>` |
 | Notes → tasks | Snap result or a journal page → Add lines to my list → tick → Add |
 | Add one task with a day, tags and steps | My list → + Add task (Brain dump shows what it understood as you type) |
 | Not today | → on the task (or Just one thing → Tomorrow). Undo is in the message |
@@ -382,9 +402,11 @@ Closing the loop:
 | Sign out | web app → Account → Sign out |
 
 ## The database (and learning SQL)
-Everything Next Box keeps (accounts, printed tickets, scans, printers, feedback, activity) is in
-one SQLite file: `~/.local/share/nextbox/nextbox.db`. Your tasks are never copied there; they stay
-in each person's to-do app.
+Everything Next Box keeps is in one database: accounts, My list and tags, everyone's journal (with
+its photos) and wins, printed tickets, scans, printers, feedback and activity. By default that's one
+SQLite file, `~/.local/share/nextbox/nextbox.db` (or PostgreSQL, after `scripts/setup-postgres.sh`).
+Linked apps' tasks are never kept there; they stay in that app. Back up the whole data folder,
+`~/.local/share/nextbox`: it also holds `secret.key`, which unlocks the linked-app passwords.
 
 ```bash
 .venv/bin/nextbox db where        # where the database is
@@ -397,13 +419,29 @@ in each person's to-do app.
 `DATABASE.md` is a step-by-step SQL course on the practice database. Queries on the real database
 are read-only, and password hashes and to-do app secrets are always hidden.
 
+## Update to a new version
+A superadmin sees a banner in the web app when a newer version is published. To update, on the Next
+Box computer run:
+```bash
+~/.local/share/nextbox/app/scripts/update.sh
+```
+It downloads the newest Next Box into the same folder, updates the packages in `.venv`, runs the
+tests (about 3 minutes) and restarts the service. It keeps `.env` (your settings and keys) and the
+data folder (`~/.local/share/nextbox`: accounts, lists, journals, tickets and `secret.key`). Then
+check it with `~/.local/share/nextbox/app/.venv/bin/nextbox doctor`, whose first line is the version
+you now have (`nextbox --version` says it too).
+
 ## Troubleshooting
-- **Start here:** `.venv/bin/nextbox doctor` checks the key, accounts, service, web page, firewall and printers, and says what to fix.
+- **Start here:** `.venv/bin/nextbox doctor` says the version and checks the database, `NEXTBOX_KEY`,
+  `ANTHROPIC_API_KEY`, accounts, service, web page, firewall, sign-in apps and printers (including a
+  `PRINTER_IP` that's still the example address), and says what to fix.
+- Snap or Break it down says it needs an AI key: put `ANTHROPIC_API_KEY` in `.env`, then
+  `systemctl --user restart nextbox`.
 - `printer_reachable: false`: check that the printer is on the same Wi-Fi and give it a DHCP reservation so its IP stays fixed.
 - Service logs: `journalctl --user -u nextbox -f`
 - Service won't start, with status 218 or "namespace" errors: your system doesn't allow the
   service's sandboxing. Delete the `ProtectSystem=`, `ReadWritePaths=` and `PrivateTmp=` lines in
   `~/.config/systemd/user/nextbox.service`, then run `systemctl --user daemon-reload`.
-- "Connect your to-do app first": that person hasn't connected one yet (Settings → Your to-do app).
+- "Connect your to-do app in Settings first": that person hasn't linked one yet (Settings → Linked app).
 - Old tickets and scans are deleted after 90 days (`NEXTBOX_RETENTION_DAYS`). Run `nextbox prune` to clean up now.
 - After changing code or `.env`: `systemctl --user restart nextbox`

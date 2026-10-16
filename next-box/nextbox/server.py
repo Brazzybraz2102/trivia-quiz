@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from . import coach as coaching
 from . import jobs, printer, quiz, scan, upkeep
 from .auth import PREF_HINTS, ROLES, Accounts, AuthError, default_prefs, rank
-from .config import PROJECT_DIR
+from .config import PROJECT_DIR, app_version
 from .connections import Builder, Connections, NotConnected
 from .events import Events, ServerSettings
 from .feedback import Feedback, FeedbackError
@@ -255,12 +255,13 @@ class PrinterBody(BaseModel):
 
 
 # Shown to everyone once; their "I understand" is recorded. Bump the version if it changes.
+# (Saying the journal stays private shows the admin nothing more, so that line needed no bump.)
 DATA_NOTICE_VERSION = 3
 DATA_NOTICE = ("The admin can see how you use Next Box: your printed tickets (including the tasks on "
                "them), photo read-backs, settings, activity, signed-in devices, and how many open tasks "
                "are on your built-in list (not what they say). Tasks on your built-in list are kept on "
-               "this Next Box computer. Your password and your to-do app password or token are never "
-               "visible to anyone, and feedback stays anonymous.")
+               "this Next Box computer. Your journal stays private, even from the admin. Your password and "
+               "your to-do app password or token are never visible to anyone, and feedback stays anonymous.")
 
 
 class UserPatch(BaseModel):
@@ -301,9 +302,10 @@ class SignupBody(BaseModel):
     agree: bool = False  # the Terms of Use and Privacy Policy
 
 
-TERMS_VERSION = 2  # bump when terms.html or privacy.html change in a way people should re-read
+TERMS_VERSION = 3  # bump when terms.html or privacy.html change in a way people should re-read
 #   2: the Privacy Policy covers the Journal (photos and handwriting kept, private to you) and says
 #      Claude (Anthropic) reads your handwriting as well as your marks.
+#   3: with Journal mode off, a photo with handwriting (notes or a win) is still kept as a journal page.
 DB_NAMES = {"sqlite": "SQLite", "postgresql": "PostgreSQL"}  # for the About page
 
 
@@ -688,6 +690,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                                   or consent.get("terms") not in (None, TERMS_VERSION),
                 "password_reset": _reset_notice(user),
                 "ai_ready": ai_ready(),  # the AI helpers have a key (or a stand-in) to work with
+                "scan_ready": vision_ready(),  # Snap can read photos (its own stand-in in tests)
                 "setup_quiz": _quiz_due(name, user["prefs"])}  # show the setup questions after the notice
 
     def _reset_notice(user: dict) -> dict | None:
@@ -719,15 +722,17 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return {"ok": True}
 
     @app.get("/about")
-    def about():
+    def about(request: Request):
         """Public facts for the About, Privacy and Terms pages (no sign-in needed)."""
+        # Through the public address, Cloudflare carries the traffic even if NEXTBOX_HOSTING was never set.
+        hosting = os.environ.get("NEXTBOX_HOSTING", "").strip()[:80] or ("Cloudflare" if from_internet(request) else "")
         return {"name": "Next Box", "version": _version(), "build": build,
                 "operator": os.environ.get("NEXTBOX_OPERATOR", "").strip() or "Braznarkel",
                 "contact": os.environ.get("NEXTBOX_CONTACT", "").strip(),
                 "retention_days": ctx.settings.retention_days, "terms_version": TERMS_VERSION,
                 # What this copy really runs on, so the pages never name a database or host it doesn't use.
                 "database": DB_NAMES.get(accounts.db.dialect.name, accounts.db.dialect.name),
-                "hosting": os.environ.get("NEXTBOX_HOSTING", "").strip()[:80]}
+                "hosting": hosting}
 
     @app.get("/version")
     def version():
@@ -887,7 +892,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             return tuple(int(x) for x in re.findall(r"\d+", v or "0")[:3])
         return {"current": current, "latest": latest,
                 "update_available": bool(latest) and as_tuple(latest) > as_tuple(current),
-                "how": "On the Next Box computer: cd ~/next-box && scripts/update.sh"}
+                "how": "On the Next Box computer: ~/.local/share/nextbox/app/scripts/update.sh"}
 
     @app.get("/auth/sessions")
     def my_sessions(caller: Caller = Depends(person)):
@@ -1581,6 +1586,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.post("/scan")
     async def do_scan(photo: UploadFile = File(...), label_id: str | None = Form(default=None),
                       caller: Caller = Depends(auth)):
+        if not vision_ready():  # no AI key: say how to fix it, and don't use up the hour's photos
+            raise HTTPException(503, no_key(caller))
         if not scan_window.allow(caller.name):  # each read-back is a paid call to the vision service
             raise HTTPException(429, "That's a lot of photos this hour. Try again in a bit.")
         chunks, size = [], 0
@@ -1649,6 +1656,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         rec = _own_scan(scan_id, caller)
         if rec.get("status") != "failed":
             return _scan_reply(caller, rec)
+        if not vision_ready():
+            raise HTTPException(503, no_key(caller))
         image = Journal(accounts.db, acting_as(caller)).photo(rec["journal_id"]) if rec.get("journal_id") else None
         if not image:
             raise HTTPException(409, "That photo wasn't kept, so snap it again.")
@@ -1752,11 +1761,20 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def ai_ready() -> bool:
         return ai["coach"] is not None or bool(ctx.settings.anthropic_api_key)
 
+    def vision_ready() -> bool:
+        """Snap can read a photo: there's a key (or a stand-in vision in tests). Not ai_ready, which
+        also counts a stand-in coach."""
+        return vision is not None or bool(ctx.settings.anthropic_api_key)
+
+    def no_key(caller: Caller) -> str:
+        """No AI key: the owner is told how to add one, everyone else who to ask."""
+        return coaching.NO_KEY_OWNER if caller.role == "superadmin" else coaching.NO_KEY
+
     def helper(caller: Caller) -> coaching.Coach:
         if not caller.prefs.get("ai_helpers", True):
             raise HTTPException(409, coaching.TURNED_OFF)
         if not ai_ready():
-            raise HTTPException(503, coaching.NO_KEY)
+            raise HTTPException(503, no_key(caller))
         if ai["coach"] is None:
             ai["coach"] = coaching.claude_coach(ctx.settings)
         return ai["coach"]
@@ -3079,16 +3097,7 @@ def share_text(title=None, text=None, url=None) -> str:
 
 def _version() -> str:
     """pyproject.toml is the source of truth (installed metadata can lag behind an update)."""
-    try:
-        import tomllib
-        with open(PROJECT_DIR / "pyproject.toml", "rb") as fh:
-            return tomllib.load(fh)["project"]["version"]
-    except Exception:
-        try:
-            from importlib.metadata import version
-            return version("nextbox")
-        except Exception:
-            return "dev"
+    return app_version()  # the same answer as `nextbox --version` and `nextbox doctor`
 
 
 def build_default_app() -> FastAPI:

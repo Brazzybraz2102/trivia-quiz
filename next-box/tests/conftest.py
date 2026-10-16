@@ -113,6 +113,13 @@ def no_real_printer(monkeypatch):
     monkeypatch.setattr(printer, "_send_raster", boom)
 
 
+@pytest.fixture(autouse=True)
+def no_anthropic_key(monkeypatch):
+    """Tests never reach Anthropic: they use a fake vision and a fake coach, and a key in the
+    developer's environment is hidden from them."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+
 @pytest.fixture
 def todo():
     return FakeTodoist([dict(t) for t in SAMPLE])

@@ -124,9 +124,9 @@ def test_choose_by_label_color():
 
 
 def test_first_run_turns_env_printer_into_the_list(tmp_path, ctx):
-    ctx.settings.printer_ip = "192.168.1.50"
+    ctx.settings.printer_ip = "192.168.1.40"  # not the example address, which is never added
     reg = Printers(tmp_path, ctx.settings)
-    assert [p.address for p in reg.all()] == ["192.168.1.50"]
+    assert [p.address for p in reg.all()] == ["192.168.1.40"]
     reg.add({"name": "Red", "driver": "zpl", "address": "192.168.1.70", "stock_color": "red"})
     assert [p.stock_color for p in Printers(tmp_path, ctx.settings).all()] == ["white", "red"]
 

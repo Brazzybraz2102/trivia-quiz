@@ -34,6 +34,7 @@ packaging==26.3
 packbits==0.6
 pika==1.4.4
 pillow==12.3.0
+pillow-heif==1.8.1
 pip_api==0.0.35
 pip_audit==2.10.1
 pluggy==1.6.0

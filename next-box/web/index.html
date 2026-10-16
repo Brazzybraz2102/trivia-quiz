@@ -851,6 +851,7 @@
       <input type="file" id="photo" class="sr-only" accept="image/*" tabindex="-1" aria-hidden="true">
       <div class="row"><button class="go" id="snapCam" type="button">📷 Take a photo</button>
         <button class="plain" id="snapLib" type="button">Choose from photos</button></div>
+      <p class="muted" id="snapNoKey" role="note" hidden></p>
       <div id="scanChosen" hidden>
         <img id="scanPreview" alt="The photo you picked">
         <p class="muted" id="scanNoPreview" hidden>No preview for this kind of photo, but it can still be read.</p>
@@ -1013,7 +1014,7 @@
       <label class="setting"><div class="label"><b>Gentle words</b><span>"waiting 3d" instead of "overdue 3d", and "Not today" for the rest.</span></div><input type="checkbox" data-pref="gentle_words"></label>
       <label class="setting"><div class="label"><b>Show yesterday's wins</b><span>"Yesterday you finished 4. ✓" on the daily ticket.</span></div><input type="checkbox" data-pref="show_wins"></label>
       <label class="setting"><div class="label"><b>Print the next tiny step</b><span>Under each task that has steps.</span></div><input type="checkbox" data-pref="show_next_step"></label>
-      <label class="setting"><div class="label"><b>Journal mode</b><span>The daily label gets a "Today's win" line for your journal, and every page you snap is kept in your Journal.</span></div><input type="checkbox" data-pref="journal_mode"></label>
+      <label class="setting"><div class="label"><b>Journal mode</b><span>The daily label gets a "Today's win" line for your journal, and every page you snap is kept in your Journal. With it off, a photo is kept only when it has handwriting (notes or a win).</span></div><input type="checkbox" data-pref="journal_mode"></label>
       <label class="setting"><div class="label"><b>Call it a slug after</b><span>How many moves before a task shows under Slugs and prints "slid 3×". 2–10.</span></div><input type="number" min="2" max="10" data-pref="slug_after"></label>
       <label class="setting"><div class="label"><b>AI helpers</b><span>"Break it down" (tiny first steps) and "Look back on my week". They only run when you tap them, and send only what that one needs to Anthropic's AI.</span></div><input type="checkbox" data-pref="ai_helpers"></label>
       <label class="setting"><div class="label"><b>Same words every time</b><span>Messages always say the same thing, and My list opens on Schedule: your day in time order.</span></div><input type="checkbox" data-pref="routine_mode"></label>

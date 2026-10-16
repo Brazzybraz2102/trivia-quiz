@@ -1,5 +1,8 @@
-// Loaded in <head>: the Theme picked in the app (Settings → General) applies here too, before anything shows.
+// Loaded in <head>: the Theme, Text size and Easy-to-read text picked in the app (Settings → General) apply
+// here too, before anything shows. The app keeps a copy of them on this device (app.js applyLook).
 try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch {}
+try { const z = localStorage.getItem("nb.textSize"); if (z === "large" || z === "xlarge") document.documentElement.dataset.text = z; } catch {}
+try { document.documentElement.toggleAttribute("data-reading", localStorage.getItem("nb.reading") === "1"); } catch {}
 
 // Fills in who runs this Next Box, how to reach them and what it runs on, from /about.
 // An element with data-needs="x" shows only when /about has a value for x.

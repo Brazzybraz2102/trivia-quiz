@@ -40,6 +40,14 @@ if grep -q '^NEXTBOX_PUBLIC_URL=' .env; then
 else
   echo "NEXTBOX_PUBLIC_URL=$PUBLIC" >> .env
 fi
+# Cloudflare now carries the traffic, so the Privacy and About pages name it (a name already there is kept).
+if grep -q '^NEXTBOX_HOSTING=.\+' .env; then
+  :
+elif grep -q '^NEXTBOX_HOSTING=' .env; then
+  sed -i "s|^NEXTBOX_HOSTING=.*|NEXTBOX_HOSTING=Cloudflare|" .env
+else
+  echo "NEXTBOX_HOSTING=Cloudflare" >> .env
+fi
 systemctl --user restart nextbox.service
 sleep 3
 echo
