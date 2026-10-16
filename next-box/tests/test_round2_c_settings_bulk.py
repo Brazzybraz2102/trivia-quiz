@@ -301,6 +301,50 @@ const loadList = () => lists.push(1);
     assert out["offline"] == f" · “Pick up prescription” and 1 more didn't change: {OFFLINE}"  # stopped: the last wasn't tried
 
 
+def test_a_longer_undo_message_stays_long_enough_to_read(js):
+    """The partial-failure words made the bulk snack ~100 characters, and it still went after a fixed 6 s."""
+    body = fn(js, "snack")
+    lets = re.search(r"^let snackTimer = .*\n", js, re.M)[0]
+    script = """
+const cls = () => { const s = new Set(); return { add: (c) => s.add(c), remove: (c) => s.delete(c), contains: (c) => s.has(c) }; };
+let hovering = false;
+const box = { classList: cls(), contains: () => false, matches: (q) => q === ":hover" && hovering };
+const els = { "#snack": box, "#snackUndo": { hidden: false, textContent: "", onclick: null }, "#snackText": { textContent: "", innerHTML: "" } };
+const $ = (s) => els[s];
+const document = { activeElement: null };
+const focusSpot = () => null, keysMac = () => false, esc = (s) => s, placeToast = () => {}, requestAnimationFrame = (f) => f();
+let me = { prefs: {} };
+const timers = [];
+function make(setTimeout, clearTimeout) {
+""" + lets + body + """
+  return { snack, keys: (v) => { snackKeys = v; } };
+}
+const { snack, keys } = make((f, ms) => { timers.push([f, ms]); return timers.length; }, () => {});
+const ms = (msg) => { timers.length = 0; snack(msg, () => {}); return timers.length ? timers[0][1] : null; };
+const LONG = "Moved 1 to tomorrow · “Pick up prescription” and 1 more didn't change: That task was already removed.";
+const out = { short: ms("Moved 3 to tomorrow"), long: ms(LONG) };
+me.prefs.text_size = "large";
+out.largeShort = ms("Done 2 ✓"); out.largeLong = ms(LONG);
+me.prefs.text_size = "normal";
+// The pointer resting on it: it waits, and goes once the pointer has left.
+ms(LONG); hovering = true;
+timers[0][0]();
+out.hover = [box.classList.contains("show"), timers.length > 1 ? timers[1][1] : null];
+hovering = false; if (timers[1]) timers[1][0]();
+out.left = box.classList.contains("show");
+keys(true); out.keys = ms(LONG);   // after a key it waits for the next action or Esc, however long it is
+console.log(JSON.stringify(out));
+"""
+    out = run(script)
+    long = "Moved 1 to tomorrow · “Pick up prescription” and 1 more didn't change: That task was already removed."
+    extra = 60 * (len(long) - 40)
+    assert extra == 3660
+    assert out["short"] == 6000 and out["largeShort"] == 10000  # a short one: as before
+    assert out["long"] == 6000 + extra and out["largeLong"] == 10000 + extra
+    assert out["hover"] == [True, 2000] and out["left"] is False
+    assert out["keys"] is None
+
+
 def test_bulk_done_and_tomorrow_undo_through_undo_picked(js):
     assert 'undoPicked(undo,\n    (t, r) => api(`/list/${encodeURIComponent(t.id)}/reopen`' in js
     assert 'undoPicked(moved,\n    (t, r) => api(`/list/${encodeURIComponent(t.id)}/move`' in js

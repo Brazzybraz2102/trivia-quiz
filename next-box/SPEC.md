@@ -635,6 +635,8 @@ ClickUp and Trello are listed under Settings → Linked app → Other apps as "n
   They go one task at a time through the single-task endpoints, so linked tasks act in their own app; the bar
   shows progress and a failure names the task and why, whether or not others changed ("Moved 1 to tomorrow ·
   “Pick up prescription” didn't change: That task was already removed.", "and 2 more" when more didn't).
+  A message with Undo stays 6 s (10 s with bigger text) plus 60 ms a character past the first 40, and waits while
+  the pointer or focus is on it (after a key, until the next action or Esc).
   Done and → Tomorrow each get one Undo for the whole batch; it says how many went back ("Back where they
   were (1 of 2)") and names one that didn't, and why. Tag… adds or takes off a tag on the picked My list
   tasks (with only linked tasks picked, its sheet is "Tags are for My list tasks"). Delete… lists the tasks and asks "Delete N tasks? This

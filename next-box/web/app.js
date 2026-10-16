@@ -1951,7 +1951,8 @@ async function skipRepeat(id, btn) {
   finally { btn?.removeAttribute("aria-disabled"); }
 }
 
-// A message with an Undo button (or another action) that stays long enough to use it (longer with bigger text).
+// A message with an Undo button (or another action) that stays long enough to use it (longer with bigger text, with
+// more words, and while the pointer is on it).
 // After something done from the keyboard it stays until the next action or Esc, and Ctrl+Z (⌘Z on a Mac)
 // undoes from anywhere on the page. Undo puts focus back where the action was.
 let snackTimer = null, snackUndo = null, snackHide = null, snackKeys = false;
@@ -1976,7 +1977,7 @@ function snack(msg, undo, label = "Undo") {
   requestAnimationFrame(() => { $("#snackText").innerHTML = esc(msg) + keys; placeToast(); });  // said again even if it's the same words
   placeToast();
   function hide(now) {
-    if (!now && box.contains(document.activeElement)) { snackTimer = setTimeout(hide, 2000); return; }
+    if (!now && (box.contains(document.activeElement) || box.matches(":hover"))) { snackTimer = setTimeout(hide, 2000); return; }
     clearTimeout(snackTimer);
     if (box.contains(document.activeElement)) goBack();
     box.classList.remove("show");
@@ -1985,7 +1986,10 @@ function snack(msg, undo, label = "Undo") {
   }
   snackHide = hide;
   hide.waits = snackKeys;
-  if (!snackKeys) snackTimer = setTimeout(hide, ["large", "xlarge"].includes(me?.prefs?.text_size) ? 10000 : 6000);
+  // 6 s (10 s with bigger text) reads a short one and reaches Undo; a longer one (a bulk action naming a task that
+  // didn't change, and why) gets 60 ms more for each character past the first 40, as a toast reads.
+  if (!snackKeys) snackTimer = setTimeout(hide, (["large", "xlarge"].includes(me?.prefs?.text_size) ? 10000 : 6000)
+    + 60 * Math.max(0, String(msg).length - 40));
 }
 // Was the last thing done with the keyboard (Enter, Space) or a pointer (tap, click)?
 document.addEventListener("keydown", (e) => { if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) snackKeys = true; }, true);
