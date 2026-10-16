@@ -152,10 +152,15 @@ def test_task_dialog_saves_once_even_with_a_double_tap(js):
 
 # ------------------------------------------------------------------ R-C08: Esc doesn't throw away what was typed
 def test_escape_asks_before_discarding_a_task_or_feedback(js):
+    # The question lives in tdAsk() / fbAsk(), asked from Esc (as a key) and from the cancel event (round 2, W3-02).
+    ask = body_of(js, "const tdAsk = ", "\n")
+    assert "tdDirty()" in ask and "confirm(" in ask
     h = body_of(js, '$("#taskDialog").addEventListener("cancel"', "\n});\n")
-    assert "tdDirty()" in h and "confirm(" in h and "e.preventDefault()" in h
-    fb = body_of(js, '$("#fbDialog").addEventListener("cancel"', "\n});\n")
+    assert "tdAsk()" in h and "e.preventDefault()" in h
+    fb = body_of(js, "function fbAsk()", "\n}\n")
     assert "confirm(" in fb and "#fbDone" in fb
+    h = body_of(js, '$("#fbDialog").addEventListener("cancel"', "\n});\n")
+    assert "fbAsk()" in h and "e.preventDefault()" in h
 
 
 # ------------------------------------------------------------------ R-C06: Run setup again starts from today's settings

@@ -343,7 +343,9 @@
   :root { --mark:#ffe08a; --markFg:#1b1b1b; }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --mark:#7a5d00; --markFg:#fff; } }
   :root[data-theme="dark"] { --mark:#7a5d00; --markFg:#fff; }
-  input[type=search] { width:100%; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  input[type=search] { width:100%; padding:10px; border:1px solid var(--fieldLine); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  /* The search boxes' placeholder is their only visible label: dark enough to read (4.5:1). */
+  ::placeholder { color:var(--muted); opacity:1; }
   .jsearch { margin-top:12px; }
   mark { background:var(--mark); color:var(--markFg); border-radius:3px; padding:0 1px; }
   .jfoundhead { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
@@ -352,7 +354,7 @@
   .jhit:first-child { border-top:0; margin-top:6px; }
   .jhit .when { display:block; font-size:.875em; color:var(--muted); }
   .jhit .snip { display:block; margin-top:2px; overflow-wrap:anywhere; }
-  #journal.searching #slugCard, #journal.searching #jDays, #journal.searching #jMore, #journal.searching #jBack { display:none; }
+  #journal.searching #slugCard, #journal.searching #jDays, #journal.searching #jMore, #journal.searching #jBack, #journal.searching #jDaysHead { display:none; }
   .jback { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; background:var(--note); color:var(--noteFg); border-radius:10px; padding:8px 12px; margin-bottom:12px; }
   .jback[hidden] { display:none; }
   .jhead { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:wrap; margin-bottom:4px; }
@@ -405,7 +407,8 @@
   input[type=date], input[type=time] { padding:9px 10px; min-height:44px; border:1px solid var(--fieldLine); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
   :root[data-theme="dark"] input[type=date] { color-scheme:dark; }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) input[type=date] { color-scheme:dark; } }
-  .tagrow { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
+  .tagrow { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
+  .tagrow select { min-width:0; }  /* big text on a small phone: Remove wraps to the next line, nothing goes off the side */
   /* FD: the AI helpers ("Break it down" and "Look back on my week") */
   #nowCard:not([data-id]) #nowBreak, #nowCard[data-id=""] #nowBreak { display:none; }
   #journal.searching #lookCard { display:none; }
@@ -455,6 +458,10 @@
   /* Settings: the jump bar stays at the top while you scroll, and a card's heading lands below it. */
   #setJump { position:sticky; top:0; z-index:4; background:var(--bg); padding:6px 0; }
   #settings > .card { scroll-margin-top:60px; }
+  /* ...and whatever you Tab to scrolls clear of it, never under it (W3-03). --jumpH is the row's height
+     (app.js; it wraps with big text). !important: app.js sets an inline one for the reminder note. */
+  html:has(#settings.on) { scroll-padding-top:calc(var(--jumpH, 56px) + var(--remindH, 0px) + 12px) !important; }
+  html:has(#settings.on) #settings > .card { scroll-margin-top:0; }  /* the padding above already clears the row */
   @media (max-width:720px) {
     #setJump { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
     #setJump::-webkit-scrollbar { display:none; }
@@ -474,6 +481,7 @@
   @media (max-width:720px) {
     html { scroll-padding-bottom:calc(80px + env(safe-area-inset-bottom)); }
     button.small, a.small, .linkish, summary { min-height:44px; padding:10px 12px; }
+    #setJump button, #filterTags button, .pwrow button { min-height:44px; }
     .avatar { width:44px; height:44px; }
     #revmark a { display:inline-block; padding:10px 6px; }
   }
@@ -677,7 +685,7 @@
     <h2>Sign in</h2>
     <p class="muted" id="loginMsg" role="alert"></p>
     <label>Username or email<input type="text" id="user" name="username" autocomplete="username" autocapitalize="none" required></label>
-    <label>Password<span class="pwrow"><input type="password" id="pass" name="password" autocomplete="current-password" required>
+    <label><span id="passName">Password</span><span class="pwrow"><input type="password" id="pass" name="password" autocomplete="current-password" required aria-labelledby="passName">
       <button type="button" data-show="pass">Show</button></span></label>
     <div class="row"><button class="go" type="submit">Sign in</button></div>
     <details class="muted" style="margin-top:10px"><summary>Forgot your password?</summary>
@@ -691,7 +699,7 @@
         pattern="[A-Za-z0-9_.\-]{2,32}" title="2–32 characters: lowercase letters, numbers, . _ -">
       <span class="muted hint">2–32 characters: lowercase letters, numbers, . _ -</span></label>
     <label>Email (optional, you can sign in with it too)<input type="email" id="joinEmail" autocomplete="email" autocapitalize="none"></label>
-    <label>Password (8+ characters)<span class="pwrow"><input type="password" id="joinPass" autocomplete="new-password" minlength="8" required>
+    <label><span id="joinPassName">Password (8+ characters)</span><span class="pwrow"><input type="password" id="joinPass" autocomplete="new-password" minlength="8" required aria-labelledby="joinPassName">
       <button type="button" data-show="joinPass">Show</button></span></label>
     <label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px"><input type="checkbox" id="joinAgree" required style="width:20px;height:20px;flex:none;margin-top:2px">
       <span>I agree to the <a href="terms.html" target="_blank" rel="noopener">Terms of Use</a> and <a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.</span></label>
@@ -708,9 +716,9 @@
   <form class="card" id="mustForm">
     <h2>Choose your own password</h2>
     <p class="muted">You signed in with a temporary password. Pick a new one (8+ characters) to continue.</p>
-    <label>Temporary password<span class="pwrow"><input type="password" id="mcCur" autocomplete="current-password" required>
+    <label><span id="mcCurName">Temporary password</span><span class="pwrow"><input type="password" id="mcCur" autocomplete="current-password" required aria-labelledby="mcCurName">
       <button type="button" data-show="mcCur">Show</button></span></label>
-    <label>New password<span class="pwrow"><input type="password" id="mcNew" autocomplete="new-password" minlength="8" required>
+    <label><span id="mcNewName">New password</span><span class="pwrow"><input type="password" id="mcNew" autocomplete="new-password" minlength="8" required aria-labelledby="mcNewName">
       <button type="button" data-show="mcNew">Show</button></span></label>
     <p class="err" id="mcMsg" role="alert"></p>
     <div class="row"><button class="go" type="submit">Save and continue</button>
@@ -944,6 +952,7 @@
       <div id="slugList"></div>
       <div class="result" id="slugResult" hidden aria-live="polite"></div>
     </div>
+    <h2 class="sr-only" id="jDaysHead">Your pages</h2><!-- the days' h3s sit under their own heading, not under Slugs (W3-15) -->
     <div class="jback" id="jBack" hidden><span id="jBackText"></span><button class="plain small" id="jBackGo">Back to today</button></div>
     <div id="jDays"></div>
     <div class="row" id="jMore"><button class="plain" id="jOlder" hidden>Older days</button><span class="muted" id="jEnd" hidden>That's everything.</span></div>
@@ -1035,6 +1044,7 @@
       <label class="setting"><div class="label"><b>Open to</b><span>The screen you see when Next Box opens.</span></div>
         <select data-pref="start_tab" aria-label="Open to"><option value="mylist">My list</option><option value="print">Print</option><option value="scan">Snap</option><option value="journal">Journal</option></select></label>
       <label class="setting"><div class="label"><b>24-hour times</b><span>19:00 instead of 7:00p.</span></div><input type="checkbox" data-pref="time_24h"></label>
+      <label class="setting"><div class="label"><b>One-key shortcuts</b><span>n adds a task, / searches My list, g then a letter switches screens, ? lists them. Turn off if you use speech input or press keys by accident.</span></div><input type="checkbox" data-pref="keyboard_shortcuts"></label>
       <label class="setting"><div class="label"><b>New tasks go to</b><span>Brain dump and Print's new tasks, when you have a linked to-do app.</span></div>
         <select data-pref="new_tasks_to" aria-label="New tasks go to"><option value="nextbox">My list</option><option value="linked">My linked app</option></select></label>
     </div>
@@ -1062,8 +1072,8 @@
       <label class="setting"><div class="label"><b>Remind me before timed tasks</b><span>A note at the top of Next Box while it's open, with Done, Tomorrow and Snooze.</span></div>
         <select data-pref="remind_before" data-int aria-label="Remind me before timed tasks"><option value="0">Off</option><option value="5">5 minutes before</option><option value="10">10 minutes before</option>
           <option value="15">15 minutes before</option><option value="30">30 minutes before</option><option value="60">1 hour before</option></select></label>
-      <div class="setting" id="remindNotifyRow"><div class="label"><b id="remindNotifyName">Show a notification too</b><span id="remindNotifyNote">For reminders and the focus timer, while Next Box is open in the background on this device. Nothing comes from the server.</span></div>
-        <input type="checkbox" id="remindNotify" aria-labelledby="remindNotifyName" aria-describedby="remindNotifyNote"></div>
+      <label class="setting" id="remindNotifyRow"><div class="label"><b id="remindNotifyName">Show a notification too</b><span id="remindNotifyNote">For reminders and the focus timer, while Next Box is open in the background on this device. Nothing comes from the server.</span></div>
+        <input type="checkbox" id="remindNotify" aria-labelledby="remindNotifyName" aria-describedby="remindNotifyNote"></label>
     </div>
 
     <div class="card" id="calCard"><h2>Calendars</h2>
@@ -1323,12 +1333,12 @@
     <dt><kbd>?</kbd></dt><dd>This list</dd>
     <dt><kbd>Esc</kbd></dt><dd>Close a sheet, like this one</dd>
   </dl>
-  <p class="muted">Letters do nothing while you're typing in a box.</p>
+  <p class="muted">Letters do nothing while you're typing in a box. To turn off the one-key ones (n, +, /, g, ?), use Settings → General → One-key shortcuts.</p>
   <div class="row" style="justify-content:flex-end"><button class="plain" id="keysClose">Close</button></div>
 </dialog>
 </div>
 
-<dialog id="noticeDialog" aria-labelledby="noticeTitle" aria-describedby="noticeBody">
+<dialog id="noticeDialog" aria-labelledby="noticeTitle" aria-describedby="noticeBody" closedby="none">
   <h2 id="noticeTitle" tabindex="-1" autofocus>Before you start</h2>
   <p class="muted" id="noticeChanged" hidden>This changed since you last agreed. Have a quick look before you carry on.</p>
   <p id="noticeBody"></p>
@@ -1458,7 +1468,7 @@
       <div class="field"><label for="tdPriority">Urgent?</label><select id="tdPriority"><option value="1">No</option><option value="2">A little</option><option value="3">Yes</option><option value="4">Very</option></select></div>
       <button class="plain small tdskip" id="tdSkipRepeat" type="button" hidden>Skip this time</button>
     </div>
-    <div class="field"><label>Tags</label><div class="chips" id="tdTags"></div></div>
+    <div class="field"><span class="fieldlabel" id="tdTagsLabel">Tags</span><div class="chips" id="tdTags" role="group" aria-labelledby="tdTagsLabel"></div></div>
     <div class="field"><span class="fieldlabel" id="tdStepsLabel">Tiny steps</span><span class="muted" id="tdStepsHint">Tick them off as you go. The first one should take two minutes.</span>
       <ol class="stepedit" id="tdStepList" aria-labelledby="tdStepsLabel" hidden></ol>
       <div class="stepadd"><input type="text" id="tdStepNew" maxlength="200" aria-label="Add a tiny step" aria-describedby="tdStepsHint" placeholder="Add a step, like “Find the bill”" enterkeyhint="enter">

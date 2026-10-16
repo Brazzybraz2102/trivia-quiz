@@ -182,6 +182,9 @@ guarded auto print.
 ## 15. Admin visibility (everyone agreed)
 - **The notice:** at first sign-in everyone sees `DATA_NOTICE` and taps "I understand". It's
   recorded as `consent: {version, at}`. Bump `DATA_NOTICE_VERSION` if what's visible changes.
+  Until they agree or tap "No thanks, sign me out", nothing closes it: Esc and the phone's back gesture
+  do nothing (`closedby="none"`, and Esc is stopped as a key for browsers without it), and if it's
+  closed any other way while still unanswered, it opens again.
 - **The superadmin can see:**
   - `/super/usage`: per-person activity, tickets by reason, read-back outcomes, settings, last
     active, notice date, and a daily chart
@@ -200,6 +203,11 @@ the sign-in page. There are two modes:
 
 The page it came from is recorded automatically. Rate limit: 10 posts an hour per person, or per
 IP address before sign-in.
+
+**Closing the sheet:** with something typed, Esc (or the phone's back gesture) asks "Close without
+sending?"; Cancel keeps it open, however many times, and OK clears what was typed. Closed with Close
+before Send, the words are still there the next time it opens (until the page reloads). After a send
+it starts fresh. Signing out clears it.
 
 **The board (Feedback tab):** everyone who's signed in sees all feedback without names. Each post
 shows its kind, status, rating, the page and the **day** only (exact times could be matched
@@ -463,8 +471,9 @@ reads the published pyproject.toml at most every 6 hours).
 **Profile** tab (also from the account menu): name to show (`display_name` pref), email, password,
 signed-in devices, what the admin can see, download my data, delete my account. **Settings** has a
 jump bar (General, Tags, Focus, Calendars, Linked app, Label colors, Printing, Read-back, Help); General holds
-theme, text size (`text_size`), the screen it opens to (`start_tab`), 24-hour times and where new
-tasks go. `/app/` is served with `app.js?v=<version>-<build>` and every `/app` response says
+theme, text size (`text_size`), the screen it opens to (`start_tab`), 24-hour times, one-key
+shortcuts (`keyboard_shortcuts`, §30) and where new tasks go. The Jump to row sticks to the top, and
+whatever you Tab to in Settings scrolls clear of it (`--jumpH`, its height as it wraps with big text). `/app/` is served with `app.js?v=<version>-<build>` and every `/app` response says
 `Cache-Control: no-cache`, so phones and Cloudflare never keep showing an old version.
 
 ## 24. Standard app pages and navigation
@@ -619,6 +628,9 @@ ClickUp and Trello are listed under Settings → Linked app → Other apps as "n
   30, by id). The last filter is remembered per person on the device (`localStorage nb.listFilter:<user>`).
 - **+ Add task** opens the Edit dialog empty ("New task") and saves with `POST /list` (always My list; it says
   so when Brain dump sends new tasks to the linked app). A tag being shown starts ticked.
+  With unsaved changes, Esc (or the phone's back gesture) asks "Close without saving?": Cancel keeps it open
+  with what was typed, however many times (Esc is handled as a key; a back gesture the browser closes anyway
+  opens it again as it was), OK closes it without saving.
 - **Brain dump preview**: `POST /list/dump?preview=1` only parses: no task, tag (not even the starter tags) or
   event is written. It returns `lines` (each line as `parse_dump` makes it, problems and ticked lines too),
   `dropped` (lines with no task words, like "fri" alone), `more` (lines past 200), `to`, `new_tags`,
@@ -629,7 +641,8 @@ ClickUp and Trello are listed under Settings → Linked app → Other apps as "n
   They go one task at a time through the single-task endpoints, so linked tasks act in their own app; the bar
   shows progress and a failure names the task. Done and → Tomorrow each get one Undo for the whole batch. Tag…
   adds or takes off a tag on the picked My list tasks. Delete… lists the tasks and asks "Delete N tasks? This
-  can't be undone." (Cancel has focus), then sends `DELETE /list/{id}?confirm=true` per task.
+  can't be undone." (Cancel has focus), then sends `DELETE /list/{id}?confirm=true` per task. Closing Tag… or
+  Delete… without doing anything puts focus back on that button; after a tag or a delete it goes to Stickers.
 - **Slugs on My list**: `GET /list` also returns `slides` ({task id: moves} for open tasks moved `slug_after`+
   times; "Not a slug" ones left out) and `slug_after`. Those rows show "slid 3×", as the label and Journal do.
 - **Skip this time** (repeating My list tasks; in the Edit dialog, which saves first, and on Just one thing):
@@ -720,5 +733,7 @@ All of it is worked out in the browser while Next Box is open: no server timer, 
   and the setup questions, then leave the address bar.
 - **Keyboard shortcuts** (desktop): `n` or `+` Quick add, `/` search My list (Schedule switches to List for this visit),
   `g` then `l`/`p`/`s`/`j` My list, Print, Snap, Journal, `?` the list (also Settings → Help), Esc closes. Ignored while
-  typing in a box or with a sheet open. Ctrl/⌘+Enter also saves a journal note.
+  typing in a box or with a sheet open. Ctrl/⌘+Enter also saves a journal note. The one-key ones (`n`, `+`, `/`, `g`,
+  `?`) can be turned off: Settings → General → One-key shortcuts (`keyboard_shortcuts`, default on), for speech input
+  or keys pressed by accident (WCAG 2.1.4). Ctrl/⌘ shortcuts and Esc keep working.
 
