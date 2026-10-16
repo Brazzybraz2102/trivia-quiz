@@ -4,31 +4,85 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":
 const RANK = { user: 0, admin: 1, superadmin: 2 };
 let me = null;
 
+let lastFailure = { at: 0, msg: "" };  // the last request that failed, so toast() can tell an error from news
 async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   if (opts.json !== undefined) { headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(opts.json); }
-  const r = await fetch(path, { ...opts, headers, credentials: "same-origin" });
+  let r;
+  try { r = await fetch(path, { ...opts, headers, credentials: "same-origin" }); }
+  catch {  // no answer at all (offline, server down): never the browser's "Failed to fetch"
+    lastFailure = { at: Date.now(), msg: OFFLINE };
+    throw new Error(OFFLINE);
+  }
   const body = await r.json().catch(() => ({}));
   if (r.status === 401 && !path.startsWith("/auth/")) { showLogin("Your session ended. Sign in again."); }
-  if (!r.ok) throw Object.assign(new Error(body.detail || `${r.status}`), { status: r.status, body });
+  if (!r.ok) {
+    const msg = body.detail || ([502, 503, 504].includes(r.status) ? BUSY : `${r.status}`);
+    lastFailure = { at: Date.now(), msg };
+    throw Object.assign(new Error(msg), { status: r.status, body });
+  }
   return body;
 }
 const OFFLINE = "Can't reach Next Box. Check your connection.";
+const BUSY = "Next Box didn't answer in time. Try again in a moment.";
 const errText = (e) => (e.status ? e.message : OFFLINE);  // a fetch that never got an answer has no status
 const png = (id) => `/printed/${encodeURIComponent(id)}/png`;  // a ticket never changes once made
 const when = (ts) => ts ? new Date(ts * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "never";
 
-let toastTimer;
-function toast(msg, ms = 1800) {
-  $("#toast").textContent = msg;
-  $("#toast").classList.add("show");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => $("#toast").classList.remove("show"), ms);
+// A short message at the bottom. It stays long enough to read (4 s or more for longer ones), and it's
+// announced to screen readers. An error (a request that just failed, or { error: true }) stays 10 s, has
+// a × to close it, and waits while the pointer or focus is on it. The second argument can also be the
+// least number of ms to show it, as older callers pass.
+let toastTimer, toastLeft = 0, toastStarted = 0;
+function toast(msg, opts = {}) {
+  if (typeof opts === "number") opts = { ms: opts };
+  msg = String(msg ?? "");
+  const t = $("#toast"), text = $("#toastText");
+  const error = opts.error ?? (msg === OFFLINE || (msg === lastFailure.msg && Date.now() - lastFailure.at < 3000));
+  // In an open dialog it goes inside it: above the dimmed backdrop, and not made inert by it.
+  const host = $$("dialog[open]").pop() || document.body;
+  if (t.parentElement !== host) host.appendChild(t);
+  t.classList.toggle("err", error);
+  $("#toastClose").hidden = !error;
+  text.textContent = "";  // cleared first, so the same message twice is announced twice
+  requestAnimationFrame(() => { text.textContent = msg; });
+  t.classList.add("show");
+  toastLeft = Math.max(error ? 10000 : 4000, 60 * msg.length, opts.ms || 0);
+  runToast();
 }
+function runToast() {
+  clearTimeout(toastTimer);
+  toastStarted = Date.now();
+  toastTimer = setTimeout(hideToast, toastLeft);
+}
+function hideToast() {
+  clearTimeout(toastTimer);
+  const t = $("#toast");
+  t.classList.remove("show");
+  if (t.contains(document.activeElement)) document.activeElement.blur();
+}
+$("#toastClose").onclick = hideToast;
+for (const ev of ["mouseenter", "focusin"]) $("#toast").addEventListener(ev, () => {  // reading it: wait
+  if (!$("#toast").classList.contains("show")) return;
+  clearTimeout(toastTimer);
+  toastLeft = Math.max(1500, toastLeft - (Date.now() - toastStarted));
+});
+for (const ev of ["mouseleave", "focusout"]) $("#toast").addEventListener(ev, () => {
+  if ($("#toast").classList.contains("show") && !$("#toast").matches(":hover") && !$("#toast").contains(document.activeElement)) runToast();
+});
+// A dialog that closes takes a toast shown inside it along: put it back on the page first.
+document.addEventListener("close", (e) => {
+  const t = $("#toast");
+  if (e.target.tagName === "DIALOG" && e.target.contains(t)) document.body.appendChild(t);
+}, true);
 
 // ---------------------------------------------------------------- theme
 function applyTheme(t) {
   if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
+  // The phone's status bar follows the theme picked here, not only the phone's own setting.
+  $$('meta[name="theme-color"]').forEach((m) => {
+    m.content = t === "dark" || (!t && m.media.includes("dark")) ? "#141414" : "#fafaf7";
+  });
 }
 try { applyTheme(localStorage.getItem("theme") || ""); $("#theme").value = localStorage.getItem("theme") || ""; } catch {}
 $("#theme").onchange = () => { applyTheme($("#theme").value); try { localStorage.setItem("theme", $("#theme").value); } catch {} toast("Saved on this device"); };
@@ -285,7 +339,7 @@ function editPrinter(p) {
   $("#npInk").checked = p.ink === "black_red"; $("#npWidth").value = p.width_px; $("#npHeight").value = p.label_height_mm || "";
   $("#npGo").dataset.pid = p.id; $("#npGo").textContent = "Save printer";
   $("#npTitle").textContent = `Edit ${p.name}`; $("#npCancel").hidden = false; $("#npMsg").textContent = "";
-  $("#npForm").open = true; $("#npForm").scrollIntoView({ behavior: "smooth", block: "nearest" }); $("#npName").focus();
+  $("#npForm").open = true; $("#npForm").scrollIntoView({ behavior: smooth(), block: "nearest" }); $("#npName").focus();
 }
 function resetPrinterForm() {
   delete $("#npGo").dataset.pid; $("#npGo").textContent = "Add printer";
@@ -295,7 +349,8 @@ function resetPrinterForm() {
   if (printOpts?.drivers && $("#npDriver").options.length) driverHints();
 }
 $("#npCancel").onclick = () => { resetPrinterForm(); $("#npForm").open = false; };
-$("#npGo").onclick = async () => {
+$("#npGo").onclick = () => hold($("#npGo"), savePrinter);  // one tap, one printer
+async function savePrinter() {
   $("#npMsg").textContent = "";
   const pid = $("#npGo").dataset.pid, kind = $("#npDriver").value;
   const body = { driver: kind, name: $("#npName").value, address: $("#npAddress").value, stock_color: $("#npColor").value,
@@ -308,7 +363,7 @@ $("#npGo").onclick = async () => {
     resetPrinterForm(); if (pid) $("#npForm").open = false;
     loadPrinters(); loadLabels();
   } catch (e) { $("#npMsg").textContent = errText(e); }
-};
+}
 $("#printerList").addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-p]"); if (!b) return;
   const pid = b.closest("[data-pid]").dataset.pid, p = printOpts.printers.find((x) => x.id === pid);
@@ -329,7 +384,7 @@ $("#printerList").addEventListener("click", async (e) => {
       const name = esc(r.printer.name);
       $("#prOut").innerHTML = `<p>${sent ? `Printed on ${name}:` : real ? `Printing is paused or set to preview, so nothing went to ${name}. Here's the preview:` : `Preview for ${name}:`}</p>
         <img src="${png(r.id)}" alt="Test label for ${esc(r.printer.name)}" style="max-width:100%;border:1px solid var(--line);border-radius:6px">`;
-      $("#prOut").scrollIntoView({ behavior: "smooth", block: "nearest" });
+      $("#prOut").scrollIntoView({ behavior: smooth(), block: "nearest" });
       if (sent) toast(`Sent to ${r.printer.name}`);
     }
     loadPrinters(false); loadLabels();
@@ -377,10 +432,10 @@ $("#uPeople").addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-u]"); if (!b) return;
   const d = await api(`/super/users/${encodeURIComponent(b.dataset.u)}/tickets?limit=24`);
   $("#uWho").textContent = b.dataset.u; $("#uDetail").hidden = false;
-  $("#uTickets").innerHTML = `<div class="tickets">${d.tickets.map((r) => `<div><img loading="lazy" src="${png(r.id)}" alt="">
+  $("#uTickets").innerHTML = `<div class="tickets">${d.tickets.map((r) => `<div><img loading="lazy" src="${png(r.id)}" alt="Ticket #${esc(r.id)}">
       <div class="muted">${esc(r.created_at.replace("T", " "))}${r.printer ? " · " + esc(r.printer.name) : ""}${r.dry_run ? " · preview" : ""}</div></div>`).join("") || "<p class='muted'>No tickets.</p>"}</div>
     <h3>Read-backs</h3>${d.scans.map((r) => `<div class="muted">${esc(r.created_at.replace("T", " "))}: ${r.applied.length} applied, ${r.needs_confirmation.length} needed a tap${r.errors.length ? `, ${r.errors.length} problem${r.errors.length === 1 ? "" : "s"}` : ""}</div>`).join("") || "<p class='muted'>None.</p>"}`;
-  $("#uDetail").scrollIntoView({ behavior: "smooth" });
+  $("#uDetail").scrollIntoView({ behavior: smooth() });
 });
 
 // ---------------------------------------------------------------- to-do app connection
@@ -512,11 +567,16 @@ const loaders = { mylist: () => { loadList(); loadToday(); loadGuide(); }, print
                   debug: loadDebug, board: () => loadBoard(), usage: () => loadUsage(), journal: () => loadJournal() };
 function markTab(tab) {  // which screen shows, without loading anything
   $$("#topnav button").forEach((x) => { x.classList.toggle("on", x.dataset.tab === tab); x.toggleAttribute("aria-current", x.dataset.tab === tab); if (x.dataset.tab === tab) x.setAttribute("aria-current", "page"); });
-  $$(".bottombar [data-go]").forEach((x) => x.classList.toggle("on", x.dataset.go === tab));
+  $$(".bottombar [data-go]").forEach((x) => { x.classList.toggle("on", x.dataset.go === tab); setCurrent(x, x.dataset.go === tab); });
   $("#moreBtn").classList.toggle("on", !["mylist", "print", "scan", "journal"].includes(tab));
+  setCurrent($("#moreBtn"), !["mylist", "print", "scan", "journal"].includes(tab));
+  // Where you are, also in the browser tab and the app switcher: "Journal · Next Box".
+  const name = $(`#topnav button[data-tab="${tab}"]`)?.firstChild?.textContent.trim();
+  document.title = me && name ? `${name} · Next Box` : "Next Box";
   $$("section").forEach((s) => s.classList.toggle("on", s.id === tab));
   $("#dryRow").hidden = !["mylist", "print", "printed"].includes(tab);  // only where things get printed
 }
+const setCurrent = (el, on) => { if (on) el.setAttribute("aria-current", "page"); else el.removeAttribute("aria-current"); };
 $$("#topnav button").forEach((b) => b.onclick = () => {
   if (!me) return;  // nothing to open before signing in
   markTab(b.dataset.tab);
@@ -551,10 +611,11 @@ function applyDry() {
 
 // ---------------------------------------------------------------- print
 const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+const smooth = () => (reducedMotion() ? "auto" : "smooth");  // every scroll: no long glide when motion is reduced
 // A result is shown where it can be seen: scrolled to, and its heading focused (and announced).
 function revealResult(box) {
   box.hidden = false;
-  box.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" });
+  box.scrollIntoView({ behavior: smooth(), block: "start" });
   box.querySelector("h2")?.focus({ preventScroll: true });
 }
 function resultHeading(r) {
@@ -567,19 +628,53 @@ function ticketResult(t) {
   const size = n ? `${n} task${n === 1 ? "" : "s"}` : t.kind === "text" ? "note" : "no tasks";
   return `<p><b>${what}</b> #${esc(t.id)} · ${size}${t.printer ? ` · ${sw(t.printer.color)}${esc(t.printer.name)}` : ""}</p>
     ${t.note ? `<p class="${t.status === "failed" ? "err" : "muted"}">${esc(t.note)}</p>` : ""}
-    ${paperButton(t.id)}<img src="${png(t.id)}" alt="Preview of ticket #${esc(t.id)}">`;
+    ${paperButton(t.id)}<img src="${png(t.id)}" alt="${esc(ticketAlt(t))}">`;
+}
+// Says which ticket this is and what's on it, so tickets can be told apart without seeing them.
+function ticketAlt(t) {
+  const names = (t.manifest || []).map((m) => m.content).filter(Boolean);
+  const head = `${t.status === "printed" ? "Printed" : "Preview of"} ticket #${t.id}`;
+  if (!names.length) return t.kind === "text" && t.title ? `${head}: ${t.title}` : head;
+  const shown = names.slice(0, 5).join("; ");
+  return `${head}, ${names.length} task${names.length === 1 ? "" : "s"}: ${shown}${names.length > 5 ? `; and ${names.length - 5} more` : ""}`;
 }
 function showResultError(box, msg) {
   box.innerHTML = `<h2 tabindex="-1">Couldn't print</h2><p class="err">${esc(msg)}</p>`;
   revealResult(box);
 }
 // While a print is on its way the button says so (and can't be pressed twice); returns "put it back".
+// aria-disabled, not disabled: a disabled button drops keyboard focus to the top of the page.
 function busy(b, dry) {
   const html = b.innerHTML;
-  b.disabled = true; b.setAttribute("aria-busy", "true");
+  b.setAttribute("aria-disabled", "true"); b.setAttribute("aria-busy", "true");
   b.textContent = dry ? "Making preview…" : "Printing…";
-  return () => { b.disabled = false; b.removeAttribute("aria-busy"); b.innerHTML = html; };
+  return () => { b.removeAttribute("aria-disabled"); b.removeAttribute("aria-busy"); b.innerHTML = html; };
 }
+// Runs fn while btn can't be pressed again (a double tap must not save twice), keeping focus on btn.
+async function hold(btn, fn) {
+  if (!btn || btn.getAttribute("aria-disabled") === "true") return;
+  btn.setAttribute("aria-disabled", "true");
+  try { return await fn(); } finally { btn.removeAttribute("aria-disabled"); }
+}
+// A button marked aria-disabled ignores clicks, taps, Enter and Space (and won't submit its form),
+// like a disabled one, but keeps focus.
+document.addEventListener("click", (e) => {
+  if (e.target.closest?.('button[aria-disabled="true"], a[aria-disabled="true"]')) { e.preventDefault(); e.stopImmediatePropagation(); }
+}, true);
+// Buttons that are still disabled while they work (Add to my list, Read back, Connect…): when one had
+// focus, it gets it back once it works again, unless you've moved on.
+const parked = new WeakSet();
+let lastLeft = { el: null, at: 0 };
+document.addEventListener("focusout", (e) => { lastLeft = { el: e.target, at: Date.now() }; });
+new MutationObserver((changes) => {
+  for (const { target: b } of changes) {
+    if (b.disabled && (document.activeElement === b || (lastLeft.el === b && Date.now() - lastLeft.at < 1000))) parked.add(b);
+    else if (!b.disabled && parked.has(b)) {
+      parked.delete(b);
+      if (b.isConnected && (!document.activeElement || document.activeElement === document.body)) b.focus({ preventScroll: true });
+    }
+  }
+}).observe(document.body, { subtree: true, attributes: true, attributeFilter: ["disabled"] });
 
 function showPrint(r) {
   const box = $("#printResult");
@@ -705,7 +800,8 @@ function wireScanCard(card, rec) {
     try {
       const fresh = makeScanCard(await api(`/scan/${encodeURIComponent(rec.id)}/${path}`, { method: "POST", json }));
       card.replaceWith(fresh);
-      fresh.querySelector("h2").focus({ preventScroll: true });
+      // Carry on where you were: the next mark still waiting, else the card's heading.
+      (fresh.querySelector("[data-d=confirm]") || fresh.querySelector("h2")).focus({ preventScroll: true });
       loadWaiting(); loadRecent();
     } catch (e) {
       card.querySelectorAll("button").forEach((b) => b.disabled = false);
@@ -732,7 +828,7 @@ function renderScan(rec) {
   $("#scanResult").replaceChildren(card);
   $(`#scanPending [data-scan="${CSS.escape(rec.id)}"]`)?.remove();  // shown above now
   card.querySelector("h2").focus({ preventScroll: true });
-  card.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+  card.scrollIntoView({ behavior: smooth(), block: "start" });
 }
 
 // How many marks from photos are waiting for a tap: on the Snap button and at the top of My list.
@@ -869,7 +965,7 @@ $("#hist").addEventListener("click", async (e) => {
   try {
     const t = await api(route[0], { method: "POST", json: { ...route[1], dry_run } });
     await loadHistory();
-    window.scrollTo({ top: 0, behavior: reducedMotion() ? "auto" : "smooth" });
+    window.scrollTo({ top: 0, behavior: smooth() });
     $("#histMsg").className = t.status === "failed" ? "err" : "muted";
     $("#histMsg").textContent = t.status === "failed" ? t.note
       : `${t.status === "printed" ? "Printed again" : "New preview made"}: #${t.id}, at the top.`;
@@ -972,19 +1068,22 @@ $("#sessions").addEventListener("click", async (e) => {
   catch (err) { toast(errText(err), 4000); }
   loadSessions();
 });
-$("#signoutOthers").onclick = async () => {
-  const r = await api("/auth/signout-others", { method: "POST" });
-  toast(`Signed out ${r.signed_out} other device${r.signed_out === 1 ? "" : "s"}`);
+$("#signoutOthers").onclick = () => hold($("#signoutOthers"), async () => {
+  try {
+    const r = await api("/auth/signout-others", { method: "POST" });
+    toast(`Signed out ${r.signed_out} other device${r.signed_out === 1 ? "" : "s"}`);
+  } catch (e) { toast(`Couldn't sign out your other devices: ${errText(e)}`, { error: true }); }
   loadSessions();
-};
+});
 
 // ---------------------------------------------------------------- feedback (anonymous)
 let fbMode = "guided";
 const currentPage = () => (me ? document.querySelector("#topnav button.on")?.dataset.tab : "login") || "";
 
-function pick(group, el) { $$(`${group} button`).forEach((b) => b.classList.toggle("on", b === el)); }
+// One chip on in a group (el null: none). aria-pressed says which, not only the blue fill.
+function pick(group, el) { $$(`${group} button`).forEach((b) => { b.classList.toggle("on", b === el); b.setAttribute("aria-pressed", String(b === el)); }); }
 $$("#fbType button").forEach((b) => b.onclick = () => pick("#fbType", b));
-$$("#fbRating button").forEach((b) => b.onclick = () => b.classList.contains("on") ? b.classList.remove("on") : pick("#fbRating", b));
+$$("#fbRating button").forEach((b) => b.onclick = () => pick("#fbRating", b.classList.contains("on") ? null : b));
 $$(".seg button").forEach((b) => b.onclick = () => {
   fbMode = b.dataset.mode; pick(".seg", b);
   $("#fbGuided").hidden = fbMode !== "guided"; $("#fbOpen").hidden = fbMode !== "open";
@@ -993,7 +1092,7 @@ $$(".seg button").forEach((b) => b.onclick = () => {
 function openFeedback() {
   $("#fbErr").textContent = ""; $("#fbDone").hidden = true; $("#fbSend").hidden = false;
   $("#fbForm").querySelectorAll("textarea").forEach((t) => t.value = "");
-  $$("#fbRating button").forEach((b) => b.classList.remove("on"));
+  pick("#fbRating", null);
   $("#fbDebugRow").hidden = !me;  // error details exist only for signed-in people
   $("#fbDebug").checked = false;
   $("#fbDialog").showModal();
@@ -1170,18 +1269,18 @@ function renderTemp(el, u, pw) {
     <div class="secret">${esc(pw)}</div>
     <div class="row"><button class="plain small" data-copy>Copy</button></div>`;
   el.querySelector("[data-copy]").onclick = () => copyText(pw);
-  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.scrollIntoView({ behavior: smooth(), block: "center" });
 }
 function showTemp(u, pw) { renderTemp($("#nuOut"), u, pw); }
 
-$("#nuGo").onclick = async () => {
+$("#nuGo").onclick = () => hold($("#nuGo"), async () => {  // a double tap mustn't make a second one-time password
   try {
     const r = await api("/admin/users", { method: "POST", json: { username: $("#nuName").value, role: $("#nuRole").value, beta: $("#nuBeta").checked } });
     $("#nuName").value = "";
     showTemp(r.username, r.temp_password);
     loadAdmin();
-  } catch (e) { toast(e.message); }
-};
+  } catch (e) { toast(errText(e), { error: true }); }
+});
 
 function eventRow(e) {
   const t = new Date(e.ts * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "medium" });
@@ -1198,7 +1297,7 @@ async function loadActivity(u) {
     const evs = await api(`/admin/users/${encodeURIComponent(u)}/activity?limit=100`);
     $("#activity").innerHTML = evs.map(eventRow).join("") || `<p class="muted">No activity yet.</p>`;
   } catch (e) { $("#activity").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
-  $("#activityCard").scrollIntoView({ behavior: "smooth" });
+  $("#activityCard").scrollIntoView({ behavior: smooth() });
 }
 
 
@@ -1750,12 +1849,14 @@ async function loadTags() {
   $("#newTagColor").innerHTML = opts("yellow");
   $("#tagList").innerHTML = r.tags.map((t) => `<div class="tagrow" data-name="${esc(t.name)}">${tagChip(t.name)}
       <select aria-label="Color for ${esc(t.name)}">${opts(t.color)}</select>
-      <button class="plain small" data-del style="margin-left:auto">Remove</button></div>`).join("") || `<p class="muted">No tags.</p>`;
+      <button class="plain small" data-del style="margin-left:auto" aria-label="Remove tag ${esc(t.name)}">Remove</button></div>`).join("") || `<p class="muted">No tags.</p>`;
 }
 $("#tagList").addEventListener("change", async (e) => {
-  const row = e.target.closest(".tagrow");
-  try { await api(`/tags/${encodeURIComponent(row.dataset.name)}`, { method: "PUT", json: { color: e.target.value } }); toast("Saved"); loadTags(); }
+  const row = e.target.closest(".tagrow"), name = row.dataset.name;
+  try { await api(`/tags/${encodeURIComponent(name)}`, { method: "PUT", json: { color: e.target.value } }); toast("Saved"); }
   catch (err) { toast(errText(err)); }
+  await loadTags();  // drawn again: focus goes back to the same tag's color, so arrow keys carry on
+  $(`#tagList [data-name="${CSS.escape(name)}"] select`)?.focus();
 });
 $("#tagList").addEventListener("click", async (e) => {
   if (!e.target.matches("[data-del]")) return;
@@ -1766,8 +1867,8 @@ $("#tagList").addEventListener("click", async (e) => {
                     : `Remove the tag "${name}"?`)) return;
   try { await api(`/tags/${encodeURIComponent(name)}?strip=true`, { method: "DELETE" }); loadTags(); loadList(); } catch (err) { toast(err.message); }
 });
-$("#tagForm").onsubmit = async (e) => {  // a form, so Enter adds it too
-  e.preventDefault();
+$("#tagForm").onsubmit = (e) => { e.preventDefault(); hold($("#addTag"), addTag); };  // a form, so Enter adds it too
+async function addTag() {
   const typed = $("#newTag").value.trim();
   if (!typed) { toast("Type a tag name first"); $("#newTag").focus(); return; }
   try {
@@ -1776,8 +1877,15 @@ $("#tagForm").onsubmit = async (e) => {  // a form, so Enter adds it too
     // Tag names are short, lowercase letters, numbers, - and _: say so when what was typed changed.
     toast(r.name === typed.replace(/^[#@]+/, "").toLowerCase() ? `Added #${r.name}` : `Added "${typed}" as #${r.name}`, 3500);
     loadTags();
-  } catch (err) { toast(errText(err), 4500); }
-};
+  } catch (err) { toast(errText(err), { error: true }); }
+}
+// The Edit task tag chips say whether each is on (aria-pressed), however they're drawn or toggled.
+new MutationObserver(() => {
+  $$("#tdTags [data-tag]").forEach((b) => {
+    const on = String(b.classList.contains("on"));
+    if (b.getAttribute("aria-pressed") !== on) b.setAttribute("aria-pressed", on);
+  });
+}).observe($("#tdTags"), { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
 
 // ---------------------------------------------------------------- super admin: users
 let suRows = [], suPicked = new Set(), suHomes = [], suOpen = null;
@@ -1800,7 +1908,8 @@ async function loadSuper() {
   } catch (e) { $("#suTiles").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
   loadSuperList();
 }
-const homeName = (h) => `${esc(h.name)} (${h.members})`;  // the count tells two similar names apart
+// The count tells two similar names apart; a long name is cut so a list never pushes the page sideways.
+const homeName = (h) => `${esc(h.name.length > 32 ? h.name.slice(0, 31) + "…" : h.name)} (${h.members})`;
 
 // Households: rename any; delete one only when nobody is in it (Home, this Next Box's own, stays).
 function renderHomes() {
@@ -1906,15 +2015,15 @@ $("#suAdd").onclick = () => {
       <select id="snHome" aria-label="Household">${suHomes.map((h) => `<option value="${esc(h.id)}" ${h.id === me.household_id ? "selected" : ""}>${homeName(h)}</option>`).join("")}</select>
       <label class="muted"><input type="checkbox" id="snBeta"> beta tester</label>
       <button class="go" id="snGo">Create</button></div><div id="snOut"></div>`;
-  $("#snGo").onclick = async () => {
+  $("#snGo").onclick = () => hold($("#snGo"), async () => {  // one tap, one person
     try {
       const r = await api("/super/users", { method: "POST", json: { username: $("#snName").value, email: $("#snEmail").value || null,
         role: $("#snRole").value, household_id: $("#snHome").value, beta: $("#snBeta").checked } });
       renderTemp($("#snOut"), r.username, r.temp_password);
       $("#snName").value = $("#snEmail").value = ""; $("#snBeta").checked = false;  // ready for the next person
       loadSuper();
-    } catch (e) { toast(errText(e)); }
-  };
+    } catch (e) { toast(errText(e), { error: true }); }
+  });
 };
 $("#suNewHome").onclick = async () => {
   const name = prompt("Name for the new household (e.g. Chen family)");
@@ -2063,7 +2172,8 @@ async function loadInvites() {
       <div class="row"><button class="linkish" id="ivClear">Clear used and expired</button></div></details>` : "");
 }
 $("#ivOwn").onchange = () => { $("#ivHome").disabled = $("#ivOwn").checked; };
-$("#ivGo").onclick = async () => {
+$("#ivGo").onclick = () => hold($("#ivGo"), makeInvite);  // one tap, one code
+async function makeInvite() {
   try {
     const r = await api("/admin/invites", { method: "POST", json: { note: $("#ivNote").value, beta: $("#ivBeta").checked,
       own_household: $("#ivOwn").checked, days: Number($("#ivDays").value),
@@ -2076,8 +2186,8 @@ $("#ivGo").onclick = async () => {
     $("#ivCopy").onclick = () => copyText(link);
     $("#ivNote").value = "";
     loadInvites();
-  } catch (e) { toast(e.message); }
-};
+  } catch (e) { toast(errText(e), { error: true }); }
+}
 $("#ivList").addEventListener("click", async (e) => {
   if (e.target.id === "ivClear") {
     try { const r = await api("/admin/invites/clear", { method: "POST" }); toast(r.removed ? `Cleared ${r.removed} old invite${r.removed === 1 ? "" : "s"}` : "Nothing to clear"); loadInvites(); }
@@ -2103,7 +2213,7 @@ async function loadCalendars() {
   $("#calList").innerHTML = r.calendars.map((c) => `<div class="tagrow" data-cal="${esc(c.id)}" data-kind="${esc(c.provider)}" style="flex-wrap:wrap">
       <div style="flex:1;min-width:0"><b class="calname">${esc(c.name)}</b><div class="muted">${esc((calKinds.find((k) => k.key === c.provider) || {}).name || c.provider)}${c.calendars?.length ? " · " + c.calendars.map(esc).join(", ") : ""}</div></div>
       <button class="plain small" data-rename aria-label="Rename ${esc(c.name)}">Rename</button>
-      <button class="plain small" data-remove>Remove</button>
+      <button class="plain small" data-remove aria-label="Remove calendar ${esc(c.name)}">Remove</button>
       <div class="calstatus" style="flex-basis:100%"></div></div>`).join("") || `<p class="muted">No calendars yet. Add one to see today's events here and on your daily ticket.</p>`;
   // Which ones aren't working right now (otherwise that only shows on My list).
   if (r.calendars.length) api("/calendars/today").then((t) => {
@@ -2212,12 +2322,12 @@ function appNames() {  // only the apps this Next Box offers right now
 }
 function goto(tab, selector) {
   $(`#topnav button[data-tab=${tab}]`)?.click();
-  setTimeout(() => { const el = selector && $(selector); if (el) { el.scrollIntoView({ behavior: "smooth", block: "start" }); el.querySelector?.("textarea,input,select")?.focus?.(); } }, 150);
+  setTimeout(() => { const el = selector && $(selector); if (el) { el.scrollIntoView({ behavior: smooth(), block: "start" }); el.querySelector?.("textarea,input,select")?.focus?.(); } }, 150);
 }
 let guide = null;
 const STEPS = {
   tasks: { title: "Empty your head", text: "Type everything on your mind into Brain dump, one thing per line. Don't sort it.",
-           go: ["Go to Brain dump", () => { $("#dumpText").scrollIntoView({ behavior: "smooth", block: "center" }); $("#dumpText").focus(); }] },
+           go: ["Go to Brain dump", () => { $("#dumpText").scrollIntoView({ behavior: smooth(), block: "center" }); $("#dumpText").focus(); }] },
   home: { title: () => (isIOS() || isAndroid() ? "Put Next Box on your home screen" : "Install Next Box as an app"),
           text: () => isIOS() ? "In Safari tap Share (the square with the arrow) → Add to Home Screen. Then open Next Box from that icon."
                     : isAndroid() ? "In Chrome tap ⋮ → Add to Home screen (or Install app). Then open Next Box from that icon."
@@ -2233,7 +2343,7 @@ const STEPS = {
                                                 : "No label printer? Every ticket has Print on paper, which works with any printer. A household admin can add a label printer later.",
              go: () => guide?.can_add_printer ? ["Add printer", () => goto("admin", "#printerList")] : null, skip: true },
   preview: { title: "Make your first stickers", text: "Tick a task or two and tap Stickers. With “Preview only” on, nothing prints: you just see how it looks.",
-             go: ["Show me", () => $(".printbar").scrollIntoView({ behavior: "smooth", block: "center" })] },
+             go: ["Show me", () => $(".printbar").scrollIntoView({ behavior: smooth(), block: "center" })] },
   today: { title: "Print today's ticket", text: "Today's tasks on one label, with the next tiny step under each. Tap Print today. With “Preview only” on, you just see it.",
            go: ["Show me", () => { goto("print"); setTimeout(() => $("[data-act=today]").focus(), 200); }] },
   snap: { title: "Mark it and snap it", text: "Tick a row with a pen, then take a photo in Snap. Try it on a preview: print it on paper or hold the preview up to your camera.",
@@ -2357,7 +2467,7 @@ function winsHtml(w) {
   w.items.forEach((t) => named.set(t, (named.get(t) || 0) + 1));
   const items = [...named].map(([t, n]) => `<li>${esc(t)}${n > 1 ? ` ×${n}` : ""}</li>`).join("");
   const linked = w.linked ? `<li class="muted">${items ? "+" : ""}${w.linked} ${items ? "more " : ""}in your linked app</li>` : "";
-  return `<div data-wins><p><b>Wins: ${w.count} ✓</b></p><ul class="winlist">${items}${linked}</ul></div>`;
+  return `<div data-wins><p class="muted" style="margin-bottom:0">Wins: ${w.count} ✓</p><ul class="winlist">${items}${linked}</ul></div>`;
 }
 
 function pageHtml(p, d) {
@@ -2367,7 +2477,7 @@ function pageHtml(p, d) {
   const when = local === d.day ? time : `written ${made.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
   const id = esc(p.id);
   return `<div class="jpage" data-page="${id}" data-photo="${p.has_photo ? "1" : ""}">
-      ${p.has_photo ? `<button class="jphoto" data-jphoto aria-label="Open the photo of this page"><img loading="lazy" src="/journal/${id}/photo" alt=""></button>` : ""}
+      ${p.has_photo ? `<button class="jphoto" data-jphoto aria-label="Open the photo of your page, ${esc(dayName(d.day, d))} ${esc(when)}"><img loading="lazy" src="/journal/${id}/photo" alt=""></button>` : ""}
       <label class="sr-only" for="jn-${id}">Notes for ${esc(dayName(d.day, d))}, ${esc(when)}</label>
       <textarea id="jn-${id}" placeholder="${p.has_photo ? "No handwritten notes were found. Type some if you like." : ""}">${esc(p.notes)}</textarea>
       <div class="jacts"><span class="muted jstate" data-jstate>${esc(when)}</span>
@@ -2462,6 +2572,7 @@ $("#jDays").addEventListener("click", (e) => {  // a photo opens here, so its ad
   const b = e.target.closest("[data-jphoto]");
   if (!b) return;
   $("#photoBig").src = b.querySelector("img").src;
+  $("#photoBig").alt = b.getAttribute("aria-label").replace(/^Open the photo/, "Photo");  // which page this is
   $("#photoDialog").showModal();
 });
 $("#photoClose").onclick = () => $("#photoDialog").close();
@@ -2544,14 +2655,15 @@ $("#jWrite").onclick = () => {
   $("#jDay").value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   $("#jNew").hidden = false; $("#jText").focus();
 };
-$("#jCancel").onclick = () => { $("#jNew").hidden = true; };
-$("#jSave").onclick = async () => {
+$("#jCancel").onclick = () => { $("#jNew").hidden = true; $("#jWrite").focus(); };
+$("#jSave").onclick = () => hold($("#jSave"), async () => {  // a double tap mustn't make two pages
   if (!$("#jText").value.trim()) return toast("Write something first");
   try {
     await api("/journal", { method: "POST", json: { notes: $("#jText").value, day: $("#jDay").value || null } });
     $("#jText").value = ""; $("#jNew").hidden = true; toast("Saved to your journal"); loadJournal();
-  } catch (e) { toast(errText(e)); }
-};
+    $("#jWrite").focus();  // Save is hidden now: carry on from Write a note
+  } catch (e) { toast(errText(e), { error: true }); }
+});
 
 // ---------------------------------------------------------------- journal: move a page to another day
 // The page moves in place: out of its day (which says "Moved … Undo"), into the new day if it's on screen.
@@ -2970,7 +3082,7 @@ $("#meDialog").addEventListener("click", async (e) => {
       catch (err) { $("#meMsg").textContent = err.message; }
     };
   }
-  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  panel.scrollIntoView({ behavior: smooth(), block: "nearest" });
 });
 
 
@@ -3006,8 +3118,8 @@ function loadProfile() {
   loadSessions();
 }
 // Name and email are saved together: both or neither, and the page shows what was saved.
-$("#pForm").onsubmit = async (e) => {
-  e.preventDefault();
+$("#pForm").onsubmit = (e) => { e.preventDefault(); hold($("#pSave"), saveProfile); };
+async function saveProfile() {
   const msg = $("#pMsg");
   msg.textContent = ""; msg.className = "muted";
   if (!$("#pEmail").checkValidity()) {
@@ -3018,7 +3130,7 @@ $("#pForm").onsubmit = async (e) => {
     me.prefs = r.prefs; me.email = r.email;
     applyLook(); loadProfile(); toast("Saved");
   } catch (err) { msg.textContent = errText(err); msg.className = "err"; }
-};
+}
 $("#pForm").addEventListener("input", () => { $("#pMsg").textContent = ""; });
 $("#pDelete").onclick = () => {
   $("#pDeletePanel").innerHTML = `${DELETE_WARNING}
@@ -3034,10 +3146,28 @@ $("#pDelete").onclick = () => {
 $("#setJump").onclick = (e) => {
   const b = e.target.closest("[data-jump]"), card = b && document.getElementById(b.dataset.jump);
   if (!card) return;
-  card.scrollIntoView({ behavior: "smooth", block: "start" });
+  card.scrollIntoView({ behavior: smooth(), block: "start" });
   const h = card.querySelector("h2");  // keyboard and screen readers carry on inside the card
   if (h) { h.tabIndex = -1; h.focus({ preventScroll: true }); }
 };
+
+
+// ---------------------------------------------------------------- keyboard
+// Enter in a one-line box does what its button does, as it already does in forms (sign in, tags, profile).
+const ENTER_GOES = { scanLabel: "#scanGo", ivNote: "#ivGo", nuName: "#nuGo", snName: "#snGo", snEmail: "#snGo",
+                     announceText: "#announceGo", evUser: "#evGo", npName: "#npGo", npAddress: "#npGo", udEmail: "#udSave" };
+document.addEventListener("keydown", (e) => {
+  const el = e.target;
+  if (e.key !== "Enter" || e.isComposing || el.tagName !== "INPUT" || el.closest("form") || ["checkbox", "radio", "file"].includes(el.type)) return;
+  const btn = ENTER_GOES[el.id] ? $(ENTER_GOES[el.id]) : el.closest("#calFields") ? $("#calGo") : el.closest("#provFields") ? $("#provGo") : null;
+  if (btn && !btn.disabled && !btn.hidden) { e.preventDefault(); btn.click(); }
+});
+// My list: a row reached with Tab is scrolled clear of the sticky print bar at the bottom.
+$("#listBody").addEventListener("focusin", (e) => {
+  const bar = $("#mylist .printbar");
+  if (!bar || e.target.closest(".printbar")) return;
+  if (e.target.getBoundingClientRect().bottom > bar.getBoundingClientRect().top) e.target.scrollIntoView({ block: "center" });  // at once, like Tab
+});
 
 
 // ---------------------------------------------------------------- phone navigation, offline
@@ -3046,7 +3176,8 @@ $("#moreBtn").onclick = () => {
   if (!me) return;
   const tabs = $$("#topnav button").filter((b) => !b.hidden && !["mylist", "print", "scan", "journal"].includes(b.dataset.tab));
   const icons = { printed: "🧾", board: "💬", profile: "👤", settings: "⚙️", admin: "🛠️", superusers: "👥", usage: "📊", debug: "🐞" };
-  $("#moreMenu").innerHTML = tabs.map((b) => `<button data-more="${b.dataset.tab}">${icons[b.dataset.tab] || "•"} ${esc(b.textContent)}</button>`).join("");
+  const here = $("#topnav button.on")?.dataset.tab;
+  $("#moreMenu").innerHTML = tabs.map((b) => `<button data-more="${b.dataset.tab}"${b.dataset.tab === here ? ` aria-current="page"` : ""}><span aria-hidden="true">${icons[b.dataset.tab] || "•"}</span> ${esc(b.textContent)}</button>`).join("");
   $("#moreDialog").showModal();
 };
 $("#moreMenu").onclick = (e) => {
@@ -3062,5 +3193,5 @@ window.addEventListener("offline", setOnline);
 setOnline();
 window.addEventListener("unhandledrejection", (e) => {
   const msg = String(e.reason?.message || e.reason || "");
-  toast(msg.includes("fetch") || msg.includes("NetworkError") ? "Can't reach Next Box. Check your connection." : "Something went wrong. Try again.");
+  toast(msg === OFFLINE || msg.includes("fetch") || msg.includes("NetworkError") ? OFFLINE : "Something went wrong. Try again.", { error: true });
 });

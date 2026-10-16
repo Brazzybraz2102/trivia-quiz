@@ -6,6 +6,7 @@
 <title>About · Next Box</title>
 <link rel="icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="pages.css">
+<script src="pages.js"></script>
 </head>
 <body>
 <header><img src="icons/icon-192.png" alt=""><a href="/app/">Next Box</a></header>
@@ -16,21 +17,21 @@ happens. Tick them off, snap a photo, and your list updates. Built for brains th
 <div class="box">
   <p><b>Version</b>: <span data-version></span><br>
   <b>Run by</b>: <span data-operator>Braznarkel</span><br>
-  <b>Contact and support</b>: <span data-contact>ask the person who invited you, or use Feedback in the app</span></p>
+  <b>Contact and support</b>: <span data-contact>ask the person who invited you, or use Send feedback in the app</span></p>
 </div>
 <h2>Help</h2>
 <ul>
   <li><a href="guide.html">Quick start guide</a>: everything in ten short steps.</li>
-  <li>In the app: tap <b>Feedback</b> on any page. It's anonymous.</li>
+  <li>In the app: tap <b>Send feedback</b> (on a phone, it's in the menu under your initial). It's anonymous.</li>
   <li>Forgot your password? Ask your admin for a one-time password.</li>
 </ul>
 <h2>Legal</h2>
 <ul><li><a href="privacy.html">Privacy Policy</a></li><li><a href="terms.html">Terms of Use</a></li></ul>
 <h2>Thanks</h2>
-<p class="muted">Built with Python, FastAPI, PostgreSQL, Pillow and other open-source software, and served through Cloudflare.</p>
+<p class="muted">Built with Python, FastAPI, Pillow and other open-source software. This Next Box keeps its data in
+  <span data-db>its own database</span><span data-needs="hosting" hidden>, and you reach it through <span data-hosting></span></span>.</p>
 <p><a class="btn" href="/app/">Open Next Box</a></p>
 </main>
 <footer><a href="/app/">Open Next Box</a><a href="about.html">About</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="guide.html">Help</a><br>Next Box <span data-version></span> · run by <span data-operator>Braznarkel</span></footer>
-<script src="pages.js"></script>
 </body>
 </html>

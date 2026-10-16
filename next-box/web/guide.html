@@ -6,9 +6,13 @@
 <title>Next Box quick start</title>
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="pages.css">
+<script src="pages.js"></script>
 <style>
-  :root { --bg:#fafaf7; --fg:#1b1b1b; --muted:#5f5f5a; --line:#e2e2da; --card:#fff; --accent:#1f5eff; --note:#fff6d6; --noteFg:#5a4300; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#141414; --fg:#eee; --muted:#a3a39c; --line:#2f2f2f; --card:#1d1d1d; --accent:#7ea2ff; --note:#3a3015; --noteFg:#f3dd9b; } }
+  /* Follows the app's Theme (pages.js), else the device's setting. */
+  :root { --bg:#fafaf7; --fg:#1b1b1b; --muted:#5f5f5a; --line:#e2e2da; --card:#fff; --accent:#1f5eff; --onAccent:#fff; --note:#fff6d6; --noteFg:#5a4300; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#141414; --fg:#eee; --muted:#a3a39c; --line:#2f2f2f; --card:#1d1d1d; --accent:#7ea2ff; --onAccent:#0b1530; --note:#3a3015; --noteFg:#f3dd9b; } }
+  :root[data-theme="dark"] { --bg:#141414; --fg:#eee; --muted:#a3a39c; --line:#2f2f2f; --card:#1d1d1d; --accent:#7ea2ff; --onAccent:#0b1530; --note:#3a3015; --noteFg:#f3dd9b; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.55 system-ui, -apple-system, sans-serif; }
   main { max-width:720px; margin:0 auto; padding:28px 16px 60px; }
@@ -18,7 +22,7 @@
   nav a { font-size:14px; border:1px solid var(--line); border-radius:99px; padding:4px 10px; color:var(--fg); text-decoration:none; }
   section { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-bottom:12px; }
   h2 { font-size:20px; margin:0 0 6px; display:flex; gap:10px; align-items:center; }
-  h2 span { flex:none; width:28px; height:28px; border-radius:50%; background:var(--accent); color:#fff; font-size:15px; display:flex; align-items:center; justify-content:center; }
+  h2 span { flex:none; width:28px; height:28px; border-radius:50%; background:var(--accent); color:var(--onAccent); font-size:15px; display:flex; align-items:center; justify-content:center; }
   p { margin:6px 0; }
   ul, ol { margin:6px 0; padding-left:22px; }
   li { margin:3px 0; }
@@ -26,10 +30,11 @@
   .tip { background:var(--note); color:var(--noteFg); border-radius:10px; padding:8px 12px; margin-top:8px; font-size:15px; }
   table { border-collapse:collapse; width:100%; font-size:15px; }
   td, th { text-align:left; padding:5px 6px; border-top:1px solid var(--line); vertical-align:top; }
-  .btn { display:inline-block; background:var(--accent); color:#fff; text-decoration:none; border-radius:10px; padding:10px 16px; font-weight:600; margin-top:6px; }
+  .btn { display:inline-block; background:var(--accent); color:var(--onAccent); text-decoration:none; border-radius:10px; padding:10px 16px; font-weight:600; margin-top:6px; }
 </style>
 </head>
 <body>
+<header><img src="icons/icon-192.png" alt=""><a href="/app/">Next Box</a></header>
 <main>
   <h1>Next Box quick start</h1>
   <p class="lead">Your to-do list, on paper you can stick where things happen. Ten minutes from here to your first sticker.</p>
@@ -73,7 +78,7 @@
 
   <section id="one"><h2><span>4</span>Just one thing</h2>
     <p>The top of My list shows the <b>one</b> task to do now, with its next tiny step.</p>
-    <ul><li><b>Done ✓</b>: that counts.</li><li><b>Print it big</b>: a card with just that task and its steps.</li><li><b>Not now</b>: shows the next one.</li></ul>
+    <ul><li><b>Done ✓</b>: that counts.</li><li><b>Print just this</b>: a card with just that task and its steps.</li><li><b>Not now</b>: shows the next one.</li></ul>
   </section>
 
   <section id="stickers"><h2><span>5</span>Stickers and tear-off strips</h2>
@@ -112,14 +117,16 @@
       It opens a page you print the normal way: <b>Share → Print</b> on iPhone, <b>⋮ → Print</b> on Android, or <b>Ctrl+P</b> on a computer.</p>
     <ul><li><b>Stickers</b> come out real size in a grid with cut lines. Use full-sheet sticker paper (sold as "full sheet labels", like Avery 5165 / L7167), then cut and stick.</li>
       <li><b>Lists and cards</b> print on plain paper.</li>
-      <li>Pick US Letter, A4, A5 or half letter (journal pages) in <b>Settings → Printing</b>.</li></ul>
+      <li>Pick your paper size (Letter, A4, A5 or Half letter) in <b>Settings → Printing</b>.</li></ul>
     <p><b>Label printer:</b> whoever runs your household adds it in <b>Admin → Printers</b> (Brother QL, most thermal label and receipt printers). Then tickets print straight to it.</p>
   </section>
 
   <section id="help"><h2><span>10</span>Help and feedback</h2>
-    <p>Tap <b>Feedback</b> on any page. It's shared with everyone but never with your name. Something confusing is the most useful thing you can report.</p>
+    <p>Tap <b>Send feedback</b> (on a phone, it's in the menu under your initial at the top right). It's shared with everyone but never with your name. Something confusing is the most useful thing you can report.
+      Everyone's feedback is on the <b>Feedback board</b>.</p>
     <p>The <b>Get started</b> checklist at the top of My list walks you through all of this. Bring it back any time in <b>Settings → Help</b>.</p>
   </section>
 </main>
+<footer><a href="/app/">Open Next Box</a><a href="about.html">About</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="guide.html">Help</a><br>Next Box <span data-version></span> · run by <span data-operator>Braznarkel</span></footer>
 </body>
 </html>
