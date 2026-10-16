@@ -178,10 +178,11 @@ class _Draw(ImageDraw.ImageDraw):
 
 
 def _ellipsize(d: ImageDraw.ImageDraw, line: str, font, width: float) -> str:
-    """End a cut-short line with "…", making sure the "…" still fits."""
-    line = line.rstrip(" ·") + "…"
+    """End a cut-short line with "…", making sure the "…" still fits. One "…", even when the line
+    already ends with a name that was cut short."""
+    line = line.rstrip(" ·…") + "…"
     while len(line) > 1 and d.textlength(line, font=font) > width:
-        line = line[:-2].rstrip(" ·") + "…"
+        line = line[:-2].rstrip(" ·…") + "…"
     return line
 
 
@@ -433,7 +434,8 @@ def render_day(day_name: str, date_text: str, rows: list[DayRow], code: str, foo
         y += 10
         head = f"{waiting_head} ({len(waiting)}): "
         waiting = [w if len(w) <= 40 else w[:39].rstrip() + "…" for w in waiting]  # one long name can't hide the rest
-        body_lines = _wrap(d, head + " · ".join(waiting), wait_f, right - left)
+        bold_extra = max(0, d.textlength(head, font=wait_bold_f) - d.textlength(head, font=wait_f))
+        body_lines = _wrap(d, head + " · ".join(waiting), wait_f, right - left - bold_extra)  # the head is drawn bold
         if len(body_lines) > 2:
             body_lines = [body_lines[0], _ellipsize(d, body_lines[1], wait_f, right - left)]
         for i, line in enumerate(body_lines):
@@ -567,6 +569,9 @@ def _meta_line(s: Sticker) -> str:
     return "  ·  ".join(bits)
 
 
+STICKER_CODE_GAP = 16  # at least this much white between a sticker's "when · how long" and its code
+
+
 def render_sticker(s: Sticker, code: str) -> Image.Image:
     """One task on its own small label, to stick where the task happens (the bill, the door, the car)."""
     canvas = Image.new("L", (WIDTH, 800), 255)
@@ -601,11 +606,25 @@ def render_sticker(s: Sticker, code: str) -> Image.Image:
     d.line((left, y, right, y), fill=0, width=2)
     y += 8
     meta_f = _font(30 if s.big else 24, True)
-    if meta:
-        d.text((left, y), meta, font=meta_f, fill=0)
     cw = d.textlength(f"#{code}", font=foot_f)
+    own_row = bool(meta) and d.textlength(meta, font=meta_f) > right - left - cw - STICKER_CODE_GAP
+    if own_row:
+        # The code is what Snap reads, so nothing is printed over it: when "when · how long" would reach
+        # it (big type, "Mon Oct 19 12:45p ↻  ·  ~1h 30m"), it goes above the code, breaking only between bits.
+        rows: list[str] = []
+        for bit in meta.split("  ·  "):
+            joined = f"{rows[-1]}  ·  {bit}" if rows else ""
+            if joined and d.textlength(joined, font=meta_f) <= right - left:
+                rows[-1] = joined
+            else:
+                rows += _wrap(d, bit, meta_f, right - left)
+        for line in rows:
+            d.text((left, y), line, font=meta_f, fill=0)
+            y += meta_f.size + 8
+    elif meta:
+        d.text((left, y), meta, font=meta_f, fill=0)
     d.text((right - cw, y + 2), f"#{code}", font=foot_f, fill=0)
-    y += meta_f.size + 8 + MARGIN // 2
+    y += (foot_f.size - 2 if own_row else meta_f.size) + 8 + MARGIN // 2
     return canvas.crop((0, 0, WIDTH, y)).convert("RGB")
 
 
@@ -683,9 +702,13 @@ def _dashes(d: ImageDraw.ImageDraw, y: int, left: int, right: int) -> None:
         d.line((x, y, x + 10, y), fill=0, width=3)
 
 
+FOCUS_STEPS = 12  # every open tiny step a task can hold (mylist.MAX_STEPS) fits on the card
+
+
 def render_focus(text: str, steps: list[str], code: str, tag: str = "", color: str = "white",
-                 when: str = "", minutes: int | None = None, start_by: str = "") -> Image.Image:
-    """Just one thing: a single task, big, with its tiny steps. For when the whole list is too much."""
+                 when: str = "", minutes: int | None = None, start_by: str = "", urgent: bool = False) -> Image.Image:
+    """Just one thing: a single task, big, with its tiny steps. For when the whole list is too much.
+    An urgent task gets its "!" like on every other label."""
     canvas = Image.new("L", (WIDTH, 2400), 255)
     d = _Draw(canvas)
     left, right = MARGIN + 4, WIDTH - MARGIN - 4
@@ -698,7 +721,7 @@ def render_focus(text: str, steps: list[str], code: str, tag: str = "", color: s
     d.line((left, y, right, y), fill=0, width=5)
     y += 18
     box = 64
-    font, lines = _fit_text(d, text, right - left - box - 22, (64, 56, 48, 40), 4)
+    font, lines = _fit_text(d, ("! " if urgent else "") + text, right - left - box - 22, (64, 56, 48, 40), 4)
     d.rectangle((left, y + 6, left + box, y + 6 + box), outline=0, width=6)
     d.text((left + box / 2 - d.textlength("1", font=_font(24, True)) / 2, y + box + 14), "1",
            font=_font(24, True), fill=0)
@@ -708,22 +731,31 @@ def render_focus(text: str, steps: list[str], code: str, tag: str = "", color: s
         y += int(font.size * 1.15)
     y = max(y, top + box + 44) + 8
     about = (f"about {minutes} min" if minutes < 60 else f"about {_minutes(minutes)}") if minutes else ""
-    info = "  ·  ".join(b for b in (when, about,
-                                    f"start by {start_by}" if start_by else "") if b)
-    for line in _wrap(d, info, _font(28, True), right - left) if info else []:
-        d.text((left, y), line, font=_font(28, True), fill=0)
+    info_f, info = _font(28, True), []
+    for bit in (b for b in (when, about, f"start by {start_by}" if start_by else "") if b):
+        # A new line only between the bits, so "start by 8:55a" (or "about 1h 30m") is never split.
+        joined = f"{info[-1]}  ·  {bit}" if info else ""
+        if joined and d.textlength(joined, font=info_f) <= right - left:
+            info[-1] = joined
+        else:
+            info += _wrap(d, bit, info_f, right - left)
+    for line in info:
+        d.text((left, y), line, font=info_f, fill=0)
         y += 38
     y += 6 if info else 0
     if steps:
         d.text((left, y), "Tiny steps:", font=_font(28, True), fill=0)
         y += 40
         step_f = _font(30)
-        for step in steps[:8]:
+        for step in steps[:FOCUS_STEPS]:
             d.rectangle((left + 6, y + 6, left + 34, y + 34), outline=0, width=3)
             for i, line in enumerate(_wrap(d, step, step_f, right - left - 52)[:2]):
                 d.text((left + 50, y), line, font=step_f, fill=0)
                 y += 38
             y += 8
+        if len(steps) > FOCUS_STEPS:  # never silently: the card says the plan goes on
+            d.text((left + 50, y), f"+{len(steps) - FOCUS_STEPS} more in Next Box", font=_font(26), fill=0)
+            y += 38
     else:
         d.text((left, y), "First tiny step: ______________________", font=_font(28), fill=0)
         y += 46

@@ -32,6 +32,7 @@ ALREADY_DONE, ALREADY_MOVED, READ_BEFORE = "already done", "already moved", "rea
 NEWER_TASK = "deleted since printed"  # the row's task was deleted; a newer task has its old id
 NO_CODE = "We couldn't read the ticket code. Pick the ticket below."
 NO_TICKETS = "We saw ticked boxes, but you haven't printed a ticket with tasks yet, so nothing changed."
+NO_TICKETS_UNMARKED = "We saw a to-do label, but you haven't printed a ticket with tasks yet, so nothing changed."
 NO_LABEL = "We couldn't find a printed label in the photo, so nothing changed."
 READ_FAILED = "Saved your photo; reading it failed. Tap Try again."
 READ_FAILED_NO_COPY = "Reading the photo didn't work. Try again in a minute."
@@ -219,10 +220,21 @@ def label_day(ctx: Context, label: dict) -> str:
     return today
 
 
+CANDIDATES_LOOK_BACK = 500  # tickets: how far back a photo with no code looks for tickets with tasks
+
+
 def _candidates(ctx: Context, n: int = 5) -> list[dict]:
-    """Your latest tickets with tasks on them, today's daily ticket first, to pick from."""
+    """Your latest tickets with tasks on them, today's daily ticket first, to pick from. Notes and
+    test labels have no tasks: however many came since, the tickets with tasks behind them are still found."""
     today = ctx.today().isoformat()
-    recs = [r for r in ctx.store.list_printed(40, by=ctx.user) if r.get("manifest")]
+    recs: list[dict] = []
+    page, seen = 40, 0
+    while seen < CANDIDATES_LOOK_BACK and (not seen or len(recs) < n):  # always the newest 40, then on until n
+        got = ctx.store.list_printed(page, by=ctx.user, offset=seen)
+        recs += [r for r in got if r.get("manifest")]
+        seen += page
+        if len(got) < page:
+            break
     recs.sort(key=lambda r: not (r.get("kind") == "today" and r["created_at"][:10] == today))
     return [{"id": r["id"], "kind": r.get("kind", ""), "created_at": r["created_at"], "title": r.get("title", ""),
              "rows": len(r["manifest"])} for r in recs[:n]]
@@ -435,7 +447,8 @@ def _read(ctx: Context, record: dict, result: ReadBack, image: bytes, hint: dict
         record["label_id"], record["day"] = None, ctx.today().isoformat()
         if record["vision"]["rows"]:
             record["candidates"] = _candidates(ctx)
-            record["errors"].append(NO_CODE if record["candidates"] else NO_TICKETS)
+            ticked = any(r.get("mark") == "done" for r in record["vision"]["rows"])
+            record["errors"].append(NO_CODE if record["candidates"] else NO_TICKETS if ticked else NO_TICKETS_UNMARKED)
     ctx.store.save_scan(record)  # saved before the page: the marks are already applied
     try:
         page = _keep_page(ctx, image, notes, record["id"], record["label_id"], record["day"], win)

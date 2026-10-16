@@ -1049,8 +1049,15 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     # ----------------------------------------------------------- My list
     @app.get("/list")
-    def get_list(include_done: bool = False, caller: Caller = Depends(person)):
-        """The built-in list, plus today's tasks from a linked app (they stay in that app)."""
+    def get_list(include_done: bool = False,
+                 since: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$"),
+                 caller: Caller = Depends(person)):
+        """The built-in list, plus today's tasks from a linked app (they stay in that app). `since` (local
+        time, like /printed): also `done_since`, the tasks finished from then on (the routine card's day)."""
+        try:
+            since_ts = int(datetime.fromisoformat(since).timestamp()) if since else None
+        except ValueError:
+            raise HTTPException(400, "since looks like 2026-10-16T01:00") from None
         mine = my_list(caller)
         today = ctx.today()
         tasks = sorted(mine.all_open(), key=lambda t: jobs.list_order(t, today))  # as the ticket lists them
@@ -1080,10 +1087,12 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         open_ids = {str(t["id"]) for t in tasks if not t.get("done")} | {str(t["id"]) for t in linked}
         slides = {tid: n for tid, n in Slides(accounts.db, caller.name).counts().items()
                   if n >= slug_after and tid in open_ids}
+        wins = Wins(accounts.db, caller.name)
         return {"tasks": tasks, "linked": linked, "linked_name": status.get("name") if status.get("connected") else None,
                 "slides": slides, "slug_after": slug_after,
                 "linked_error": linked_error, "linked_undo": linked_undo, "tags": _tags_with_uses(caller.name),
-                "done_today": len(Wins(accounts.db, caller.name).between(today.isoformat(), today.isoformat())),
+                "done_today": len(wins.between(today.isoformat(), today.isoformat())),
+                **({"done_since": wins.count_since(since_ts)} if since_ts is not None else {}),
                 # Ever had a task here, open or done: finishing the last one isn't a brand-new start.
                 "has_tasks": bool(tasks) or _has_own_tasks(caller),
                 "one_thing": min(candidates, key=lambda t: jobs._sort_key(t, today), default=None),

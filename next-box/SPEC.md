@@ -282,7 +282,11 @@ tables. See §16.
    returns structured output: the label code and, for each row, a mark (done, tomorrow, drop or
    none) with a confidence score.
 2. The server finds the label by `label_id`, falling back to the code it read. If neither matches,
-   nothing changes.
+   nothing changes. With no code, the result offers the person's 5 latest tickets with tasks to pick
+   from (`candidates`, today's daily label first; notes and other tickets without tasks are skipped,
+   looking back up to 500 tickets), "We couldn't read the ticket code. Pick the ticket below." With no
+   ticket with tasks at all it says so: "We saw ticked boxes, but…" only when a ✓ was read, else "We saw
+   a to-do label, but…".
 3. Rows marked ✓ done or → tomorrow with confidence ≥ 0.7 are applied right away: `close`, or
    `due_date` = tomorrow. It sets `due_date`, never `due_string`, so recurring rules survive.
 4. **Every ✗ drop and every row below 0.7** goes to `needs_confirmation`. The app shows
@@ -376,10 +380,14 @@ other models (the QL-1110NWB prints black only).
 **Print types** (all manual, all through `jobs._finish`):
 - **Stickers**: one task per small label, cut apart, to stick where the task happens. Each shows
   its tag band, the task big, when, how long, the next tiny step, a numbered box and the code.
+  "When · how long" sits beside the code with a clear gap, or on its own line above it when it would
+  come closer (big stickers, "Mon Oct 19 12:45p ↻  ·  ~1h"), so nothing is printed over the code Snap reads.
 - **Tear-off strips**: one label, one strip per task with dashed cut lines.
-- **Just one thing**: one task, huge, with its tiny steps and "start by" time (due time minus the
-  estimate). Picks the first task today's ticket would list unless one is chosen.
-Read-back works on all of them: each box has its printed row number.
+- **Just one thing**: one task, huge, with its tiny steps (every open one, up to 12) and "start by" time
+  (due time minus the estimate; the when · about · start by line only breaks between those bits). Picks
+  the first task today's ticket would list unless one is chosen. The TASK ticket lists every open step too.
+Read-back works on all of them: each box has its printed row number. On every one, as on the daily label,
+an urgent task (p1/p2) starts with `!` and a repeating one has `↻` after when it's due ("today ↻").
 
 **Daily ticket for ADHD** (all prefs, all on by default): at most 5 tasks (`max_rows`, the rest
 listed small under "Not today"), gentle words ("waiting 3d" not "overdue 3d"), the next tiny step
@@ -450,7 +458,9 @@ signed in; cookie-authenticated writes are still refused unless their Origin is 
 ## 21. Print on paper (any printer)
 `GET /printed/{id}/pdf?paper=letter|a4` (owner or superadmin; default from the `paper_size` pref)
 returns a PDF made by `nextbox/paper.py`: stickers at real size (300 dpi) in rows with dashed cut
-lines, as many pages as needed; any other ticket 3.5 in wide, split across pages if long. Sticker
+lines, as many pages as needed; any other ticket 3.5 in wide, split across pages if long: between rows
+(just below a list row's dotted line or a strip's dashes, so a task and its box stay on one page), else
+at a blank line between lines of text (`paper._break_at`). Sticker
 images are kept per ticket in `tickets.parts` (a small zip of PNGs). Next Box never sends the PDF to
 a printer; the person prints it from their device.
 
@@ -541,7 +551,9 @@ Everything here is the owner's own journal: owner-scoped, never in events, admin
   left out). A day with only changes is listed too.
 - **Download my journal**: `GET /journal/export?format=zip|pdf&since=&until=&paper=`. zip: a
   `next-box-journal-<date>/` folder with README.txt and a folder per day holding notes.txt (win, then each
-  page with when it was snapped or written), photo-N.jpg and wins.txt. pdf: a page per day (more if long:
+  page with when it was snapped or written: "Snapped at 7:30 AM", or with the date when that wasn't the
+  page's own day, "Written Oct 22, 7:30 AM", as the Journal tab shows it; the PDF says the same,
+  `paper.made_when`), photo-N.jpg and wins.txt. pdf: a page per day (more if long:
   "(continued)", "2 of 3") with the win, each photo, the typed notes and the wins, drawn with Pillow at 200 dpi
   on the `paper_size` paper (`paper.journal_pdf`; `paper.JpegPdf` writes one page at a time, so a long
   journal never sits in memory; it's sent as it's drawn, so a long journal starts downloading at once, and a
@@ -694,7 +706,10 @@ All of it is worked out in the browser while Next Box is open: no server timer, 
   routine day (a preview counts, a failed print doesn't) and something is due: "Good morning. Print today's label",
   whose button is My list's Today's label (a preview, or "Send this to the printer?"), never a print by itself. From the
   look-back time with no snap since today's label: "How did today go? Snap your pages" → Snap. After that snap (or any snap
-  this routine day in the evening): "You finished N today ✓" (`done_today`), "Pages snapped ✓" when N is 0. Each has Not
+  this routine day in the evening): "You finished N today ✓" (`done_since` from `GET /list?since=<the routine day's
+  start>`: what was finished since the routine day began, by when it was ticked, so a night owl's ticks before and after
+  midnight and the snap's own ✓ marks all count), "Pages snapped ✓" when N is 0; under it "Today's page is in your
+  journal", or "Your page is in your journal" when the snap was filed under another day. Each has Not
   today / Hide (a ✕ on phones), for this routine day on this device (with Undo). The words match Schedule's "Plan your
   day" and "Look back" rows. On phones the card is just its line and buttons, so Just one thing starts on the first screen.
 - **Focus timer** on Just one thing: "⏱ Start 5 min", plus "or N min" when the task has its own estimate (1–90). A
