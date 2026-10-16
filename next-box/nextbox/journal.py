@@ -343,6 +343,14 @@ class Slides:
         with self.db.begin() as conn:
             conn.execute(delete(db.task_slides).where(self._key(task_id)))
 
+    def set(self, task_id: str, moves: int | None) -> None:
+        """Put a count back as it was (Undo after Done or a new step cleared it). None: no count."""
+        with self.db.begin() as conn:
+            conn.execute(delete(db.task_slides).where(self._key(task_id)))
+            if moves:
+                conn.execute(insert(db.task_slides).values(owner=self.owner, task_id=str(task_id)[:200],
+                                                           moves=int(moves), last_moved=int(time.time())))
+
     def counts(self) -> dict[str, int]:
         with self.db.connect() as conn:
             return {r[0]: r[1] for r in conn.execute(select(db.task_slides.c.task_id, db.task_slides.c.moves)
@@ -518,6 +526,8 @@ def day_wins_text(day: dict) -> str:
     lines += [f"✓ {item}" + (f" ×{n}" if n > 1 else "") for item, n in counted.items()]
     if wins["linked"]:
         lines.append(f"{'+' if counted else ''}{wins['linked']} {'more ' if counted else ''}in your linked app")
+    if wins.get("other") and (counted or wins["linked"]):  # unnamed My list wins (older versions kept no name)
+        lines.append(f"+{wins['other']} more")
     return "\n".join(lines) + "\n"
 
 

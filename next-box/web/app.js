@@ -750,7 +750,8 @@ function ignoredLine(i) {
   const what = `${VERB[i.mark] || ""} ${i.content || ""}`.trim();
   return { "not on this label": `Row ${i.row} isn't on this ticket`, "duplicate row": `Row ${i.row} was read twice`,
            "already done": `Already done: ${i.content}`, "already moved": `Already moved: ${i.content}`,
-           "read before": `Already read from this ticket: ${what}` }[i.reason] || `Row ${i.row}: ${i.reason}`;
+           "read before": `Already read from this ticket: ${what}`,
+           "deleted since printed": `${i.content} was deleted after this ticket printed, so nothing changed` }[i.reason] || `Row ${i.row}: ${i.reason}`;
 }
 
 function scanCard(rec) {
@@ -783,6 +784,7 @@ function scanCard(rec) {
         : `<button class="linkish" data-undo="${a.row}" aria-label="Undo: ${esc(VERB[a.mark])} ${esc(a.content)}">Undo</button>`}</div>`);
   rec.needs_confirmation.filter((p) => p.status !== "pending").forEach((p) => h += p.status === "applied" && p.mark !== "drop"
     ? `<div class="done-row"><span class="applied">✓ ${esc(VERB[p.mark])}: ${esc(p.content)}</span><button class="linkish" data-undo="${p.row}" aria-label="Undo: ${esc(VERB[p.mark])} ${esc(p.content)}">Undo</button></div>`
+    : p.reason === "deleted since printed" ? `<p class="muted">${esc(ignoredLine(p))}</p>`
     : `<p class="${p.status === "error" ? "err" : "muted"}">${esc(p.reason === "already moved" ? "Already moved" : MARK_STATUS[p.status] || p.status)}: ${esc(VERB[p.mark])} ${esc(p.content)}${p.status === "error" && p.error ? ` (${esc(p.error)})` : ""}</p>`);
   pend.forEach((p) => h += `<div class="pending"><b>${esc(VERB[p.mark])}?</b> ${esc(p.content)}
       <div class="muted">row ${p.row} · ${Math.round(p.confidence * 100)}% sure${p.note ? " · " + esc(p.note) : ""}</div>
@@ -1796,7 +1798,15 @@ async function undoMove(id, undo) {
 }
 
 // Tick one tiny step (on a row, or Just one thing's "Step done ✓"). After the last one: finish the task?
-async function tickStep(id, i, done, text, box = null) {
+// Quick ticks on one task go one after another, so the screen ends up showing all of them.
+const stepTicks = new Map();  // task id -> its last tick on the way
+function tickStep(id, ...args) {
+  const go = (stepTicks.get(id) || Promise.resolve()).catch(() => null).then(() => sendStepTick(id, ...args));
+  stepTicks.set(id, go);
+  go.finally(() => { if (stepTicks.get(id) === go) stepTicks.delete(id); }).catch(() => {});
+  return go;
+}
+async function sendStepTick(id, i, done, text, box = null) {
   const t = listData.tasks.find((x) => x.id === id);
   if (box) listFocus = focusSpot(box);
   try {
@@ -2297,6 +2307,11 @@ $("#tdTags").onclick = (e) => {
   if (!b) return;
   b.classList.toggle("on");
   if (b.dataset.tag === "urgent" && b.classList.contains("on") && +$("#tdPriority").value < 3) $("#tdPriority").value = "3";  // the urgent tag is urgent
+  else if (b.dataset.tag === "urgent" && !b.classList.contains("on") && $("#tdPriority").value === "3") {
+    // Taking it off takes back the urgency it gave (as the server does), not a "most urgent" set on purpose.
+    const was = Math.min(4, Math.max(1, editing?.priority || 1));
+    if (was < 3 || (editing?.labels || []).includes("urgent")) $("#tdPriority").value = String(was < 3 ? was : 1);
+  }
   focusLabel();
 };
 $("#tdCancel").onclick = () => { editing = null; };
@@ -2326,6 +2341,8 @@ function editBody() {
   }
   const tags = $$("#tdTags [data-tag].on").map((b) => b.dataset.tag);
   if ([...tags].sort().join("\n") !== [...(t.labels || [])].sort().join("\n")) body.tags = tags;
+  // Urgent taken off: the urgency shown here is the one meant (the server would take back what the tag gave).
+  if (body.tags && (t.labels || []).includes("urgent") && !tags.includes("urgent")) body.priority = Number(now.priority);
   const steps = stepsNow();
   if (JSON.stringify(steps) !== JSON.stringify((t.steps || []).map((s) => ({ text: s.text, done: !!s.done })))) body.steps = steps;
   return body;
@@ -3365,7 +3382,8 @@ function winsHtml(w) {
   w.items.forEach((t) => named.set(t, (named.get(t) || 0) + 1));
   const items = [...named].map(([t, n]) => `<li>${esc(t)}${n > 1 ? ` ×${n}` : ""}</li>`).join("");
   const linked = w.linked ? `<li class="muted">${items ? "+" : ""}${w.linked} ${items ? "more " : ""}in your linked app</li>` : "";
-  return `<div data-wins><p class="muted" style="margin-bottom:0">Wins: ${w.count} ✓</p><ul class="winlist">${items}${linked}</ul></div>`;
+  const other = w.other && (items || linked) ? `<li class="muted">+${w.other} more</li>` : "";  // unnamed My list wins (older versions)
+  return `<div data-wins><p class="muted" style="margin-bottom:0">Wins: ${w.count} ✓</p><ul class="winlist">${items}${linked}${other}</ul></div>`;
 }
 
 function pageHtml(p, d) {
@@ -4059,12 +4077,15 @@ async function saveBreak(button) {
     b.changed = true;
     if (brk !== b) return loadList();
     b.undo = old;
+    b.slides = r.slides_was;  // new steps clear its slide count: Undo puts it back
     drawBreak("saved", { steps: r.steps, cut: all.length > 12 });
   });
 }
 async function undoBreak(button) {
   await breakDo(button, "Undoing…", async (b) => {
-    const r = await api(`/list/${encodeURIComponent(b.task.id)}`, { method: "PATCH", json: { steps: b.undo || [] } });
+    const back = { steps: b.undo || [] };
+    if (b.slides != null) back.slides = b.slides;
+    const r = await api(`/list/${encodeURIComponent(b.task.id)}`, { method: "PATCH", json: back });
     if (brk !== b) return loadList();
     b.task.steps = r.steps;
     drawBreak("review");

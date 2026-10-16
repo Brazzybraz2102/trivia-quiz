@@ -576,6 +576,9 @@ ClickUp and Trello are listed under Settings → Linked app → Other apps as "n
   a linked task's date can't be taken off here). A move to a later day counts as a slide (`Slides.bump`), as
   read-back's → does; scheduling a someday task doesn't. The reply's `undo` (the same call with `undo: true`)
   puts the day back and takes the slide back. Every move shows Undo; Done keeps its Undo.
+  On a repeating My list task a move (and read-back's →) is this time only: the repeat keeps the day it belongs on
+  (`tasks.repeat_day`: the weekday, or the day of the month), so "every Friday" moved to Saturday is next due on a
+  Friday. Changing the Day in the Edit dialog changes the repeat's day.
 - **Search and tag filter**: "Search my list" and **+ Add task** under the My list heading, then a row of tag
   chips (the tags on open tasks, most used first, and All). The filter runs in the browser over the words,
   #tags, notes and steps (every word must match; case and accents don't matter). A tag on a row is a button that
@@ -626,7 +629,7 @@ ClickUp and Trello are listed under Settings → Linked app → Other apps as "n
   OFL.txt), line height 1.6, letter spacing .03em, no all-capitals headers, bigger and darker small print, in light and
   dark. Labels drawn for that person use the same font (`render.reading_font`, set in `jobs._finish`), take the symbols
   it lacks (✓ → ✗ ↻) from DejaVu, fall back to DejaVu if the files are missing, and print SCHEDULE, JUST ONE THING,
-  TASK, NEW TASK and NOTE in sentence case.
+  TASK, NEW TASK and NOTE in sentence case. Tag bands print the tag as it's written (work, not WORK).
 - **Same words every time** (`routine_mode`, Settings → Focus): the Done message is always "Done ✓" (no random
   phrases), and My list opens on Schedule.
 - **List | Schedule** on My list (everyone; the pick is kept per device, and switching `routine_mode` resets it to that

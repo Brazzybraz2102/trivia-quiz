@@ -169,8 +169,11 @@ tasks = Table(
     Column("created", BigInteger, nullable=False),
     Column("done_at", BigInteger, nullable=True),
     # Added after 0.10.3 (filled in by _add_missing_columns on older databases):
-    Column("repeat_day", Integer, nullable=True),                    # a monthly repeat's day of the month (31 stays 31)
+    Column("repeat_day", Integer, nullable=True),                    # a repeat's own day: 1-31 monthly, 0-6 (Mon-Sun) weekly
     Index("ix_tasks_owner_open", "owner", "done_at"),
+    # A deleted task's id is never handed out again, so an old ticket's row or slide count can't
+    # land on a newer task (upkeep "tasks-autoincrement-v1" rebuilds older SQLite tables this way).
+    sqlite_autoincrement=True,
 )
 
 tags = Table(

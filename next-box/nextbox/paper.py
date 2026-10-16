@@ -336,6 +336,8 @@ def journal_day_sheets(day: dict, paper: str, photo) -> list[Image.Image]:
         if wins.get("linked"):
             more = "more " if counted else ""
             out.text(f"{'+' if counted else ''}{wins['linked']} {more}in your linked app", fill=SOFT, indent=out.line // 2)
+        if wins.get("other") and (counted or wins.get("linked")):  # unnamed My list wins from an older version
+            out.text(f"+{wins['other']} more", fill=SOFT, indent=out.line // 2)
     return out.finish()
 
 

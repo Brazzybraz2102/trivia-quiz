@@ -143,6 +143,12 @@ def _is_late(task: dict, today: date) -> bool:
     return bool(due) and due[:10] < today.isoformat()
 
 
+def _made(task: dict) -> dict:
+    """A My list task's row on a ticket keeps when the task was made, so read-back can tell it from a
+    newer task that got the id of a deleted one (scan._not_on_ticket)."""
+    return {"created": task["created"]} if str(task.get("id")).startswith("nb:") and task.get("created") else {}
+
+
 NO_PRINTER = "No label printer in your household yet. Tap Print on paper to print it on any printer."
 NO_PRINTER_ADMIN = ("No label printer in your household yet. Add one under Admin → Printers, "
                     "or tap Print on paper to print it on any printer.")
@@ -305,6 +311,7 @@ def _task_label(ctx: Context, *, kind: str, title: str, subtitle: str, tasks: li
             "content": task["content"],
             "due_date": (due.get("date") or "")[:10] or None,
             "is_recurring": bool(due.get("is_recurring")),
+            **_made(task),
         })
     now = datetime.now()
     made = f"{now:%a} {now:%H:%M}" if h24 else f"{now:%a} {now.hour % 12 or 12}:{now:%M}{'a' if now.hour < 12 else 'p'}"
@@ -385,7 +392,7 @@ def _sticker_rows(ctx: Context, tasks: list[dict]) -> tuple[list[Sticker], list[
                                 int(task.get("priority", 1)) >= 3, big=big))
         manifest.append({"row": n, "task_id": str(task["id"]), "content": task["content"],
                          "due_date": (due.get("date") or "")[:10] or None,
-                         "is_recurring": bool(due.get("is_recurring"))})
+                         "is_recurring": bool(due.get("is_recurring")), **_made(task)})
     return stickers, manifest
 
 
@@ -491,7 +498,8 @@ def print_focus(ctx: Context, task_id: str | None = None, dry_run: bool | None =
     label_id = ctx.store.new_id(today)
     due = task.get("due") or {}
     manifest = [{"row": 1, "task_id": str(task["id"]), "content": task["content"],
-                 "due_date": (due.get("date") or "")[:10] or None, "is_recurring": bool(due.get("is_recurring"))}]
+                 "due_date": (due.get("date") or "")[:10] or None, "is_recurring": bool(due.get("is_recurring")),
+                 **_made(task)}]
 
     def draw(accent: bool) -> Image.Image:
         return render_focus(_clean(task["content"]), steps, label_id, tag, color,
@@ -567,7 +575,7 @@ def print_task(ctx: Context, task_id: str, dry_run: bool | None = None, source: 
     reason = reason or ("overdue" if late else "urgent" if int(task.get("priority", 1)) >= 3 else "task")
     manifest = [{"row": 1, "task_id": str(task["id"]), "content": task["content"],
                  "due_date": (due.get("date") or "")[:10] or None,
-                 "is_recurring": bool(due.get("is_recurring"))}]
+                 "is_recurring": bool(due.get("is_recurring")), **_made(task)}]
     tag = str((task.get("labels") or [""])[0]).lower()
     text = ("! " if int(task.get("priority", 1)) >= 3 else "") + _clean(task["content"])
     body = _short(_clean(task.get("description") or ""), MAX_BODY, "… (the rest is in the task)")

@@ -512,7 +512,7 @@ def draw_tag(canvas: Image.Image, box: tuple[int, int, int, int], color: str, na
             t.line((k, 0, k + h, h), fill=0, width=2)
     t.rectangle((0, 0, w - 1, h - 1), outline=0, width=3)
     if name and font is not None:
-        label = name.upper()
+        label = name if _reading.get() else name.upper()  # Easy-to-read text: no all-capitals
         lw = t.textlength(label, font=font)
         while lw > w - 16 and font.size > 14:  # smaller type before cutting the name short
             font = _font(int(font.size) - 2, True)

@@ -95,10 +95,11 @@ def test_every_answer_sets_its_settings(ctx):
                                                   "review_at": "20:00"}})
     assert r.status_code == 200, r.text
     changed, prefs = r.json()["changed"], r.json()["prefs"]
-    assert changed == {"print_with": "paper", "always_dry_run": True, "paper_size": "a5", "journal_mode": True,
+    # Only what really changed: Journal mode was on already (it's on for everyone), so it isn't listed.
+    assert changed == {"print_with": "paper", "always_dry_run": True, "paper_size": "a5",
                        "max_rows": 3, "reading_mode": True, "routine_mode": True,
                        "routine_morning": "07:30", "routine_evening": "20:00"}
-    assert all(prefs[k] == v for k, v in changed.items())
+    assert all(prefs[k] == v for k, v in changed.items()) and prefs["journal_mode"] is True
     assert prefs["setup_quiz_done"] is True
     assert prefs["gentle_words"] is True  # not picked, but it's on for everyone: left alone
     assert a.get("sam")["prefs"]["routine_evening"] == "20:00"
@@ -162,7 +163,8 @@ def test_what_helps_is_never_stored_or_logged(ctx):
     for word in ('"gentle"', '"reading"', '"routine"', "helps", "adhd", "dyslexia", "autis"):
         assert word not in everything.lower(), word
     logged = [e for e in rows(ctx.settings.data_dir, "events") if e["action"] == "setup_quiz"]
-    assert len(logged) == 1 and logged[0]["detail"]["changed"] == ["gentle_words", "reading_mode", "routine_mode"]
+    # Gentle words was on already, so only the two settings that really changed are named.
+    assert len(logged) == 1 and logged[0]["detail"]["changed"] == ["reading_mode", "routine_mode"]
 
 
 def test_the_setup_questions_need_a_signed_in_person(ctx):
