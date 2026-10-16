@@ -24,6 +24,11 @@ DEFAULT_TAGS = [("urgent", "red"), ("errand", "yellow"), ("call", "blue"), ("hom
                 ("work", "purple")]
 MAX_STEPS = 12
 GONE = "That task was already removed."  # the web app reloads the list when it sees this
+STEP_CHANGED = "That task's steps changed on another device. Here they are now."
+
+
+class StepChanged(ValueError):
+    """The step isn't where the screen thought it was: edited on another device a moment ago."""
 
 
 def _iso_day(value: str) -> str:
@@ -300,6 +305,17 @@ def parse_dump(text: str, today: date) -> list[dict]:
     head, _ = split_dump(text)
     return [{**t, "line": n, "text": strip_markers(line)[0][:500]}
             for n, line in enumerate(head.splitlines(), 1) if (t := parse_line(line, today))]
+
+
+def preview_dump(text: str, today: date) -> dict:
+    """What Brain dump would make of `text`, without adding anything: `lines` (each task as
+    parse_dump makes it, problems and ticked lines included), `dropped` (lines with no task words
+    left, like "fri" alone or "#tag" alone) and `more` (lines past the first MAX_DUMP_LINES)."""
+    head, rest = split_dump(text)
+    dropped = [{"line": n, "text": line.strip()[:120]} for n, line in enumerate(head.splitlines(), 1)
+               if line.strip() and parse_line(line, today) is None]
+    return {"lines": parse_dump(head, today), "dropped": dropped,
+            "more": sum(1 for line in rest.splitlines() if line.strip())}
 
 
 # --- tags ------------------------------------------------------------------------------------
@@ -587,6 +603,52 @@ class LocalTasks(TaskProvider):
                                   .order_by(w.ts.desc(), w.id.desc()).limit(1)).scalar()
             if newest is not None:
                 conn.execute(delete(db.wins).where(w.id == newest))
+        return self.get_task(task_id)
+
+    def tick_step(self, task_id: str, index: int, done: bool, text: str | None = None) -> dict:
+        """Tick (or untick) one tiny step. `text` is the step as the screen showed it: when the steps
+        changed on another device since, nothing is ticked and StepChanged says so."""
+        num = self._num(task_id)
+        with self.db.begin() as conn:
+            r = conn.execute(select(db.tasks.c.steps, db.tasks.c.done_at).where(self._mine(num))).mappings().first()
+            if not r:
+                raise TaskNotFound(GONE)
+            steps = [dict(s) for s in (r["steps"] or [])]
+            if r["done_at"] is not None or not 0 <= index < len(steps) \
+                    or (text is not None and steps[index].get("text") != text):
+                raise StepChanged(STEP_CHANGED)
+            steps[index]["done"] = bool(done)
+            conn.execute(update(db.tasks).where(self._mine(num)).values(steps=steps))
+        return self.get_task(task_id)
+
+    def skip(self, task_id: str) -> dict | None:
+        """Skip this time: a repeating task moves on to its next day without counting as done (no
+        win) and its steps start fresh. None when it had moved on already (a double tap). Otherwise
+        returns what unskip needs to put it back."""
+        task = self.get_task(task_id)
+        if task["done"] or not task["repeat"] or not task["due"]:
+            raise ValueError("Only a repeating task can be skipped. Move it to another day instead.")
+        num = self._num(task_id)
+        prev = task["due"]["date"][:10]
+        with self.db.begin() as conn:
+            anchor = conn.execute(select(db.tasks.c.repeat_day).where(self._mine(num))).scalar()
+            nxt = next_due(task["repeat"], date.fromisoformat(prev), self._today(), anchor_day=anchor)
+            changed = conn.execute(update(db.tasks).where(self._mine(num), db.tasks.c.due_date == prev).values(
+                due_date=nxt.isoformat(), steps=[{**s, "done": False} for s in task["steps"]])).rowcount
+        if not changed:
+            return None
+        return {"prev_due": prev, "prev_steps": [bool(s.get("done")) for s in task["steps"]],
+                "next_due": nxt.isoformat()}
+
+    def unskip(self, task_id: str, prev_due: str, prev_steps: list | None = None) -> dict:
+        """Undo a skip: back to `prev_due`, with the steps it had ticked. No win to take back."""
+        task = self.get_task(task_id)
+        num = self._num(task_id)
+        values: dict = {"due_date": _iso_day(str(prev_due)[:10])}
+        if prev_steps is not None and len(prev_steps) == len(task["steps"]):
+            values["steps"] = [{**s, "done": bool(d)} for s, d in zip(task["steps"], prev_steps)]
+        with self.db.begin() as conn:
+            conn.execute(update(db.tasks).where(self._mine(num)).values(**values))
         return self.get_task(task_id)
 
     def set_due_date(self, task_id: str, date_iso: str) -> None:

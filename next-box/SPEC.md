@@ -517,3 +517,50 @@ Everything here is the owner's own journal: owner-scoped, never in events, admin
   an hour, no reset wait: it shows nothing the Journal tab doesn't).
 - `Store.list_printed(until=)` bounds tickets by day, like `list_scans`.
 
+## 27. FA: My list, faster (steps, one-tap moves, search, add, bulk, slugs, skip)
+- **Tiny steps you can tick** (My list tasks only): the Edit dialog has a step list (tick, edit, ↑/↓, ✕, "Add a
+  step"; a pasted list becomes one step per line; 12 at most; what's typed in "Add a step" is saved too). "steps
+  1/3" on a row opens the steps inline with checkboxes; after the last one a message offers "Finish the task".
+  Just one thing shows "Next tiny step (1 of 3)" with **Step done ✓** first and "Whole task done" second; after
+  the last step it asks "All steps done. Finish the task?" (Yes / Not yet). `PATCH /list/{id}/steps/{n}
+  {done, text}` ticks one step; `text` is the step as the screen showed it, so a step changed on another device
+  is never ticked by mistake (409, nothing changes). A step is not a win. Only a *new* step clears a task's
+  slides ("made smaller"); ticking, reordering or removing steps doesn't.
+- **One-tap moves**: a → button on each open row that's due today, waiting or someday (it never moves a task
+  sooner), → Tomorrow on Just one thing, and day chips in the Edit dialog (Today, Tomorrow, This weekend =
+  Saturday or today at the weekend, Next week = Monday, No date). `POST /list/{id}/move {to: "tomorrow" |
+  "today" | YYYY-MM-DD | null, undo}`: My list keeps the task's time (a weekday repeat skips the weekend);
+  linked tasks go through the app's `set_due_date` (a repeating CalDAV task is refused with the §11 explanation;
+  a linked task's date can't be taken off here). A move to a later day counts as a slide (`Slides.bump`), as
+  read-back's → does; scheduling a someday task doesn't. The reply's `undo` (the same call with `undo: true`)
+  puts the day back and takes the slide back. Every move shows Undo; Done keeps its Undo.
+- **Search and tag filter**: "Search my list" and **+ Add task** under the My list heading, then a row of tag
+  chips (the tags on open tasks, most used first, and All). The filter runs in the browser over the words,
+  #tags, notes and steps (every word must match; case and accents don't matter). A tag on a row is a button that
+  shows only that tag. "Showing N of M … Show all" says a filter is on; picks survive it ("2 picked · 1 not
+  shown"). With a filter on and nothing picked, Stickers and Tear-off strips print the tasks shown (the first
+  30, by id). The last filter is remembered per person on the device (`localStorage nb.listFilter:<user>`).
+- **+ Add task** opens the Edit dialog empty ("New task") and saves with `POST /list` (always My list; it says
+  so when Brain dump sends new tasks to the linked app). A tag being shown starts ticked.
+- **Brain dump preview**: `POST /list/dump?preview=1` only parses: no task, tag (not even the starter tags) or
+  event is written. It returns `lines` (each line as `parse_dump` makes it, problems and ticked lines too),
+  `dropped` (lines with no task words, like "fri" alone), `more` (lines past 200), `to`, `new_tags`,
+  `over_tags` (past the 30-tag limit: they stay in the words) and `notes`. The app shows it under Brain dump
+  450 ms after typing stops (only the newest answer), with chips for day, time, repeat, how long, urgent and
+  tags; it can be folded away (remembered on the device). A failed preview just hides.
+- **Bulk actions**: with one or more tasks picked, the print bar adds ✓ Done, → Tomorrow, Tag… and Delete….
+  They go one task at a time through the single-task endpoints, so linked tasks act in their own app; the bar
+  shows progress and a failure names the task. Done and → Tomorrow each get one Undo for the whole batch. Tag…
+  adds or takes off a tag on the picked My list tasks. Delete… lists the tasks and asks "Delete N tasks? This
+  can't be undone." (Cancel has focus), then sends `DELETE /list/{id}?confirm=true` per task.
+- **Slugs on My list**: `GET /list` also returns `slides` ({task id: moves} for open tasks moved `slug_after`+
+  times; "Not a slug" ones left out) and `slug_after`. Those rows show "slid 3×", as the label and Journal do.
+- **Skip this time** (repeating My list tasks; in the Edit dialog, which saves first, and on Just one thing):
+  `POST /list/{id}/skip {due}` moves it to its next day (`next_due`, steps start fresh) without a win or a
+  slide; `due` is the day the screen showed, so a double tap skips once. `POST /list/{id}/unskip {prev_due,
+  prev_steps}` is its Undo. Clearing the Day of a repeating task says "Clearing the day stops it repeating"
+  before Save.
+- **Phones** (≤520 px): a row's words take the full width, and its when/steps share the next line with Edit, →
+  and ✓. Every new control is 44 px tall on phones and has a label; moves, steps and skips can't be sent twice
+  while one is on its way.
+

@@ -38,7 +38,8 @@ from .events import Events, ServerSettings
 from .feedback import Feedback, FeedbackError
 from .jobs import Context, print_text
 from .journal import Journal, Slides, Wins, journal_zip, note_lines, slugs as find_slugs
-from .mylist import TAG_COLORS, LocalTasks, TagExists, Tags, is_local, parse_dump, split_dump
+from .mylist import (TAG_COLORS, LocalTasks, StepChanged, TagExists, Tags, _iso_day, is_local, parse_dump,
+                     preview_dump, split_dump)
 from .printer import COLORS, DRIVERS
 from .printers import REASONS, PrinterError, Printers
 from .printers import validate as validate_printer
@@ -166,6 +167,20 @@ class DumpBody(BaseModel):
 class ReopenBody(BaseModel):
     prev_due: str | None = Field(None, max_length=40)
     prev_steps: list[bool] | None = Field(None, max_length=50)
+
+
+class MoveBody(BaseModel):
+    to: str | None = Field(None, max_length=20)  # "tomorrow", "today", YYYY-MM-DD, or none (My list only)
+    undo: bool = False  # putting a move back: no slide counted, and the one it counted is taken back
+
+
+class SkipBody(BaseModel):
+    due: str | None = Field(None, max_length=40)  # the day the screen showed when Skip was pressed
+
+
+class StepBody(BaseModel):
+    done: bool
+    text: str | None = Field(None, max_length=400)  # the step as the screen showed it
 
 
 class CalendarBody(BaseModel):
@@ -1008,7 +1023,13 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 linked = [{**t, "source": status["provider"], "labels": list(t.get("labels") or [])} for t in linked]
             except Exception as exc:  # the list still works when the linked app is down
                 linked_error = f"{status.get('name', 'Your app')} didn't answer: {exc}"[:300]
+        # Slugs, as the Journal and the daily label count them: moved to a later day slug_after+ times.
+        slug_after = int(caller.prefs.get("slug_after", 3))
+        open_ids = {str(t["id"]) for t in tasks if not t.get("done")} | {str(t["id"]) for t in linked}
+        slides = {tid: n for tid, n in Slides(accounts.db, caller.name).counts().items()
+                  if n >= slug_after and tid in open_ids}
         return {"tasks": tasks, "linked": linked, "linked_name": status.get("name") if status.get("connected") else None,
+                "slides": slides, "slug_after": slug_after,
                 "linked_error": linked_error, "linked_undo": linked_undo, "tags": _tags_with_uses(caller.name),
                 "done_today": len(Wins(accounts.db, caller.name).between(today.isoformat(), today.isoformat())),
                 "one_thing": _one_thing(caller),
@@ -1118,12 +1139,15 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(400, str(exc)) from exc
 
     @app.post("/list/dump")
-    def brain_dump(body: DumpBody, caller: Caller = Depends(person)):
+    def brain_dump(body: DumpBody, preview: bool = False, caller: Caller = Depends(person)):
         """Type or paste everything on your mind, one per line. #tag !urgent tomorrow 3pm ~15m.
         All or nothing: a date or time that can't be real stops the whole dump before anything is
         added, and says which line. 200 lines at a time: the rest come back as skipped_text.
         Lines ticked already ([x]) are left out. With prefs.new_tasks_to = linked, the tasks go
-        to the linked app instead (and are never kept here)."""
+        to the linked app instead (and are never kept here). preview=1: only say what would
+        happen (dump_preview); nothing is added, saved or logged."""
+        if preview:
+            return dump_preview(body.text, caller)
         head, rest = split_dump(body.text)
         items = parse_dump(head, ctx.today())
         problems = [{"line": i["line"], "text": i["text"][:120], "problem": i["problem"]}
@@ -1164,6 +1188,34 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             out["notes"].append(f"You have 30 tags, the most there can be, so {', '.join(dict.fromkeys(kept_words))} "
                                 "stayed in the words. Remove a tag in Settings to make room.")
         return out
+
+    def dump_preview(text: str, caller: Caller) -> dict:
+        """Brain dump's live preview: each line as it would be added (problems and ticked lines too),
+        lines with no task words that would be dropped, where the tasks would go, and which #tags
+        are new (or stay in the words, past the 30-tag limit). Reads only: nothing is written."""
+        from sqlalchemy import select as _select
+
+        from . import db as _db
+        out = preview_dump(text, ctx.today())
+        with accounts.db.connect() as conn:  # not Tags.all(): that saves the starter tags
+            known = {r[0] for r in conn.execute(_select(_db.tags.c.name).where(_db.tags.c.owner == caller.name))}
+        new: list[str] = []
+        over: list[str] = []
+        for item in out["lines"]:
+            for name in item.get("tags", []):
+                if name in known or name in new or name in over:
+                    continue
+                (new if len(known) + len(new) < 30 else over).append(name)
+        to, notes = "My list", []
+        if caller.prefs.get("new_tasks_to") == "linked":  # as brain_dump decides it
+            try:
+                linked = getattr(rctx(caller).tasks, "linked", None)
+            except Exception:  # a preview never fails because the linked app can't be reached
+                linked = None
+            if linked is not None:
+                to = display_name(getattr(linked, "key", "")) or "your linked app"
+                notes.append(f"These go to {to}, which doesn't take Next Box's tags, urgency or how long.")
+        return {**out, "to": to, "new_tags": new, "over_tags": over, "notes": notes}
 
     def _due_words(item: dict) -> str | None:
         """A parsed line's day, time and repeat in words Todoist understands."""
@@ -1224,8 +1276,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         if before and fields.get("due_date") and fields["due_date"] > before:
             Slides(accounts.db, caller.name).bump(task_id)  # moved to a later day
         new_steps = [s["text"] for s in result.get("steps") or []]
-        if old_steps is not None and new_steps and new_steps != old_steps:
-            Slides(accounts.db, caller.name).clear(task_id)  # made smaller: a fresh start
+        if old_steps is not None and set(new_steps) - set(old_steps):
+            # A new step: made smaller, a fresh start. (Ticking, reordering or removing steps isn't.)
+            Slides(accounts.db, caller.name).clear(task_id)
         return result
 
     @app.post("/list/{task_id}/done")
@@ -1260,6 +1313,86 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         run(caller, "list_reopen", reopen, task_id)  # not linked any more: 409
         Wins(accounts.db, caller.name, caller.household).remove_last(task_id)
         return {"ok": True}
+
+    @app.post("/list/{task_id}/move")
+    def move_list_task(task_id: str, body: MoveBody, caller: Caller = Depends(person)):
+        """→ Tomorrow (or any day) in one tap, on My list or in the linked app (through its
+        set_due_date, so a repeating rule survives). A move to a later day counts as a slide, as
+        read-back's → does. `undo` is what puts it back: the same call with undo=true, which takes
+        that slide back. Already on that day: nothing changes (moved=false)."""
+        today = ctx.today()
+        to = (body.to or "").strip().lower()
+        if to in ("", "none"):
+            target = None
+        elif to in ("today", "tomorrow"):
+            target = (today + timedelta(days=1 if to == "tomorrow" else 0)).isoformat()
+        else:
+            try:
+                target = _iso_day(to)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+        local = is_local(task_id)
+
+        def go() -> dict:
+            tasks = my_list(caller) if local else rctx(caller).tasks
+            task = tasks.get_task(task_id)
+            if task.get("done"):
+                raise ValueError("That task is finished already.")
+            prev = ((task.get("due") or {}).get("date") or "")[:10] or None
+            if prev == target:
+                return {"ok": True, "moved": False, "from": prev, "to": target, "task": task if local else None}
+            if local:
+                task = tasks.update(task_id, {"due_date": target})  # keeps its time; a weekday repeat skips weekends
+                now = ((task.get("due") or {}).get("date") or "")[:10] or None
+            elif target is None:
+                name = tasks.linked_name() if hasattr(tasks, "linked_name") else "your linked app"
+                raise ValueError(f"Take its date off in {name}.")
+            else:
+                tasks.set_due_date(task_id, target)
+                now = target
+            slides, slid = Slides(accounts.db, caller.name), None
+            if prev and now and not body.undo and now > prev:
+                slid = slides.bump(task_id)
+            elif prev and now and body.undo and now < prev:
+                slides.unbump(task_id)
+            return {"ok": True, "moved": True, "from": prev, "to": now, "undo": {"to": prev, "undo": True},
+                    "slid": slid, "task": task if local else None}
+        return run(caller, "list_move", go)
+
+    @app.patch("/list/{task_id}/steps/{index}")
+    def tick_list_step(task_id: str, index: int, body: StepBody, caller: Caller = Depends(person)):
+        """Tick (or untick) one tiny step. `text` guards against steps changed on another device:
+        then nothing changes and 409 says so (the app shows the steps as they are now)."""
+        _local_id(task_id)
+
+        def go() -> dict:
+            try:
+                return my_list(caller).tick_step(task_id, index, body.done, text=body.text)
+            except StepChanged as exc:  # a ValueError, which run() would call a 400
+                raise HTTPException(409, str(exc)) from exc
+        return run(caller, "list_step", go)
+
+    @app.post("/list/{task_id}/skip")
+    def skip_list_task(task_id: str, body: SkipBody | None = None, caller: Caller = Depends(person)):
+        """Skip this time: a repeating My list task moves on to its next day. Not a win and not a
+        slide. body.due: the day the screen showed, so a double tap skips once. `undo` is what
+        /unskip needs, or None when it had moved on already."""
+        mine, seen = my_list(caller), ((body.due if body else None) or "")[:10]
+        _local_id(task_id)
+
+        def go() -> dict | None:
+            if seen and ((mine.get_task(task_id).get("due") or {}).get("date") or "")[:10] != seen:
+                return None  # it moved on already
+            return mine.skip(task_id)
+        undo = run(caller, "list_skip", go)
+        return {"ok": True, "undo": undo, "task": mine.get_task(task_id)}
+
+    @app.post("/list/{task_id}/unskip")
+    def unskip_list_task(task_id: str, body: ReopenBody, caller: Caller = Depends(person)):
+        if not body.prev_due:
+            raise HTTPException(400, "Which day should it go back to?")
+        return run(caller, "list_unskip", my_list(caller).unskip, _local_id(task_id), body.prev_due,
+                   prev_steps=body.prev_steps)
 
     @app.delete("/list/{task_id}")
     def delete_list_task(task_id: str, confirm: bool = False, caller: Caller = Depends(person)):
