@@ -1047,6 +1047,7 @@ function confText(v) { $("#confLabel").textContent = `Marks below ${Math.round(v
 function loadPrefs(prefs) {
   $$("[data-pref]").forEach((el) => {
     if (el.dataset.bad) return;  // keeps what they typed until it's fixed (see prefErr)
+    if (el === document.activeElement && ["text", "number", "time"].includes(el.type)) return;  // still typing: it saves as they leave it
     const v = prefs[el.dataset.pref];
     if (el.type === "checkbox") el.checked = !!v; else el.value = v;
   });
@@ -1067,28 +1068,35 @@ function loadPrefs(prefs) {
 function prefErr(el, msg) {
   const label = el.closest(".setting")?.querySelector(".label");
   let box = label?.querySelector(".err");
-  if (!msg) { box?.remove(); delete el.dataset.bad; el.removeAttribute("aria-invalid"); return; }
+  if (!msg) { box?.remove(); delete el.dataset.bad; delete el.dataset.retry; el.removeAttribute("aria-invalid"); return; }
   if (!label) return toast(msg, 4000);
   if (!box) { box = document.createElement("span"); box.className = "err"; box.setAttribute("role", "alert"); label.append(box); }
   box.textContent = msg; el.dataset.bad = "1"; el.setAttribute("aria-invalid", "true");
 }
 
 // One save at a time, in the order they were made: a number box saves as it loses focus, and the switch
-// tapped next waits for it, so each answer has both and the screen never goes back to an older one.
-let prefQueue = Promise.resolve();
+// tapped next waits for it, so each answer has both. Only the newest answer redraws the settings (an older
+// one would put back a switch tapped since), and never the box being typed in, so the screen never goes
+// back to an older one.
+let prefQueue = Promise.resolve(), prefPending = 0;
 $$("[data-pref]").forEach((el) => el.onchange = () => {
   const k = el.dataset.pref, typed = el.type === "text" || el.type === "number" || el.type === "time";
   let v = el.type === "checkbox" ? el.checked : el.value;
   if (el.type === "number" || "int" in el.dataset) v = parseInt(v, 10);  // data-int: a list of numbers
   if (el.type === "range") v = parseFloat(v);
+  delete el.dataset.retry;
+  prefPending++;
   return (prefQueue = prefQueue.then(() => savePref(el, k, v, typed)));
 });
+// A typed setting that couldn't reach Next Box tries again as they leave its box, even with the same value.
+$$("[data-pref]").forEach((el) => el.addEventListener("blur", () => { if (el.dataset.retry) el.onchange(); }));
 async function savePref(el, k, v, typed) {
+  const newest = () => prefPending === 1;  // no later save is waiting
   try {
     const prefs = await api("/settings", { method: "PATCH", json: { [k]: v } });
     if (me) { me.prefs = prefs; applyLook(); }
     if (typed) prefErr(el, "");
-    loadPrefs(prefs);
+    if (newest()) loadPrefs(prefs);
     if (k === "always_dry_run") refreshStatus();  // the header and the Preview box follow it
     if (k === "time_24h" || k === "gentle_words") { renderList(); loadToday(); }  // times and words on My list follow it
     if (k === "routine_mode") forgetListView();  // My list opens on its new default view (Schedule when on)
@@ -1097,9 +1105,12 @@ async function savePref(el, k, v, typed) {
     if (k === "remind_before") remindRender();
     toast("Saved");
   } catch (e) {
-    if (typed) prefErr(el, errText(e));
-    else { toast(errText(e), 4000); loadPrefs(me.prefs); }
-  }
+    if (typed) {
+      prefErr(el, e.status ? errText(e) : `${errText(e)} It saves when you leave this box again.`);
+      if (!e.status) el.dataset.retry = "1";
+    } else toast(errText(e), 4000);
+    if (newest() && me) loadPrefs(me.prefs);  // what is saved, apart from a box that says why it isn't
+  } finally { prefPending--; }
 }
 $("[data-pref=confidence]").oninput = (e) => confText(e.target.value);
 
@@ -1945,7 +1956,8 @@ async function skipRepeat(id, btn) {
   finally { btn?.removeAttribute("aria-disabled"); }
 }
 
-// A message with an Undo button (or another action) that stays long enough to use it (longer with bigger text).
+// A message with an Undo button (or another action) that stays long enough to use it (longer with bigger text, with
+// more words, and while the pointer is on it).
 // After something done from the keyboard it stays until the next action or Esc, and Ctrl+Z (⌘Z on a Mac)
 // undoes from anywhere on the page. Undo puts focus back where the action was.
 let snackTimer = null, snackUndo = null, snackHide = null, snackKeys = false;
@@ -1970,7 +1982,7 @@ function snack(msg, undo, label = "Undo") {
   requestAnimationFrame(() => { $("#snackText").innerHTML = esc(msg) + keys; placeToast(); });  // said again even if it's the same words
   placeToast();
   function hide(now) {
-    if (!now && box.contains(document.activeElement)) { snackTimer = setTimeout(hide, 2000); return; }
+    if (!now && (box.contains(document.activeElement) || box.matches(":hover"))) { snackTimer = setTimeout(hide, 2000); return; }
     clearTimeout(snackTimer);
     if (box.contains(document.activeElement)) goBack();
     box.classList.remove("show");
@@ -1979,7 +1991,10 @@ function snack(msg, undo, label = "Undo") {
   }
   snackHide = hide;
   hide.waits = snackKeys;
-  if (!snackKeys) snackTimer = setTimeout(hide, ["large", "xlarge"].includes(me?.prefs?.text_size) ? 10000 : 6000);
+  // 6 s (10 s with bigger text) reads a short one and reaches Undo; a longer one (a bulk action naming a task that
+  // didn't change, and why) gets 60 ms more for each character past the first 40, as a toast reads.
+  if (!snackKeys) snackTimer = setTimeout(hide, (["large", "xlarge"].includes(me?.prefs?.text_size) ? 10000 : 6000)
+    + 60 * Math.max(0, String(msg).length - 40));
 }
 // Was the last thing done with the keyboard (Enter, Space) or a pointer (tap, click)?
 document.addEventListener("keydown", (e) => { if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) snackKeys = true; }, true);
@@ -2066,13 +2081,27 @@ async function eachPicked(verb, tasks, fn) {
   } finally { BULK.forEach((s) => $(s).removeAttribute("aria-disabled")); }
   for (const [t] of ok) picked.delete(t.id);
   updatePicks();  // the bar says what's picked again, not "3 of 5…"
-  if (failed.length && !ok.length) {  // nothing changed: say why (some did: the message about them says how many didn't)
-    const [t, e] = failed[0];
-    toast(`${failed.length === 1 ? `“${shortName(t)}”` : plural(failed.length, "task")} didn't change: ${errText(e)}`, { error: true });
+  const missed = tasks.length - ok.length;  // failed, or not tried after an offline one
+  if (failed.length && !ok.length) {  // nothing changed: say why (some did: the message about them says which didn't)
+    toast(didntChange(failed, missed), { error: true });
     if (failed.some(([, x]) => x.message === TASK_GONE)) loadList();
   }
-  ok.missed = failed.length ? ` · ${failed.length} didn't change` : "";
+  ok.missed = failed.length ? ` · ${didntChange(failed, missed)}` : "";
   return ok;
+}
+// “Pick up prescription” didn't change: That task was already removed. (Or “…” and 2 more, of n that didn't.)
+const didntChange = (failed, n = failed.length) =>
+  `“${shortName(failed[0][0])}”${n > 1 ? ` and ${n - 1} more` : ""} didn't change: ${errText(failed[0][1])}`;
+// One Undo for a whole batch, a task at a time: says how many went back, and names one that didn't and why.
+async function undoPicked(pairs, fn, words, of = pairs.length) {
+  const bad = [];
+  let back = 0;
+  for (const [t, r] of pairs) {
+    try { await fn(t, r); back++; } catch (e) { bad.push([t, e]); if (!e.status) break; }  // offline: stop, don't try the rest
+  }
+  if (!bad.length) toast(`${words}${back < of ? ` (${back} of ${of})` : ""}`);
+  else toast(`${back ? `${words} (${back} of ${of}) · ` : ""}${didntChange(bad, pairs.length - back)}`, { error: true });
+  loadList();
 }
 const bulkBusy = () => $("#bulkDone").getAttribute("aria-disabled") === "true";
 $("#bulkDone").onclick = async () => {
@@ -2083,11 +2112,8 @@ $("#bulkDone").onclick = async () => {
   const done = ok.filter(([, r]) => !r.stale), stale = ok.length - done.length;
   const undo = done.filter(([t, r]) => r.undo != null && !(!String(t.id).startsWith("nb:") && t.due?.is_recurring));
   if (!done.length) toast(`${stale === 1 ? "That" : `Those ${stale}`} changed on another device${ok.missed}. Here's your list now.`);
-  else snack(`Done ${done.length} ✓${stale ? ` · ${stale} changed on another device` : ""}${ok.missed}`, undo.length ? async () => {
-    for (const [t, r] of undo) { try { await api(`/list/${encodeURIComponent(t.id)}/reopen`, { method: "POST", json: r.undo || {} }); } catch {} }
-    toast(`Back on your list${undo.length < done.length ? ` (${undo.length} of ${done.length})` : ""}`);
-    loadList();
-  } : null);
+  else snack(`Done ${done.length} ✓${stale ? ` · ${stale} changed on another device` : ""}${ok.missed}`, undo.length ? () => undoPicked(undo,
+    (t, r) => api(`/list/${encodeURIComponent(t.id)}/reopen`, { method: "POST", json: r.undo || {} }), "Back on your list", done.length) : null);
   await loadList();
   $("#printStickers").focus();
 };
@@ -2104,11 +2130,8 @@ $("#bulkTomorrow").onclick = async () => {
   // Where they went, as a row's → says it: a weekday repeat moved on a Friday goes to Monday.
   const days = [...new Set(moved.map(([, r]) => r.to))];
   const where = days.length <= 2 ? days.map(dayWords).join(" and ") : "later days";
-  if (moved.length) snack(`Moved ${moved.length} to ${where}${notYet}${ok.missed}`, async () => {
-    for (const [t, r] of moved) { try { await api(`/list/${encodeURIComponent(t.id)}/move`, { method: "POST", json: r.undo }); } catch {} }
-    toast("Back where they were");
-    loadList();
-  });
+  if (moved.length) snack(`Moved ${moved.length} to ${where}${notYet}${ok.missed}`, () => undoPicked(moved,
+    (t, r) => api(`/list/${encodeURIComponent(t.id)}/move`, { method: "POST", json: r.undo }), "Back where they were"));
   else toast(`They're on tomorrow already${notYet}${ok.missed}`);
   await loadList();
   $("#printStickers").focus();
@@ -2126,8 +2149,8 @@ $("#bulkTag").onclick = () => {
   const tasks = pickedTasks(), mine = tasks.filter((t) => String(t.id).startsWith("nb:"));
   const on = [...new Set(mine.flatMap((t) => t.labels || []))];
   const away = tasks.length - mine.length;
-  bulkDialog(`Tag ${plural(mine.length, "task")}`,
-    (!mine.length ? `<p class="muted">Tags are for My list tasks. Change these in ${esc(listData.linked_name || "your linked app")}.</p>`
+  bulkDialog(mine.length ? `Tag ${plural(mine.length, "task")}` : "Tags are for My list tasks",
+    (!mine.length ? `<p class="muted">Change these in ${esc(listData.linked_name || "your linked app")}.</p>`
       : `<p class="muted">Add one:</p><div class="chips">${listData.tags.map((g) => `<button type="button" class="tc-${esc(g.color)}" data-btag="${esc(g.name)}" data-add="1"><span class="tdot" aria-hidden="true"></span>${esc(g.name)}</button>`).join("") || `<span class="muted">No tags yet. Add some in Settings.</span>`}</div>`
         + (on.length ? `<p class="muted">Or take one off:</p><div class="chips">${on.map((n) => `<button type="button" data-btag="${esc(n)}" aria-label="Take #${esc(n)} off">✕ ${esc(n)}</button>`).join("")}</div>` : "")
         + (away ? `<p class="muted">${away === 1 ? "1 is" : `${away} are`} in ${esc(listData.linked_name || "your linked app")}: tag ${away === 1 ? "it" : "them"} there.</p>` : "")),
@@ -3372,6 +3395,8 @@ async function saveQuiz() {
   $("#quizDialog").removeAttribute("aria-busy");
   me.prefs = r.prefs;
   // Everything that follows the settings shows them now: the look, the Preview box, My list, the guide.
+  // A box in Settings still saying why an old value didn't save shows the new one instead.
+  Object.keys(r.changed).forEach((k) => { const el = $(`[data-pref=${k}]`); if (el) prefErr(el, ""); });
   loadPrefs(me.prefs); applyLook(); refreshStatus();
   if ("routine_mode" in r.changed) forgetListView();
   renderList(); loadGuide();
@@ -4134,10 +4159,19 @@ document.addEventListener("click", (e) => {
   if (e.target.closest("a[data-export-data]")) { e.preventDefault(); exportMyData(); }
 });
 // Download my data (.zip): asks first, so a paused download (after a password reset) or the hourly
-// limit is a message here, not a page of raw JSON in place of the app.
+// limit is a message here, not a page of raw JSON in place of the app. A second tap while it starts does
+// nothing (it would use a second of the 5 an hour), and the file comes through a download link, so even a
+// download that fails can never take the app's place.
 async function exportMyData() {
-  try { await api("/auth/export/check"); } catch (e) { return toast(errText(e), { error: true }); }
-  location.href = "/auth/export?format=zip";
+  if (exportMyData.busy) return;
+  exportMyData.busy = true;
+  setTimeout(() => { exportMyData.busy = false; }, 8000);
+  try { await api("/auth/export/check"); } catch (e) { exportMyData.busy = false; return toast(errText(e), { error: true }); }
+  toast("Getting your .zip ready…");
+  const a = Object.assign(document.createElement("a"), { href: "/auth/export?format=zip", download: "", hidden: true });
+  document.body.append(a);
+  a.click();
+  a.remove();
 }
 $("#jxDialog").addEventListener("change", jxSummary);
 $("#jxGo").addEventListener("click", (e) => {
