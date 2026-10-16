@@ -17,6 +17,7 @@ import hashlib
 import re
 import secrets
 import time
+import unicodedata
 from datetime import date
 
 from sqlalchemy import and_, delete, func, insert, select, update
@@ -29,6 +30,10 @@ MAX_WIN = 500
 SLUG_MOVES = 3       # moved this many times...
 SLUG_WAITING = 7     # ...or waiting this many days
 MAX_SLUGS = 10
+SEARCH_LIMIT = 50    # results shown for a search
+SEARCH_SCAN = 5000   # newest pages a search looks through
+SNIPPET = 160        # characters of a page shown around a match
+MAX_LINES = 200      # lines of a page offered as tasks
 
 
 def merge_notes(old: str, new: str) -> str:
@@ -141,18 +146,26 @@ class Journal:
         with self.db.connect() as conn:
             return conn.execute(select(db.journal.c.photo).where(self._mine(page_id))).scalar()
 
-    def update(self, page_id: str, notes: str) -> dict:
-        notes = (notes or "").strip()
-        if len(notes) > MAX_NOTES:
-            raise ValueError(f"notes can be up to {MAX_NOTES} characters")
+    def update(self, page_id: str, notes: str | None = None, day: str | None = None) -> dict:
+        """Change a page's notes, or move it to another day (`day`), or both. Left out: unchanged."""
         page = self.get(page_id)
         if page is None:
             raise KeyError(page_id)
-        if not notes and not page["has_photo"]:
-            raise ValueError("This page would be empty. Delete it instead?")
+        values: dict = {}
+        if notes is not None:
+            notes = notes.strip()
+            if len(notes) > MAX_NOTES:
+                raise ValueError(f"notes can be up to {MAX_NOTES} characters")
+            if not notes and not page["has_photo"]:
+                raise ValueError("This page would be empty. Delete it instead?")
+            values["notes"] = notes
+        if day is not None:
+            values["day"] = self._day(day)
+        if not values:
+            raise ValueError("Nothing to change.")
         with self.db.begin() as conn:
             done = conn.execute(update(db.journal).where(self._mine(page_id)).values(
-                notes=notes, updated=int(time.time()))).rowcount
+                **values, updated=int(time.time()))).rowcount
         if not done:
             raise KeyError(page_id)
         return self.get(page_id)
@@ -174,6 +187,49 @@ class Journal:
         with self.db.connect() as conn:
             return conn.execute(select(func.count()).select_from(db.journal).where(
                 db.journal.c.owner == self.owner)).scalar() or 0
+
+    def span(self) -> tuple[str | None, str | None]:
+        """The first and last day with a page."""
+        c = db.journal.c
+        with self.db.connect() as conn:
+            first, last = conn.execute(select(func.min(c.day), func.max(c.day)).where(c.owner == self.owner)).first()
+        return first, last
+
+    def stats(self, since: str, until: str) -> dict:
+        """How much a download of these days holds: pages, photos and their size in bytes."""
+        c = db.journal.c
+        with self.db.connect() as conn:
+            pages, photos, size, text = conn.execute(
+                select(func.count(), func.count(c.photo), func.coalesce(func.sum(func.length(c.photo)), 0),
+                       func.coalesce(func.sum(func.length(c.notes)), 0))
+                .where(c.owner == self.owner, c.day >= since, c.day <= until)).first()
+        return {"pages": pages or 0, "photos": photos or 0, "bytes": int(size or 0) + int(text or 0)}
+
+    def search(self, query: str, limit: int = SEARCH_LIMIT) -> tuple[list[dict], int]:
+        """Pages whose notes (or win) hold every word of `query`, newest first, each with a snippet
+        around the first match as parts: [{"t": text, "m": is_a_match}]. Case and accents don't
+        matter ("cafe" finds "Café"). Returns (pages, how many matched in all)."""
+        words = list(dict.fromkeys(_fold(query)[0].split()))[:8]
+        if not words:
+            return [], 0
+        c = db.journal.c
+        q = (select(c.id, c.day, c.created, c.notes, c.win, (c.photo.isnot(None)).label("has_photo"))
+             .where(c.owner == self.owner).order_by(c.day.desc(), c.created.desc()).limit(SEARCH_SCAN))
+        found, total = [], 0
+        with self.db.connect() as conn:
+            for r in conn.execute(q).mappings():
+                text = (r["notes"] or "") + (f"\n\nYour win: {r['win']}" if r["win"] else "")
+                folded, where = _fold(text)
+                if not all(w in folded for w in words):
+                    continue
+                total += 1
+                if len(found) < limit:
+                    spans = [(where[m.start()], where[m.end() - 1] + 1)
+                             for w in words for m in re.finditer(re.escape(w), folded)]
+                    found.append({"id": r["id"], "day": r["day"], "created": r["created"],
+                                  "has_photo": bool(r["has_photo"]), "matches": len(spans),
+                                  "parts": _snippet(text, spans)})
+        return found, total
 
     def newest_day_before(self, day: str) -> str | None:
         """The latest day with a page before `day`, so "Older days" can jump over empty weeks."""
@@ -231,6 +287,12 @@ class Wins:
         w = db.wins.c
         with self.db.connect() as conn:
             return conn.execute(select(func.max(w.day)).where(w.owner == self.owner, w.day < day)).scalar()
+
+    def span(self) -> tuple[str | None, str | None]:
+        w = db.wins.c
+        with self.db.connect() as conn:
+            first, last = conn.execute(select(func.min(w.day), func.max(w.day)).where(w.owner == self.owner)).first()
+        return first, last
 
     def delete_for_user(self) -> int:
         with self.db.begin() as conn:
@@ -308,3 +370,172 @@ def slugs(tasks: list[dict], moves: dict[str, int], today: date, min_moves: int 
                         "has_steps": bool(t.get("steps"))})
     out.sort(key=lambda s: (-s["moves"], -s["waiting_days"]))
     return out[:MAX_SLUGS]
+
+
+# --- search ---------------------------------------------------------------------------------------
+def _fold(text: str) -> tuple[str, list[int]]:
+    """`text` in lower case without accents, and where each folded character came from in `text`."""
+    out: list[str] = []
+    where: list[int] = []
+    for i, ch in enumerate(text):
+        f = "".join(c for c in unicodedata.normalize("NFKD", ch.casefold()) if not unicodedata.combining(c))
+        out.append(f)
+        where.extend([i] * len(f))
+    return "".join(out), where
+
+
+def _snippet(text: str, spans: list[tuple[int, int]]) -> list[dict]:
+    """A short piece of `text` around the first match, as parts with the matches marked."""
+    merged: list[list[int]] = []
+    for s, e in sorted(spans):
+        if merged and s <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    first = merged[0][0]
+    a = max(0, first - SNIPPET // 3)
+    while a > 0 and not text[a - 1].isspace() and first - a < SNIPPET // 2:  # start at a word
+        a -= 1
+    b = min(len(text), a + SNIPPET)
+    while b < len(text) and not text[b].isspace() and b - a < SNIPPET + 30:  # end at one too
+        b += 1
+    parts: list[dict] = []
+    pos = a
+    for s, e in merged:
+        s, e = max(s, a), min(e, b)
+        if s >= e:
+            continue
+        if s > pos:
+            parts.append({"t": text[pos:s], "m": False})
+        parts.append({"t": text[s:e], "m": True})
+        pos = e
+    if pos < b:
+        parts.append({"t": text[pos:b], "m": False})
+    for p in parts:
+        p["t"] = re.sub(r"\s+", " ", p["t"])
+    if parts and a > 0:
+        parts[0]["t"] = "…" + parts[0]["t"].lstrip()
+    if parts and b < len(text):
+        parts[-1]["t"] = parts[-1]["t"].rstrip() + "…"
+    return parts
+
+
+# --- notes -> tasks -------------------------------------------------------------------------------
+# What a handwritten (or typed) line starts with. Checkboxes and bullets look like to-dos; a ticked
+# box or a check mark is already done; a number is a list, but often not of things to do.
+_PREFIX = re.compile(
+    r"^\s*(?:(?P<done>\[[xX✓✔]\]|[☑☒✅✓✔])"
+    r"|(?P<box>\[\s?\]|\(\s?\)|[□☐▢❏❑○])"
+    r"|(?P<todo>to[\s-]?do\s*[:\-–—]|todo(?=\s))"
+    r"|(?P<bullet>[-*+](?=\s)|[•–—·▪◦‣])"
+    r"|(?P<num>\d{1,2}[.)](?=\s)))\s*", re.IGNORECASE)
+_HEADER = re.compile(r"^\s*(?:my\s+)?(?:to[\s-]?dos?|tasks?|things\s+to\s+do)"
+                     r"(?:\s+(?:list|today|tomorrow|this\s+week))?\s*:?\s*$", re.IGNORECASE)
+_DONE_AFTER = re.compile(r"\s*[✓✔☑✅]\s*$")
+_LISTY = {"box", "todo", "bullet", "list"}
+
+
+def note_lines(text: str, today: date, on_list: set[str] | None = None) -> list[dict]:
+    """A journal page's lines, each as a possible task for "Add lines to my list". Lines that look
+    like to-dos (a drawn box, a bullet, "todo:", or a line under a "To do:" heading) are suggested;
+    lines already ticked, already on the list, or with a word that couldn't be read are not.
+    `task` is what Brain dump would make of the line (dates, times, #tags), and `text` is the line
+    to send it, without the bullet."""
+    from .mylist import parse_line
+    on_list = on_list or set()
+    out: list[dict] = []
+    under_heading = False
+    for number, raw in enumerate((text or "").splitlines()[:MAX_LINES * 2], start=1):
+        if not raw.strip():
+            under_heading = False  # a blank line ends a "To do:" list
+            continue
+        if _HEADER.match(raw):
+            under_heading = True
+            continue
+        kinds, rest = set(), raw
+        for _ in range(3):  # "- [ ] call mom": a bullet and a box
+            m = _PREFIX.match(rest)
+            if not m:
+                break
+            kinds.add(m.lastgroup)
+            rest = rest[m.end():]
+        if _DONE_AFTER.search(rest):  # "call mom ✓": ticked at the end of the line
+            kinds.add("done")
+            rest = _DONE_AFTER.sub("", rest)
+        rest = rest.strip()
+        if not re.search(r"\w", rest):
+            continue
+        if under_heading:
+            kinds.add("list")
+        task = parse_line(rest, today)
+        if not task:
+            continue
+        done = "done" in kinds
+        unclear = "[unclear]" in rest.lower()
+        listed = task["content"].casefold() in on_list
+        kind = next((k for k in ("done", "box", "todo", "bullet", "list", "num") if k in kinds), "")
+        out.append({"line": number, "text": rest, "kind": kind, "done": done, "unclear": unclear, "on_list": listed,
+                    "suggest": bool(kinds & _LISTY) and not (done or unclear or listed or task.get("problem"))
+                               and len(rest) <= 200,
+                    "task": task})
+        if len(out) >= MAX_LINES:
+            break
+    return out
+
+
+# --- download my journal --------------------------------------------------------------------------
+README = """Your Next Box journal
+
+One folder for each day (year-month-day), oldest first:
+  notes.txt      what you wrote that day, read from your photos or typed
+  photo-1.jpg    the photos of your journal pages
+  wins.txt       what you finished that day
+
+Only you can download your journal. Keep this somewhere safe, or share it with someone you trust.
+"""
+
+
+def day_notes_text(day: dict, photo_names: dict[str, str]) -> str:
+    """notes.txt for one day: its win, then each page's notes with when it was snapped or written."""
+    from .paper import clock, day_title
+    out = [day_title(day["day"]), ""]
+    out += [f"Your win: {p['win']}\n" for p in day["pages"] if p.get("win")]
+    for p in day["pages"]:
+        name = photo_names.get(p["id"])
+        out.append(f"Snapped at {clock(p['created'])} ({name})" if name else f"Written at {clock(p['created'])}")
+        out.append((p.get("notes") or "").strip() or "(no notes on this page)")
+        out.append("")
+    return "\n".join(out).rstrip() + "\n"
+
+
+def day_wins_text(day: dict) -> str:
+    from .paper import day_title
+    wins = day["wins"]
+    counted: dict[str, int] = {}
+    for item in wins["items"]:
+        counted[item] = counted.get(item, 0) + 1
+    lines = [f"Wins on {day_title(day['day'])}: {wins['count']}", ""]
+    lines += [f"✓ {item}" + (f" ×{n}" if n > 1 else "") for item, n in counted.items()]
+    if wins["linked"]:
+        lines.append(f"{'+' if counted else ''}{wins['linked']} {'more ' if counted else ''}in your linked app")
+    return "\n".join(lines) + "\n"
+
+
+def journal_zip(days: list[dict], photo, out, root: str = "next-box-journal") -> None:
+    """The journal as a .zip written to `out`: a folder for each day with notes.txt, its photos and
+    wins.txt. `photo(page_id)` returns a page's JPEG; photos are fetched one at a time."""
+    import zipfile
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(f"{root}/README.txt", README)
+        for day in days:
+            folder = f"{root}/{day['day']}"
+            names: dict[str, str] = {}
+            for p in day["pages"]:
+                image = photo(p["id"]) if p.get("has_photo") else None
+                if image:
+                    names[p["id"]] = f"photo-{len(names) + 1}.jpg"
+                    z.writestr(f"{folder}/{names[p['id']]}", image, compress_type=zipfile.ZIP_STORED)
+            if day["pages"]:
+                z.writestr(f"{folder}/notes.txt", day_notes_text(day, names))
+            if day["wins"]["count"]:
+                z.writestr(f"{folder}/wins.txt", day_wins_text(day))

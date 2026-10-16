@@ -77,7 +77,8 @@ The label may be stuck on the left page of a paper journal with handwritten note
 (or around the label). If there are handwritten notes that are not part of the printed label,
 transcribe them into "notes" as faithfully as you can: keep the person's own words, line breaks and
 lists, write [unclear] for a word you can't read, and don't add anything. If there are none, leave
-"notes" empty. If the label has a "Today's win:" line with handwriting, put that text in "win"
+"notes" empty. A small box drawn by hand at the start of a note line is a to-do: write it as "[ ] "
+(or "[x] " if the box is ticked). If the label has a "Today's win:" line with handwriting, put that text in "win"
 (not in "notes"). If the photo has notes but no label at all, report no rows and a null code.
 {manifest_hint}"""
 

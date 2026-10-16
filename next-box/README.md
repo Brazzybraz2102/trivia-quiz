@@ -317,6 +317,20 @@ every snapped photo. Paper sizes include **A5** and **half letter** for printing
 regular printer and pasting it in. Journal pages are private: admins can't read them, and `nextbox db
 sql` hides their notes and photos.
 
+Closing the loop:
+- **Add lines to my list** (on a Snap result and on every journal page): the page's lines as
+  checkboxes, with bullets, `[ ]` boxes and `todo:` lines ticked for you and the date, time and #tags
+  Brain dump will read. Only the ticked lines are added.
+- **Search your journal** (top of the Journal tab): every word, any order, accents and case ignored.
+  Tap a result to open that day.
+- **Move to another day** on a page (written after midnight about yesterday), with Undo.
+- Each day shows **its ticket** (tap it to see it whole, or Print on paper) and what read-back
+  **moved or dropped**.
+- **Print my journal page** on a day makes a PDF of that day (photos, notes, wins) for any printer.
+- **Download my journal** (Journal tab, Profile, or before deleting your account): a .zip with a folder
+  for each day (notes.txt, the photos, wins.txt) or one printable PDF, for everything or the last
+  7/30/90/365 days.
+
 ## Getting new people started
 - **Quick start page:** `https://nextbox.braznarkel.com/app/guide.html` explains everything in 10 short
   sections. Send it with an invite. It's also linked from the sign-in page and Settings → Help.
@@ -334,6 +348,9 @@ sql` hides their notes and photos.
 | A note | `nextbox text "Call Sam back"` |
 | Clipboard → to-do app + ticket | your hotkey |
 | Read back | Mark ✓ done, → tomorrow or ✗ drop, then web app → Read back → photo. Deletes and anything uncertain wait for Confirm/Skip. CLI: `nextbox scan photo.jpg`, then `nextbox confirm <scan-id>` |
+| Notes → tasks | Snap result or a journal page → Add lines to my list → tick → Add |
+| Find something you wrote | Journal → Search your journal |
+| A copy of your journal | Journal → Download my journal (.zip or PDF); one day: Print my journal page |
 | History | web app → Printed, or `nextbox printed` |
 | Sign out | web app → Account → Sign out |
 

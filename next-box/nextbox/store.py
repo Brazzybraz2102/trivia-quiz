@@ -140,8 +140,11 @@ class Store:
         return row[0] if row else None
 
     def list_printed(self, limit: int = 50, by: str | None = None, household: str | None = None,
-                     since: str | None = None, offset: int = 0) -> list[dict]:
+                     since: str | None = None, offset: int = 0, until: str | None = None) -> list[dict]:
+        """`since`/`until`: created_at bounds (`until` is exclusive)."""
         q = select(db.tickets.c.record).order_by(db.tickets.c.created_at.desc(), db.tickets.c.id.desc()).limit(limit)
+        if until is not None:
+            q = q.where(db.tickets.c.created_at < until)
         if offset:
             q = q.offset(offset)
         if by is not None:
