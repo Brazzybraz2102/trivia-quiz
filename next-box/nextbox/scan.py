@@ -139,8 +139,23 @@ def prepare_photo(data: bytes) -> tuple[bytes, str]:
     return out.getvalue(), "image/jpeg"
 
 
+class ReadBackFailed(RuntimeError):
+    """Reading a photo failed in a way claude_vision words itself: safe to keep and show staff."""
+
+
+def _why(exc: Exception) -> str:
+    """Why reading a photo failed, as kept in the scan and the event log (the superadmin sees both):
+    the error's type and HTTP status only. Other errors' own words can quote what the model read,
+    which is the person's private journal notes."""
+    if isinstance(exc, ReadBackFailed):
+        return f"{type(exc).__name__}: {exc}"[:300]
+    status = getattr(exc, "status_code", None)
+    return type(exc).__name__ + (f" (status {status})" if isinstance(status, int) else "")
+
+
 def claude_vision(settings) -> VisionFn:
     import anthropic
+    from pydantic import ValidationError
 
     # A stuck request mustn't tie up the server: fail after 90 s instead of the SDK's 10 minutes.
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key or None, timeout=90.0, max_retries=2)
@@ -150,22 +165,25 @@ def claude_vision(settings) -> VisionFn:
         if manifest:
             listing = "\n".join(f"{m['row']}. {m['content']}" for m in manifest)
             hint = f"\nThe label should list these task rows, in this order:\n{listing}"
-        response = client.messages.parse(
-            model=settings.vision_model,
-            max_tokens=4000,
-            output_config={"effort": "medium"},
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": media_type,
-                                                 "data": base64.standard_b64encode(image).decode()}},
-                    {"type": "text", "text": PROMPT.format(manifest_hint=hint)},
-                ],
-            }],
-            output_format=ReadBack,
-        )
+        try:
+            response = client.messages.parse(
+                model=settings.vision_model,
+                max_tokens=4000,
+                output_config={"effort": "medium"},
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": media_type,
+                                                     "data": base64.standard_b64encode(image).decode()}},
+                        {"type": "text", "text": PROMPT.format(manifest_hint=hint)},
+                    ],
+                }],
+                output_format=ReadBack,
+            )
+        except ValidationError:  # its message quotes the reply, notes and all
+            raise ReadBackFailed("vision reply was cut short or declined") from None
         if response.stop_reason == "refusal" or response.parsed_output is None:
-            raise RuntimeError(f"vision model returned no read-back (stop_reason={response.stop_reason})")
+            raise ReadBackFailed(f"vision model returned no read-back (stop_reason={response.stop_reason})")
         return response.parsed_output
 
     return run
@@ -379,7 +397,7 @@ def scan_photo(ctx: Context, vision: VisionFn, image: bytes, media_type: str,
 
 def _failed(ctx: Context, record: dict, image: bytes, hint: dict | None, exc: Exception) -> dict:
     record["status"] = "failed"
-    record["vision_error"] = f"{type(exc).__name__}: {exc}"[:300]
+    record["vision_error"] = _why(exc)
     page = None
     try:
         page = _keep_page(ctx, image, "", record["id"], hint["id"] if hint else None,
@@ -455,7 +473,7 @@ def retry(ctx: Context, vision: VisionFn, scan_id: str, image: bytes, media_type
     except Exception as exc:
         with ctx.store.edit_scan(scan_id) as record:
             record["status"] = "failed"
-            record["vision_error"] = f"{type(exc).__name__}: {exc}"[:300]
+            record["vision_error"] = _why(exc)
             return record
     for key in ("status", "vision_error"):
         claimed.pop(key, None)

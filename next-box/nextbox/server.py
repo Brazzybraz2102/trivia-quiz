@@ -372,6 +372,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     scan_window, calendar_window, connect_window = _Window(30, 3600), _Window(20, 3600), _Window(20, 3600)
     # Downloading the whole journal builds a big file: 10 an hour. One day's page to print: 60.
     journal_window, journal_day_window = _Window(10, 3600), _Window(60, 3600)
+    export_window = _Window(5, 3600)   # Download my data (.zip): every photo and ticket image
+    search_window = _Window(60, 60)    # journal search looks through every page: plenty for typing
+    journal_add_window = _Window(300, 3600)  # new typed pages: far more than anyone writes
     coach_window = _Window(20, 3600)  # the AI helpers, both together: each one is a paid call
     ai = {"coach": coach}             # the real one is made on first use
     connections = Connections(ctx.settings, accounts, vault, **({"builder": builder} if builder else {}),
@@ -707,8 +710,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         at = (accounts.get(caller.name) or {}).get("reset_at") or 0
         if at > time.time() - RESET_HOLD:
             until = date.fromtimestamp(at + RESET_HOLD).strftime("%b %-d")
-            raise HTTPException(403, f"An admin reset your password recently, so downloading your data and "
-                                     f"deleting your account are paused until {until}. This keeps your journal private.")
+            raise HTTPException(403, f"An admin reset your password recently, so downloading all your data and "
+                                     f"deleting your account are paused until {until}.")
 
     @app.post("/auth/consent")
     def consent(request: Request):
@@ -795,6 +798,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
         from . import db as _db
         _reset_hold(caller)
+        if format == "zip" and not export_window.allow(caller.name):  # the heaviest download there is
+            raise HTTPException(429, "That's a lot of downloads this hour. Try again in a bit.")
         user = accounts.get(caller.name)
         mine = my_list(caller)
         with accounts.db.connect() as conn:
@@ -816,7 +821,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         if format == "zip":
             return _export_zip(caller, data)
         return Response(json.dumps(data, indent=2, default=str), media_type="application/json",
-                        headers={"Content-Disposition": f'attachment; filename="next-box-{caller.name}.json"'})
+                        headers={"Content-Disposition": f'attachment; filename="next-box-{caller.name}.json"', **PRIVATE})
 
     def _export_zip(caller: Caller, data: dict):
         """data.json, journal/<page>.jpg for each page with a photo, tickets/<id>.png for each ticket.
@@ -847,7 +852,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             finally:
                 out.close()
         return StreamingResponse(chunks(), media_type="application/zip", headers={
-            "Content-Disposition": f'attachment; filename="next-box-{caller.name}.zip"', "Content-Length": str(size)})
+            "Content-Disposition": f'attachment; filename="next-box-{caller.name}.zip"', "Content-Length": str(size),
+            **PRIVATE})
 
     @app.post("/auth/delete-account")
     def delete_my_account(body: DeleteMeBody, request: Request, response: Response,
@@ -1618,17 +1624,23 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         if rec.get("status") == "failed":  # the photo is kept; staff see why reading it failed
             events.log(caller.name, "scan", ok=False, kind="error", error=rec.get("vision_error", ""),
                        detail={"id": rec["id"]}, household=caller.household)
+        if caller.role == "service":  # Home Assistant and scripts never see the journal
+            return _for_key(caller, rec)
         if rec.get("journal_id"):  # the notes live only in the private journal page: show them back to its owner
             page = Journal(accounts.db, acting_as(caller)).get(rec["journal_id"])
             rec = {**rec, "notes": page["notes"] if page else "", "win": page["win"] if page else ""}
         return rec
 
+    def _for_key(caller: Caller, rec: dict) -> dict:
+        """A read-back as the shared key sees it: not even which journal page it made."""
+        return {k: v for k, v in rec.items() if k != "journal_id"} if caller.role == "service" else rec
+
     @app.get("/scans")
     def scans(limit: int = Query(20, ge=1, le=500), pending: bool = False, caller: Caller = Depends(auth)):
         """Your read-backs, newest first. pending=true: only those with marks still waiting for you."""
         if pending:
-            return [r for r in ctx.store.list_scans(50, by=acting_as(caller)) if _waiting(r)][:limit]
-        return ctx.store.list_scans(limit, by=acting_as(caller))
+            return [_for_key(caller, r) for r in ctx.store.list_scans(50, by=acting_as(caller)) if _waiting(r)][:limit]
+        return [_for_key(caller, r) for r in ctx.store.list_scans(limit, by=acting_as(caller))]
 
     def _own_scan(scan_id: str, caller: Caller) -> dict:
         rec = ctx.store.get_scan(scan_id) if re.fullmatch(r"[A-Za-z0-9-]{4,16}", scan_id) else None
@@ -1638,22 +1650,24 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.get("/scan/{scan_id}")
     def get_scan(scan_id: str, caller: Caller = Depends(auth)):
-        return _own_scan(scan_id, caller)
+        return _for_key(caller, _own_scan(scan_id, caller))
 
+    # Confirm, relabel, retry and undo are a person's taps (a held ✗ deletes a task), so the shared
+    # key can't do them, and can't use them to read the journal page a photo made.
     @app.post("/scan/{scan_id}/confirm")
-    def confirm_scan(scan_id: str, body: ConfirmBody, caller: Caller = Depends(auth)):
+    def confirm_scan(scan_id: str, body: ConfirmBody, caller: Caller = Depends(person)):
         _own_scan(scan_id, caller)
         return run(caller, "scan_confirm", scan.confirm, rctx(caller), scan_id, body.decisions)
 
     @app.post("/scan/{scan_id}/label")
-    def relabel_scan(scan_id: str, body: ScanLabelBody, caller: Caller = Depends(auth)):
+    def relabel_scan(scan_id: str, body: ScanLabelBody, caller: Caller = Depends(person)):
         """Which ticket the photo shows, when the code couldn't be read or didn't match what was typed."""
         _own_scan(scan_id, caller)
         rec = run(caller, "scan_label", scan.relabel, rctx(caller), scan_id, body.label_id[:40])
         return _scan_reply(caller, rec)
 
     @app.post("/scan/{scan_id}/retry")
-    def retry_scan(scan_id: str, caller: Caller = Depends(auth)):
+    def retry_scan(scan_id: str, caller: Caller = Depends(person)):
         """Read a kept photo again after reading it failed. Only ever when the person taps Try again."""
         rec = _own_scan(scan_id, caller)
         if rec.get("status") != "failed":
@@ -1669,7 +1683,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return _scan_reply(caller, run(caller, "scan_retry", scan.retry, rctx(caller), fn, scan_id, image))
 
     @app.post("/scan/{scan_id}/undo")
-    def undo_scan(scan_id: str, body: UndoBody, caller: Caller = Depends(auth)):
+    def undo_scan(scan_id: str, body: UndoBody, caller: Caller = Depends(person)):
         """Reverse one mark the read-back applied (a misread ✓ or →)."""
         _own_scan(scan_id, caller)
         c = rctx(caller)
@@ -1820,9 +1834,13 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                  "steps": list(task.get("steps") or []) if local else [],
                  "due_date": ((task.get("due") or {}).get("date") or "")[:10] or None,
                  "app": None if local else (named() if named else "your linked app")}
-        if coaching.crisis(about["content"], hint):  # not sent anywhere, and not logged
+        has = [str(s.get("text", "")) for s in task.get("steps") or [] if isinstance(s, dict)]  # sent too
+        if coaching.crisis(about["content"], hint, *has):  # not sent anywhere, and not logged
             return {"task": about, "steps": [], "support": coaching.SUPPORT}
         result, ms = ask(caller, "ai_breakdown", coach_fn.breakdown, coaching.breakdown_message(task, hint))
+        if result.concern:  # the model was worried: only the kind nudge, never steps
+            events.log(caller.name, "ai_breakdown", detail={"ms": ms}, household=caller.household)
+            return {"task": about, "steps": [], "support": coaching.SUPPORT}
         steps = coaching.clean_steps(result.steps)
         if not steps:
             events.log(caller.name, "ai_breakdown", ok=False, error="empty", household=caller.household)
@@ -1849,8 +1867,13 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         notes = body.include_notes and has_notes
         week = {"first": first.isoformat(), "last": last.isoformat(),
                 "wins": sum(w["count"] for w in wins.values()), "slugs": len(slug_list), "notes": notes}
-        if notes and coaching.crisis(*(f"{p.get('win') or ''}\n{p.get('notes') or ''}" for p in pages)):
-            return {"week": week, "concern": True, "support": coaching.SUPPORT}  # not sent, not logged
+        # Everything that would be sent is checked first: the task names in the wins and slugs, and the
+        # notes when they're ticked. Crisis words get only the kind nudge: not sent, not logged.
+        said = [i for w in wins.values() for i in w["items"]] + [s.get("content") or "" for s in slug_list]
+        if notes:
+            said += [f"{p.get('win') or ''}\n{p.get('notes') or ''}" for p in pages]
+        if coaching.crisis(*said):
+            return {"week": week, "concern": True, "support": coaching.SUPPORT}
         if not week["wins"] and not slug_list and not notes:
             return {"week": week, "empty": True, "has_notes": has_notes}
         message = coaching.week_message(first, last, wins, slug_list, pages if notes else None)
@@ -1875,6 +1898,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 raise HTTPException(400, "day looks like 2026-10-16") from None
             if not ctx.today() - timedelta(days=366) <= day <= ctx.today() + timedelta(days=1):
                 raise HTTPException(400, "Pick a day in the last year (or tomorrow).")
+        if not journal_add_window.allow(caller.name):
+            raise HTTPException(429, "That's a lot of new pages this hour. Try again in a bit.")
         try:
             page = _journal(caller).add(body.day or ctx.today().isoformat(), body.notes)
         except ValueError as exc:
@@ -1963,6 +1988,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         q = " ".join(q.split())
         if len(q) < 2:
             raise HTTPException(400, "Type at least 2 letters to search.")
+        if not search_window.allow(caller.name):
+            raise HTTPException(429, "That's a lot of searches in a minute. Try again in a moment.")
         found, total = _journal(caller).search(q)
         return {"q": q, "results": found, "total": total}
 
@@ -2022,24 +2049,29 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(400, "paper is letter, a4, a5 or half_letter")
         if day:
             since = until = _past_day(day)
-        else:  # the whole journal (or a stretch of it) waits out an admin's password reset, like Download my data
+        one_page = bool(day) and format == "pdf"  # "Print my journal page"
+        if not one_page:  # any download waits out an admin's password reset, like Download my data
             _reset_hold(caller)
         days = _export_days(caller, since, until)
         if not days:
             raise HTTPException(404, "Nothing in your journal on that day." if day
                                 else "Nothing in your journal for those days yet.")
-        if not (journal_day_window if day else journal_window).allow(caller.name):
+        if not (journal_day_window if one_page else journal_window).allow(caller.name):
             raise HTTPException(429, "That's a lot of downloads this hour. Try again in a bit.")
         journal = _journal(caller)
-        out = tempfile.SpooledTemporaryFile(max_size=32 * 1024 * 1024)
         stamp = day or ctx.today().isoformat()
-        if format == "zip":
-            journal_zip(days, journal.photo, out, root=f"next-box-journal-{stamp}")
-            media, name = "application/zip", f"next-box-journal-{stamp}.zip"
-        else:
+        how = "inline" if one_page else "attachment"  # one day opens, ready to print
+        if format == "pdf":
+            # Sent a sheet at a time while it's drawn, so a long journal starts downloading at once
+            # (a proxy like Cloudflare gives up on a reply that hasn't started after 100 s).
             title = f"Next Box journal, {paper_pdf.day_title(day)}" if day else "Next Box journal"
-            paper_pdf.journal_pdf(days, size, out, journal.photo, title=title)
-            media, name = "application/pdf", f"next-box-journal-{stamp}.pdf"
+            name = f"next-box-journal-{stamp}.pdf"
+            return StreamingResponse(paper_pdf.journal_pdf_chunks(days, size, journal.photo, title=title),
+                                     media_type="application/pdf",
+                                     headers={"Content-Disposition": f'{how}; filename="{name}"', **PRIVATE})
+        out = tempfile.SpooledTemporaryFile(max_size=32 * 1024 * 1024)
+        journal_zip(days, journal.photo, out, root=f"next-box-journal-{stamp}")
+        media, name = "application/zip", f"next-box-journal-{stamp}.zip"
         length = out.tell()
         out.seek(0)
 
@@ -2049,7 +2081,6 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                     yield block
             finally:
                 out.close()
-        how = "inline" if day and format == "pdf" else "attachment"  # one day opens, ready to print
         return StreamingResponse(chunks(), media_type=media, headers={
             "Content-Disposition": f'{how}; filename="{name}"', "Content-Length": str(length), **PRIVATE})
 

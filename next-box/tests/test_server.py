@@ -45,13 +45,18 @@ def test_print_types_and_history(ctx):
 
 
 def test_scan_multipart_then_confirm(ctx, todo):
+    Accounts(ctx.settings.data_dir).set_password("mike", "correct horse", create=True)  # the owner
     c = client(ctx, rows=[{"row": 3, "mark": "drop", "confidence": 0.99}])  # row 3 = task #4
     label = c.post("/print/today", json={}, headers=H).json()
     rec = c.post("/scan", headers=H, data={"label_id": label["id"]},
                  files={"photo": ("p.jpg", tiny_jpeg(), "image/jpeg")}).json()
     assert rec["needs_confirmation"][0]["task_id"] == "4"
     assert not any(call[0] == "delete" for call in todo.calls)
-    out = c.post(f"/scan/{rec['id']}/confirm", json={"decisions": {"3": "confirm"}}, headers=H).json()
+    # Deleting a task is the person's own decision: the shared key can't confirm it.
+    assert c.post(f"/scan/{rec['id']}/confirm", json={"decisions": {"3": "confirm"}}, headers=H).status_code == 403
+    assert not any(call[0] == "delete" for call in todo.calls)
+    assert c.post("/auth/login", json={"username": "mike", "password": "correct horse"}).status_code == 200
+    out = c.post(f"/scan/{rec['id']}/confirm", json={"decisions": {"3": "confirm"}}).json()
     assert out["needs_confirmation"][0]["status"] == "applied"
     assert ("delete", "4") in todo.calls
 

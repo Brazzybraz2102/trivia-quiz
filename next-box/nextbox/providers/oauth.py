@@ -162,7 +162,7 @@ def _token_request(app: str, data: dict, client: httpx.Client | None = None) -> 
     try:
         r = http.post(APPS[app]["token"], data=data, auth=auth, headers={"Accept": "application/json"})
     except httpx.TransportError as exc:
-        raise ProviderError(f"{APPS[app]['name']} didn't answer: {exc}") from exc
+        raise ProviderError(f"{APPS[app]['name']} didn't answer ({type(exc).__name__}). Try again in a minute.") from exc
     body = r.json() if r.content else {}
     if r.status_code >= 400 or "access_token" not in body:
         why = body.get("error_description") or body.get("error") or r.status_code

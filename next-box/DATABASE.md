@@ -27,8 +27,9 @@ Three ways to look inside. Use whichever you like:
 
 - `nextbox db sql` is **read-only** on your real database. Changes are only allowed with
   `--practice --write`.
-- Password hashes, salts and session hashes always show as `•••• (hidden)`. To-do app secrets are
-  encrypted, and their key isn't in the database at all.
+- Password hashes, salts and session hashes (and journal notes and photos) always show as `•••• (hidden)`.
+  On PostgreSQL, a query that would read them any other way (an alias, a WHERE, a function) is refused.
+  To-do app secrets are encrypted, and their key isn't in the database at all.
 - If you ever open the real database in another tool, run `nextbox db backup` first, and don't
   change anything while the server is running.
 

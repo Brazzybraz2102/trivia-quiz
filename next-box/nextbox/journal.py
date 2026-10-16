@@ -219,11 +219,12 @@ class Journal:
         with self.db.connect() as conn:
             for r in conn.execute(q).mappings():
                 text = (r["notes"] or "") + (f"\n\nYour win: {r['win']}" if r["win"] else "")
-                folded, where = _fold(text)
-                if not all(w in folded for w in words):
+                quick = _fold_fast(text)
+                if not all(w in quick for w in words):
                     continue
                 total += 1
-                if len(found) < limit:
+                if len(found) < limit:  # where each match is, only for the pages shown
+                    folded, where = _fold(text)
                     spans = [(where[m.start()], where[m.end() - 1] + 1)
                              for w in words for m in re.finditer(re.escape(w), folded)]
                     found.append({"id": r["id"], "day": r["day"], "created": r["created"],
@@ -381,6 +382,13 @@ def slugs(tasks: list[dict], moves: dict[str, int], today: date, min_moves: int 
 
 
 # --- search ---------------------------------------------------------------------------------------
+def _fold_fast(text: str) -> str:
+    """The same text as _fold gives, without the positions: the whole string at once, so a search
+    can test thousands of pages quickly."""
+    folded = unicodedata.normalize("NFKD", text.casefold())
+    return folded if folded.isascii() else "".join(c for c in folded if not unicodedata.combining(c))
+
+
 def _fold(text: str) -> tuple[str, list[int]]:
     """`text` in lower case without accents, and where each folded character came from in `text`."""
     out: list[str] = []

@@ -82,7 +82,7 @@ class Api:
                 resp = self.http.request(method, path, **{**kwargs, "headers": {**self.headers, **kwargs.get("headers", {})}})
             except httpx.TransportError as exc:
                 if attempt == self.retries:
-                    raise ProviderError(f"{self.name} didn't answer: {exc}") from exc
+                    raise ProviderError(f"{self.name} didn't answer ({type(exc).__name__}). Try again in a minute.") from exc
                 time.sleep(self.backoff * 2 ** attempt)
                 continue
             if resp.status_code in RETRY_STATUS and attempt < self.retries:

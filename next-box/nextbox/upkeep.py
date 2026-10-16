@@ -11,6 +11,7 @@ journal or activity.
 - wins: wins used to be worked out from events (deleted after 180 days) and read-backs (90 days);
   they're kept in their own table now, filled once from what older versions had
 - tasks-autoincrement: SQLite reused a deleted task's id; older tasks tables are rebuilt so it can't
+- vision-errors: a failed read-back's error could quote the journal notes it read; only its type stays
 """
 from __future__ import annotations
 
@@ -88,6 +89,42 @@ def scrub_debug_details(engine: Engine) -> int:
             if isinstance(detail, dict) and ("args" in detail or "result" in detail):
                 kept = {k: v for k, v in detail.items() if k not in ("args", "result")}
                 conn.execute(update(db.events).where(db.events.c.id == event_id).values(detail=kept or None))
+                changed += 1
+    return changed
+
+
+def _type_only(error) -> str | None:
+    """A read-back error that quotes what the model read ("...input_value='{"notes": ...'"), cut to
+    its type name. Anything else is left as it is (None)."""
+    if isinstance(error, str) and "input_value=" in error:
+        return error.split(":", 1)[0].strip()[:80] or "Error"
+    return None
+
+
+def scrub_vision_errors(engine: Engine) -> int:
+    """A failed photo read-back used to keep the error's whole message, which could quote the end of
+    the journal notes it read, in the scan, the event log and the errors a feedback post attached.
+    Keep only the error's type."""
+    changed = 0
+    with engine.begin() as conn:
+        for scan_id, record in conn.execute(select(db.scans.c.id, db.scans.c.record)).all():
+            fixed = _type_only((record or {}).get("vision_error"))
+            if fixed:
+                conn.execute(update(db.scans).where(db.scans.c.id == scan_id).values(
+                    record={**record, "vision_error": fixed}))
+                changed += 1
+        for event_id, error in conn.execute(select(db.events.c.id, db.events.c.error)
+                                            .where(db.events.c.error.like("%input_value=%"))).all():
+            conn.execute(update(db.events).where(db.events.c.id == event_id).values(error=_type_only(error)))
+            changed += 1
+        for fid, debug in conn.execute(select(db.feedback_identities.c.id, db.feedback_identities.c.debug)
+                                       .where(db.feedback_identities.c.debug.is_not(None))).all():
+            errors = (debug or {}).get("recent_errors") if isinstance(debug, dict) else None
+            if errors and any(_type_only(e.get("error")) for e in errors if isinstance(e, dict)):
+                kept = [{**e, "error": _type_only(e.get("error")) or e.get("error")} if isinstance(e, dict) else e
+                        for e in errors]
+                conn.execute(update(db.feedback_identities).where(db.feedback_identities.c.id == fid)
+                             .values(debug={**debug, "recent_errors": kept}))
                 changed += 1
     return changed
 
@@ -215,3 +252,4 @@ def run_startup_fixes(engine: Engine, store) -> None:
     _once(engine, "dates-v1", lambda: normalise_dates(engine))
     _once(engine, "wins-v1", lambda: backfill_wins(engine, store))
     _once(engine, "tasks-autoincrement-v1", lambda: tasks_autoincrement(engine, store))
+    _once(engine, "vision-errors-v1", lambda: scrub_vision_errors(engine))

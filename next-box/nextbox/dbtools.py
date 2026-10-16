@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -51,6 +52,123 @@ def _authorizer(action, table, column, _db, _source):
     if action == sqlite3.SQLITE_READ and (table, column) in UNREADABLE:
         return sqlite3.SQLITE_IGNORE  # the value reads as NULL
     return sqlite3.SQLITE_OK
+
+
+# PostgreSQL has no authorizer, so before a query runs on the real database its plan (EXPLAIN VERBOSE)
+# is checked: the plan names every column the query reads, under the table it reads it from. Those
+# columns may only pass straight through to a result column of their own name (which _mask hides);
+# an alias, a WHERE, a sort, a join, a function or a subquery over them is refused.
+PG_REFUSED = ("On PostgreSQL, db sql can't read journal text or password columns (only show them hidden, "
+              "as in SELECT * FROM journal). Leave them out of WHERE, ORDER BY, functions and aliases.")
+PG_ONE_QUERY = "On PostgreSQL, db sql runs one query at a time: a SELECT (WITH, VALUES, TABLE and EXPLAIN work too)."
+_PROTECTED: dict[str, set[str]] = {}
+for _table, _column in UNREADABLE:
+    _PROTECTED.setdefault(_table, set()).add(_column)
+# A node hands its columns to its parent under the same names (Outer, Inner), unless the parent gives
+# them new ones: a subquery, a CTE, a UNION or a sub-select (InitPlan, SubPlan) does.
+_PASS_LINKS = {"Outer", "Inner"}
+_RENAMING = {"Subquery Scan", "CTE Scan", "WorkTable Scan", "Named Tuplestore Scan", "Append", "Merge Append",
+             "Recursive Union", "SetOp", "Function Scan", "Table Function Scan", "Values Scan", "Foreign Scan",
+             "Custom Scan", "ModifyTable"}
+_NAME_KEYS = {"Node Type", "Parent Relationship", "Relation Name", "Schema", "Alias", "Index Name", "CTE Name",
+              "Subplan Name", "Function Name", "Join Type", "Strategy", "Partial Mode", "Scan Direction",
+              "Operation", "Command", "Sort Method", "Plans"}
+# These run SQL from a string, which a plan can't see into; the planner's statistics hold sample values.
+_RUNS_SQL = re.compile(r"(?<![\w.])(?:pg_catalog\.)?(?:\w+_to_xml\w*|ts_stat|ts_rewrite|dblink\w*)\s*\(", re.I)
+_STATISTICS = {"pg_statistic", "pg_statistic_ext_data"}
+# A quoted name ("j'k") is read whole first, so a quote inside it doesn't start a string.
+_TOKENS = re.compile(r'"(?:[^"]|"")*"|\'(?:[^\']|\'\')*\'')
+_EXPLAIN = re.compile(r"^\s*explain\b(?:\s*\((?:[^()]|\([^()]*\))*\))?(?:\s+(?:analy[sz]e|verbose)\b)*", re.I)
+
+
+def _no_strings(expr: str) -> str:
+    """An expression with its string constants emptied: what they say isn't a column."""
+    return _TOKENS.sub(lambda m: m[0] if m[0].startswith('"') else "''", expr)
+
+
+def _strings(value) -> list[str]:
+    """Every expression in a plan node's fields (not its children or names)."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    if isinstance(value, dict):
+        return [s for k, v in value.items() if k not in _NAME_KEYS for s in _strings(v)]
+    return []
+
+
+def _pg_plan_check(plan: dict) -> list[tuple[int, str]]:
+    """Raise PermissionError when the plan reads a protected column other than straight through.
+    Returns [(result position, column)] for the ones passed straight to the result, whose result
+    column must keep the column's own name (checked once the result's names are known)."""
+    # (node, is the root, its parent sees its columns under their own names). A scan often lists every
+    # column of its table even when the parent uses none (SELECT count(*)): that's fine as long as
+    # the parent doesn't rename them, and anything the parent does with them shows in its own fields.
+    nodes: list[tuple[dict, bool, bool]] = []
+
+    def walk(node: dict, parent_type: str | None) -> None:
+        same_names = parent_type is None or (node.get("Parent Relationship") in _PASS_LINKS
+                                             and parent_type not in _RENAMING)
+        nodes.append((node, parent_type is None, same_names))
+        for child in node.get("Plans") or []:
+            walk(child, node.get("Node Type") or "?")
+    walk(plan, None)
+    aliases: dict[str, set[str]] = {}
+    for node, _, _ in nodes:
+        rel = node.get("Relation Name")
+        if rel in _STATISTICS:
+            raise PermissionError(PG_REFUSED)
+        if rel in _PROTECTED:
+            aliases.setdefault(node.get("Alias") or rel, set()).update(_PROTECTED[rel])
+    if any(_RUNS_SQL.search(_no_strings(s)) for node, _, _ in nodes for s in _strings(node)):
+        raise PermissionError(PG_REFUSED)
+    if not aliases:
+        return []
+    cols = sorted(set().union(*aliases.values()))
+    quals = "|".join(sorted({re.escape(a) for a in aliases} | {re.escape('"' + a.replace('"', '""') + '"')
+                                                                for a in aliases}, key=len, reverse=True))
+    col = "|".join(cols)
+    # A protected column, qualified by a protected table's alias or (one table only) on its own, or a whole row.
+    ref = re.compile(rf'(?<![\w."])(?:(?:{quals})\.)?"?({col})"?(?![\w"(])|(?<![\w."])(?:{quals})\.\*')
+    bare = re.compile(rf'(?:(?:{quals})\.)?"?({col})"?')
+    passed: list[tuple[int, str]] = []
+    for node, root, same_names in nodes:
+        for key, value in node.items():
+            if key in _NAME_KEYS:
+                continue
+            if key == "Output" and isinstance(value, list):
+                for i, item in enumerate(value):
+                    text_ = _no_strings(str(item))
+                    if not ref.search(text_):
+                        continue
+                    straight = bare.fullmatch(text_)
+                    if not (straight and same_names):
+                        raise PermissionError(PG_REFUSED)
+                    if root:
+                        passed.append((i, straight[1]))
+                continue
+            if any(ref.search(_no_strings(s)) for s in _strings(value)):
+                raise PermissionError(PG_REFUSED)
+    return passed
+
+
+def _pg_guard(conn, sql: str) -> list[tuple[int, str]]:
+    """Check one query against the real PostgreSQL database before it runs (see _pg_plan_check)."""
+    lead = _EXPLAIN.match(sql)
+    inner = sql[lead.end():] if lead else sql  # their own EXPLAIN: check what it explains
+    try:
+        result = conn.execute(text("EXPLAIN (VERBOSE, FORMAT JSON) " + inner))
+        plan = result.fetchone()[0]
+        more = result.cursor is not None and result.cursor.nextset()
+    except Exception as exc:  # not a query EXPLAIN takes (COPY, SHOW, two statements, a typo)
+        why = str(getattr(exc, "orig", exc)).strip().splitlines()
+        raise PermissionError(PG_ONE_QUERY + (f" The database said: {why[0]}" if why else "")) from None
+    if more:
+        raise PermissionError(PG_ONE_QUERY)
+    if isinstance(plan, str):
+        plan = json.loads(plan)
+    passed = _pg_plan_check(plan[0]["Plan"])
+    return [] if lead else passed  # EXPLAIN's own result is the plan, never the values
 
 DIAGRAM = """
   households ─┬─< users ─┬─< sessions          ( ─< means "one to many" )
@@ -137,19 +255,22 @@ def run_sql(data_dir: Path, sql: str, practice: bool = False, write: bool = Fals
     engine = db.database(practice_url(data_dir) if practice else data_dir)
     with engine.connect() as conn:
         raw = conn.connection.driver_connection if engine.dialect.name == "sqlite" and not practice else None
+        passed: list[tuple[int, str]] = []
         if not write:
             if engine.dialect.name == "sqlite":
                 conn.exec_driver_sql("PRAGMA query_only = ON")
             else:
-                # PostgreSQL: masking here is by column name only; for a hard guarantee, run `db sql`
-                # as a read-only role without SELECT on users.hash/salt, sessions.token_hash, journal.notes/photo.
                 conn.exec_driver_sql("SET TRANSACTION READ ONLY")
+                if not practice:  # no authorizer here: the query's plan is checked first
+                    passed = _pg_guard(conn, sql)
         if raw is not None:
             raw.set_authorizer(_authorizer)
         try:
             result = conn.execute(text(sql))
             if result.returns_rows:
                 cols = list(result.keys())
+                if any(i >= len(cols) or cols[i] != name for i, name in passed):  # SELECT notes AS n
+                    raise PermissionError(PG_REFUSED)
                 rows = [_mask(cols, tuple(r)) for r in result.fetchmany(limit)]
                 note = f"{len(rows)} row(s)" + (f" (showing the first {limit})" if len(rows) == limit else "")
             else:
