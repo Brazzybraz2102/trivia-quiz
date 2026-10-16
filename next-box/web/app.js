@@ -270,11 +270,24 @@ async function boot() {
 }
 
 $("#noticeOk").onclick = async () => {
-  try { await api("/auth/consent", { method: "POST" }); $("#noticeDialog").close(); boot(); }
+  try {
+    await api("/auth/consent", { method: "POST" });
+    me.consented = true; me.terms_ok = true;  // agreed: closing it now is for good (boot reads them again)
+    $("#noticeDialog").close(); boot();
+  }
   catch (e) { $("#noticeMsg").textContent = errText(e); }
 };
 $("#noticeNo").onclick = () => signOut($("#noticeMsg"));
-$("#noticeDialog").addEventListener("cancel", (e) => e.preventDefault());  // agree, or sign out
+// Agree, or sign out: nothing else closes it (W3-01). closedby="none" in index.html stops Esc; Esc is also
+// stopped as a key, before it can become a close request, for browsers without closedby (Chrome refuses
+// only one close request in a row without a tap in between). Anything that still closes it while the
+// notice waits for an answer opens it again. closedby="none" also turns off the dialog's close watcher, so
+// the phone's back gesture isn't caught here: it goes back as on any page, and the notice is there next time.
+$("#noticeDialog").addEventListener("keydown", (e) => { if (e.key === "Escape") e.preventDefault(); });
+$("#noticeDialog").addEventListener("cancel", (e) => e.preventDefault());
+$("#noticeDialog").addEventListener("close", () => {
+  if (me && (!me.consented || me.terms_ok === false) && !$("#appShell").hidden) $("#noticeDialog").showModal();
+});
 
 // ---------------------------------------------------------------- revision mark
 api("/version").then((v) => {
@@ -1186,9 +1199,9 @@ $$(".seg button").forEach((b) => b.onclick = () => {
 });
 
 function openFeedback() {
+  // After one was sent, a fresh start. Closed before Send, what was typed is still there (W3-02).
+  if (!$("#fbDone").hidden) { $("#fbForm").querySelectorAll("textarea").forEach((t) => t.value = ""); pick("#fbRating", null); }
   $("#fbErr").textContent = ""; $("#fbDone").hidden = true; $("#fbSend").hidden = false;
-  $("#fbForm").querySelectorAll("textarea").forEach((t) => t.value = "");
-  pick("#fbRating", null);
   $("#fbDebugRow").hidden = !me;  // error details exist only for signed-in people
   $("#fbDebug").checked = false;
   $("#fbDialog").showModal();
@@ -1361,11 +1374,12 @@ function copyText(text) {
 }
 // A one-time password, with Copy. It stays put until the next one for the same place replaces it.
 function renderTemp(el, u, pw) {
-  el.innerHTML = `<p>Give <b>${esc(u)}</b> this one-time password. It won't be shown again, and they'll pick their own when they sign in.</p>
+  el.innerHTML = `<p tabindex="-1" data-temphead>Give <b>${esc(u)}</b> this one-time password. It won't be shown again, and they'll pick their own when they sign in.</p>
     <div class="secret">${esc(pw)}</div>
     <div class="row"><button class="plain small" data-copy>Copy</button></div>`;
   el.querySelector("[data-copy]").onclick = () => copyText(pw);
   el.scrollIntoView({ behavior: smooth(), block: "center" });
+  el.querySelector("[data-temphead]").focus({ preventScroll: true });  // a screen reader says it's there (W3-06); Tab goes on to Copy
 }
 function showTemp(u, pw) { renderTemp($("#nuOut"), u, pw); }
 
@@ -1659,12 +1673,17 @@ function focusMain() {
   el.focus({ preventScroll: true });
 }
 // After something you were on is removed: keyboard focus goes to the first of these still on screen
-// (a heading gets tabindex=-1), never back to the top of the page.
+// (a heading gets tabindex=-1), never back to the top of the page. The page only moves if that is off
+// screen or under a bar (the scroll padding), and then just enough to show it (W3-07).
 function focusFirst(...els) {
   const el = els.find((x) => x?.isConnected && x.offsetParent);
   if (!el) return focusMain();
   if (!el.matches("button, a[href], input, select, textarea, [tabindex]")) el.tabIndex = -1;
   el.focus({ preventScroll: true });
+  const r = el.getBoundingClientRect(), pad = getComputedStyle(document.documentElement);
+  if (r.top < (parseFloat(pad.scrollPaddingTop) || 0) || r.bottom > innerHeight - (parseFloat(pad.scrollPaddingBottom) || 0)) {
+    el.scrollIntoView({ block: "nearest" });
+  }
 }
 
 function renderList() {
@@ -1774,7 +1793,9 @@ function renderNow() {
     else { $("#nowText").tabIndex = -1; $("#nowText").focus({ preventScroll: true }); }
   }
 }
-$("#nowMore").onclick = () => { $("#nowText").classList.remove("clamp"); $("#nowMore").hidden = true; };
+$("#nowMore").onclick = () => {  // it hides itself: focus goes to the task's words, all of them now (W3-07)
+  $("#nowText").classList.remove("clamp"); $("#nowMore").hidden = true; focusFirst($("#nowText"));
+};
 $("#nowAgain").onclick = () => { skipped.clear(); renderNow(); $("#nowDone").focus(); };
 $("#nowStart").onclick = () => { $("#dumpText").scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "center" }); $("#dumpText").focus({ preventScroll: true }); };
 
@@ -2136,13 +2157,21 @@ $("#bulkTomorrow").onclick = async () => {
   await loadList();
   $("#printStickers").focus();
 };
+// Closed without doing anything (Esc, Cancel, Close): focus goes back to the button that opened it (W3-08).
+// After Delete or a tag, the picks change, so it goes to Stickers (bulkOpener is cleared first).
+let bulkOpener = null;
 function bulkDialog(title, body, buttons) {
+  bulkOpener = document.activeElement;
   $("#bulkTitle").textContent = title;
   $("#bulkBody").innerHTML = body;
   $("#bulkButtons").innerHTML = buttons;
   $("#bulkDialog").showModal();
 }
-$("#bulkDialog").addEventListener("close", () => { if (!$("#taskDialog").open) $("#printStickers").focus(); });
+$("#bulkDialog").addEventListener("close", () => {
+  const o = bulkOpener; bulkOpener = null;
+  if ($("#taskDialog").open) return;
+  (o?.isConnected && o.offsetParent && o.getAttribute("aria-disabled") !== "true" ? o : $("#printStickers")).focus();
+});
 closeOnBackdrop($("#bulkDialog"));
 $("#bulkTag").onclick = () => {
   if (bulkBusy() || !picked.size) return;
@@ -2163,7 +2192,7 @@ $("#bulkTag").onclick = () => {
     const name = b.dataset.btag, adding = !!b.dataset.add;
     const change = mine.filter((t) => (t.labels || []).includes(name) !== adding);
     $$("#bulkBody [data-btag]").forEach((x) => x.setAttribute("aria-disabled", "true"));
-    $("#bulkDialog").close();
+    bulkOpener = null; $("#bulkDialog").close();
     if (!change.length) return toast(adding ? `They all have #${name} already` : `None of them has #${name}`);
     const ok = await eachPicked(adding ? "Tagging" : "Untagging", change, (t) => api(`/list/${encodeURIComponent(t.id)}`, { method: "PATCH",
       json: { tags: adding ? [...(t.labels || []), name] : (t.labels || []).filter((x) => x !== name) } }));
@@ -2186,7 +2215,7 @@ $("#bulkDelete").onclick = () => {
   $("#bulkCancel").onclick = () => $("#bulkDialog").close();
   $("#bulkCancel").focus();  // the safe choice has focus
   $("#bulkDelGo").onclick = async () => {
-    $("#bulkDialog").close();
+    bulkOpener = null; $("#bulkDialog").close();
     const ok = await eachPicked("Deleting", tasks, (t) => api(`/list/${encodeURIComponent(t.id)}?confirm=true`, { method: "DELETE" }));
     if (!ok.length) return;
     toast(`Deleted ${plural(ok.length, "task")}${ok.missed}`);
@@ -2560,9 +2589,24 @@ function tdDirty() {
     : !!($("#tdContent").value.trim() || stepsNow().length || $("#tdNotes").value.trim());
 }
 // Esc, or the phone's back gesture: never throws away what was typed without asking.
+// Esc is handled as a key, so it never becomes a close request: Chrome lets a page refuse only one close
+// request in a row without a tap in between, so a second "Cancel" closed it anyway (W3-02). The back
+// gesture is still a close request; if the browser closes it after "Cancel", it opens again as it was.
+const tdAsk = () => !tdDirty() || confirm("Close without saving? Your changes will be lost.");
+let tdKeep = null;  // what had focus, when it must open again
+$("#taskDialog").addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || e.defaultPrevented) return;
+  e.preventDefault();
+  if (!tdBusy() && tdAsk()) $("#taskDialog").close();
+});
 $("#taskDialog").addEventListener("cancel", (e) => {
-  if (tdBusy()) return e.preventDefault();  // saving: it closes by itself in a moment
-  if (tdDirty() && !confirm("Close without saving? Your changes will be lost.")) e.preventDefault();
+  // Saving (it closes by itself in a moment), or "Cancel": it stays.
+  if (tdBusy() || !tdAsk()) { e.preventDefault(); if (!e.cancelable) tdKeep = document.activeElement; }
+});
+$("#taskDialog").addEventListener("close", () => {
+  if (!tdKeep) return;
+  const el = tdKeep; tdKeep = null;
+  $("#taskDialog").showModal(); if ($("#taskDialog").contains(el)) el.focus();
 });
 // While there are unsaved changes, the print button says it saves them first.
 const FOCUS_LABEL = $("#tdFocus").textContent;
@@ -2933,7 +2977,7 @@ async function loadInvites() {
   const row = (i) => `<div class="mini" data-code="${esc(i.code)}"><b>${esc(i.code)}</b>
       · ${esc(i.note || "no note")} · ${i.own_household ? "own household" : "joins " + esc(i.household)}${i.beta ? " · beta" : ""}
       · ${i.status === "used" ? (i.used_by === "(deleted account)" ? "used by an account that's since been deleted" : "used by " + esc(i.used_by)) : i.status === "expired" ? "expired" : "open until " + when(i.expires)}
-      ${i.status === "open" ? `<button class="linkish" data-copylink aria-label="Copy the link for ${esc(i.code)}">copy link</button>
+      ${i.status === "open" ? `<button class="linkish" data-copylink aria-label="Copy link for ${esc(i.code)}">copy link</button>
         · <button class="linkish" data-revoke aria-label="Cancel ${esc(i.code)}">cancel</button>` : ""}</div>`;
   // Open codes first; used and expired ones fold away and can be cleared.
   const open = list.filter((i) => i.status === "open"), done = list.filter((i) => i.status !== "open");
@@ -2949,11 +2993,12 @@ async function makeInvite() {
       own_household: $("#ivOwn").checked, days: Number($("#ivDays").value),
       household_id: me.role === "superadmin" ? $("#ivHome").value : null } });
     const link = location.origin + r.link;
-    $("#ivOut").innerHTML = `<p>Send them this code or link. It works once.</p><div class="secret">${esc(r.code)}</div>
+    $("#ivOut").innerHTML = `<p tabindex="-1" data-temphead>Send them this code or link. It works once.</p><div class="secret">${esc(r.code)}</div>
       <div class="muted" style="word-break:break-all">${esc(link)}</div>
       ${["localhost", "127.0.0.1", "::1"].includes(location.hostname) ? `<p class="err">That link only works on this computer, because you opened Next Box as "${esc(location.hostname)}". Send the code instead, or open Next Box at the phone address that <code>nextbox doctor</code> shows and make the invite there.</p>` : ""}
       <div class="row"><button class="plain small" id="ivCopy">Copy link</button></div>`;
     $("#ivCopy").onclick = () => copyText(link);
+    $("#ivOut [data-temphead]").focus();  // a screen reader says the new code is there (W3-06); Tab goes on to Copy link
     $("#ivNote").value = "";
     loadInvites();
   } catch (e) { toast(errText(e), { error: true }); }
@@ -3550,8 +3595,12 @@ function guideOpen() {
   try { return localStorage.getItem("nb_guide_open") === "1"; } catch { return false; }
 }
 function setGuideOpen(open) { try { localStorage.setItem("nb_guide_open", open ? "1" : "0"); } catch {} renderGuide(); }
-$("#guideMini").onclick = () => setGuideOpen(true);
-$("#guideLess").onclick = () => setGuideOpen(false);
+// Each of these hides itself: keyboard focus goes on to what it opened, or back to the other one (W3-07).
+$("#guideMini").onclick = () => {
+  setGuideOpen(true);
+  focusFirst($("#guideSteps .next .title"), $("#guideHead h2"));  // the next step (Tab goes on to its buttons), or the heading when all are done
+};
+$("#guideLess").onclick = () => { setGuideOpen(false); focusFirst($("#guideMini")); };
 $("#guideHide").onclick = async () => {
   await api("/setup/guide/hide", { method: "POST" }).catch(() => {});
   $("#guideCard").hidden = true;
@@ -3610,7 +3659,14 @@ async function loadJournal(more = false, from = "") {
     wireJournal();
   } catch (e) { $("#jDays").innerHTML = `<p class="err">${esc(errText(e))}</p>`; }
 }
-$("#jOlder").onclick = () => loadJournal(true);
+$("#jOlder").onclick = async () => {
+  const had = $$("#jDays .jday").length;
+  await loadJournal(true);
+  // Focus goes to the first day it brought in, where the button was, so Tab carries on through them; with none,
+  // it stays on the button, or "That's everything." once that's all (W3-07).
+  const a = document.activeElement;
+  if (a === $("#jOlder") || !a?.offsetParent) focusFirst($$("#jDays .jday")[had]?.querySelector("h3"), $("#jOlder"), $("#jEnd"));
+};
 
 function winsHtml(w) {
   if (!w.count) return "";
@@ -3714,12 +3770,12 @@ function wireJournal() {
       const day = page.closest(".jday"), kept = jData.get(day?.dataset.day);
       if (kept) kept.pages = kept.pages.filter((p) => p.id !== id);
       const next = page.nextElementSibling?.matches("[data-page]") ? page.nextElementSibling : null;
-      const nextDay = day?.nextElementSibling;
+      const nextDay = day?.nextElementSibling, prevDay = day?.previousElementSibling;  // the oldest day has no next one (R2-04)
       page.remove();
       if (day && !day.querySelector(".jpage, [data-wins], .jwin, .jchanges")) day.remove();
       if (!$("#jDays .jday")) $("#jDays").innerHTML = NO_JOURNAL;
       focusFirst(next?.querySelector("textarea, button"), day?.isConnected ? day.querySelector("h3") : null,
-                 nextDay?.querySelector?.("h3"), $("#journal h2"));
+                 nextDay?.querySelector?.("h3"), prevDay?.querySelector?.("h3"), $("#journal h2"));
       toast("Deleted");
     } catch (e) { toast(errText(e)); }
   });
@@ -3980,7 +4036,10 @@ $("#jFoundList").onclick = async (e) => {  // open the page: that day and older,
   page.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
   page.closest(".jday").querySelector("h3").focus({ preventScroll: true });
 };
-$("#jBackGo").onclick = () => { loadJournal(); window.scrollTo(0, 0); };
+$("#jBackGo").onclick = async () => {
+  const done = loadJournal(); window.scrollTo(0, 0); await done;
+  if (!document.activeElement?.offsetParent) focusFirst($("#journal h2"));  // the button went away with its bar (W3-07)
+};
 
 // ---------------------------------------------------------------- journal: notes -> tasks
 // "Add lines to my list" on a journal page or a Snap result: the lines that look like to-dos are
@@ -4617,8 +4676,28 @@ function closeOnBackdrop(dlg, ok = () => true) {
 closeOnBackdrop($("#meDialog"));
 closeOnBackdrop($("#moreDialog"));
 closeOnBackdrop($("#fbDialog"), () => !$("#fbDone").hidden || !$$("#fbDialog textarea").some((t) => t.value.trim()));  // nothing typed is lost
-$("#fbDialog").addEventListener("cancel", (e) => {  // nor with Esc or the phone's back gesture, without asking
-  if ($("#fbDone").hidden && $$("#fbDialog textarea").some((t) => t.value.trim()) && !confirm("Close without sending? What you typed will be lost.")) e.preventDefault();
+// Nor with Esc or the phone's back gesture, without asking. Esc is handled as a key, as in the task
+// dialog (W3-02): a second "Cancel" in a row closed it anyway. "OK" clears what was typed, as it says;
+// closed any other way, it's kept for the next time Send feedback opens.
+function fbAsk() {
+  if (!$("#fbDone").hidden || !$$("#fbDialog textarea").some((t) => t.value.trim())) return true;
+  if (!confirm("Close without sending? What you typed will be lost.")) return false;
+  $$("#fbDialog textarea").forEach((t) => { t.value = ""; });
+  return true;
+}
+let fbKeep = null;
+$("#fbDialog").addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || e.defaultPrevented) return;
+  e.preventDefault();
+  if (fbAsk()) $("#fbDialog").close();
+});
+$("#fbDialog").addEventListener("cancel", (e) => {
+  if (!fbAsk()) { e.preventDefault(); if (!e.cancelable) fbKeep = document.activeElement; }
+});
+$("#fbDialog").addEventListener("close", () => {
+  if (!fbKeep) return;
+  const el = fbKeep; fbKeep = null;
+  $("#fbDialog").showModal(); if ($("#fbDialog").contains(el)) el.focus();
 });
 // What deleting your account removes, and how to keep a copy first.
 const DELETE_WARNING = `<p class="err">This deletes your account, your list, tags, journal pages and journal photos, tickets and history from Next Box. It can't be undone. Apps you linked (like Todoist) aren't touched.</p>
@@ -4638,11 +4717,11 @@ $("#meDialog").addEventListener("click", async (e) => {
     panel.innerHTML = `${DELETE_WARNING}
       <div class="field"><label for="meDelPw">Your password</label><input type="password" id="meDelPw" autocomplete="current-password"></div>
       <div class="field"><label for="meDelName">Type your username (${esc(me.username)})</label><input type="text" id="meDelName" autocapitalize="none"></div>
-      <div class="row"><button class="go warn small" id="meDelGo">Delete my account forever</button><span class="err" id="meMsg"></span></div>`;
+      <div class="row"><button class="go warn small" id="meDelGo">Delete my account forever</button><span class="err" id="meMsg" role="alert"></span></div>`;
     $("#meDelGo").onclick = async () => {
       try { await api("/auth/delete-account", { method: "POST", json: { password: $("#meDelPw").value, confirm: $("#meDelName").value } });
             startOver("Your account was deleted."); }
-      catch (err) { $("#meMsg").textContent = err.message; }
+      catch (err) { delAccountErr(err, $("#meDelPw"), $("#meDelName"), $("#meMsg")); }
     };
   }
   panel.scrollIntoView({ behavior: smooth(), block: "nearest" });
@@ -4703,13 +4782,24 @@ $("#pDelete").onclick = () => {
   $("#pDeletePanel").innerHTML = `${DELETE_WARNING}
     <div class="field"><label for="pDelPw">Your password</label><input type="password" id="pDelPw" autocomplete="current-password"></div>
     <div class="field"><label for="pDelName">Type your username (${esc(me.username)})</label><input type="text" id="pDelName" autocapitalize="none"></div>
-    <div class="row"><button class="go warn" id="pDelGo">Delete my account forever</button><span class="err" id="pDelMsg"></span></div>`;
+    <div class="row"><button class="go warn" id="pDelGo">Delete my account forever</button><span class="err" id="pDelMsg" role="alert"></span></div>`;
   $("#pDelGo").onclick = async () => {
     try { await api("/auth/delete-account", { method: "POST", json: { password: $("#pDelPw").value, confirm: $("#pDelName").value } });
           startOver("Your account was deleted."); }
-    catch (err) { $("#pDelMsg").textContent = err.message; }
+    catch (err) { delAccountErr(err, $("#pDelPw"), $("#pDelName"), $("#pDelMsg")); }
   };
 };
+// Delete my account didn't go: the message is said aloud (role=alert), and the box it's about is marked,
+// tied to it and focused, so a screen reader knows what to fix (W3-05).
+function delAccountErr(err, pw, name, msg) {
+  msg.textContent = errText(err);
+  const bad = /password didn't match/i.test(err.message) ? pw : /username/i.test(err.message) ? name : null;
+  for (const f of [pw, name]) {
+    if (f === bad) { f.setAttribute("aria-invalid", "true"); f.setAttribute("aria-describedby", msg.id); }
+    else { f.removeAttribute("aria-invalid"); f.removeAttribute("aria-describedby"); }
+  }
+  bad?.focus();
+}
 $("#setJump").onclick = (e) => {
   const b = e.target.closest("[data-jump]"), card = b && document.getElementById(b.dataset.jump);
   if (!card) return;
@@ -4717,6 +4807,10 @@ $("#setJump").onclick = (e) => {
   const h = card.querySelector("h2");  // keyboard and screen readers carry on inside the card
   if (h) { h.tabIndex = -1; h.focus({ preventScroll: true }); }
 };
+// The row's height (it wraps with big text): whatever you Tab to in Settings scrolls clear of it (W3-03, index.html).
+if (window.ResizeObserver) new ResizeObserver(() => {
+  if ($("#setJump").offsetHeight) document.documentElement.style.setProperty("--jumpH", `${$("#setJump").offsetHeight}px`);
+}).observe($("#setJump"));
 
 
 // ---------------------------------------------------------------- keyboard
@@ -5528,13 +5622,15 @@ if ("serviceWorker" in navigator && window.isSecureContext) {
 
 // ---------------------------------------------------------------- FE: keyboard shortcuts
 // n or + Quick add · / search My list · g then l, p, s or j to switch screens · ? the list of them.
-// Letters do nothing while you type in a box or while a sheet is open (Esc closes a sheet).
+// Letters do nothing while you type in a box or while a sheet is open (Esc closes a sheet), or at all with
+// Settings → General → One-key shortcuts off.
 const KEYS_TABS = { l: "mylist", p: "print", s: "scan", j: "journal" };
 let keysG = 0;
 const keysTyping = (el) => !!el?.closest?.("textarea, select, [contenteditable]:not([contenteditable=false])")
   || (el?.tagName === "INPUT" && !["checkbox", "radio", "button", "submit", "reset", "range", "color", "file"].includes(el.type));
 document.addEventListener("keydown", (e) => {
   if (!me || $("#appShell").hidden || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.repeat) return;
+  if (me.prefs?.keyboard_shortcuts === false) { keysG = 0; return; }  // turned off in Settings → General (W3-04)
   if (keysTyping(e.target) || $$("dialog[open]").length) { keysG = 0; return; }
   const k = e.key;
   if (keysG) {

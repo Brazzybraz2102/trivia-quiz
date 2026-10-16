@@ -398,6 +398,7 @@ Closing the loop:
 | Get going on a task | Just one thing → ⏱ Start 5 min: a countdown with Pause and Stop, a soft chime, then Keep going / Done ✓ / Not now |
 | Don't miss a timed task | A note at the top 10 minutes before, with Done, Tomorrow and Snooze (Settings → Focus → Remind me before timed tasks; a notification too if you like) |
 | Add something from any screen | The + at the top (or press n) |
+| Speech input, or keys pressed by accident | Settings → General → One-key shortcuts off (n, /, g, ? do nothing) |
 | From the phone's home screen | Long-press the Next Box icon: Add a task, Snap a page, Print today. Share a photo or text to Next Box from any app |
 | Keyboard | Press ? for the list: n add, / search, g then l, p, s or j to switch screens |
 | History | web app → Printed, or `nextbox printed` |

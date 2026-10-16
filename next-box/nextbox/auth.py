@@ -71,6 +71,8 @@ PREFS = {
     "routine_card": (True, lambda v: isinstance(v, bool)),   # My list's "Print today's label" / "Snap your pages" card
     "remind_before": (10, lambda v: type(v) is int and 0 <= v <= 120),  # minutes before a timed task; 0 = off
     "remind_notify": (False, lambda v: isinstance(v, bool)),  # also a browser notification (asked for on this device)
+    # The one-key shortcuts (n, +, /, ?, g then a letter). Off for speech input, or keys pressed by accident (WCAG 2.1.4).
+    "keyboard_shortcuts": (True, lambda v: isinstance(v, bool)),
 }
 
 # What to tell someone whose setting wasn't saved: plain words, never the setting's key.
