@@ -202,6 +202,73 @@ def test_single_task_prints_mark_urgent_and_repeating_tasks(ctx, drawn):
     assert jobs._when({"due": {"date": "2026-09-28T09:00:00"}}, date(2026, 9, 28), False, True) == "today 9:00a"
 
 
+# ---------------------------------------- W4-09 follow-up: a sticker's "when · how long" never runs into its code
+@pytest.fixture
+def boxes(monkeypatch):
+    """Every piece of text a label draws, with the box it takes: (text, left, top, right, bottom)."""
+    seen: list[tuple[str, float, float, float, float]] = []
+    original = render._Draw.text
+
+    def spy(self, xy, text, fill=None, font=None, *a, **k):
+        if font is not None and not a and not k:
+            _, top, _, bottom = self.textbbox(xy, text, font=font)
+            seen.append((text, xy[0], top, xy[0] + self.textlength(text, font=font), bottom))
+        return original(self, xy, text, fill, font, *a, **k)
+    monkeypatch.setattr(render._Draw, "text", spy)
+    return seen
+
+
+def _code_is_clear(seen, code: str) -> tuple:
+    """The ticket code (what Snap reads) is drawn once, and nothing else is drawn on top of it or too close."""
+    [box] = [b for b in seen if b[0] == f"#{code}"]
+    for other in seen:
+        if other is box or other[4] <= box[2] or other[2] >= box[4]:
+            continue  # the code itself, or not on the code's row
+        assert other[3] + render.STICKER_CODE_GAP <= box[1] + 0.5, (other, box)
+    return box
+
+
+STICKER_WHENS = ("today", "today ↻", "tomorrow 12:45p ↻", "Mon Oct 19 6:00p ↻", "Wed Oct 21 10:30a ↻",
+                 "Mon Oct 19 12:45p ↻", "Wed Sep 30 12:45p", "waiting 123d ↻", "Wed Sep 30 23:45 ↻", "")
+
+
+@pytest.mark.parametrize("big", [True, False])
+@pytest.mark.parametrize("reading", [False, True])
+def test_sticker_meta_never_runs_into_the_code(boxes, big, reading):
+    for when in STICKER_WHENS:
+        for minutes in (None, 5, 15, 60, 90, 24 * 60):
+            for code in ("261016-JCZ5", "261016-WWWW", "261016-MMMM"):
+                boxes.clear()
+                s = render.Sticker(1, "Team sync", when=when, minutes=minutes, big=big)
+                with render.reading_font(reading):
+                    img = render.render_sticker(s, code)
+                box = _code_is_clear(boxes, code)
+                assert box[4] <= img.height - 4, (box, img.height)  # the code isn't cut off at the bottom
+                meta = render._meta_line(s)
+                if meta:  # printed whole, inside the label
+                    [m] = [b for b in boxes if b[0] == meta]
+                    assert m[3] <= render.WIDTH - render.MARGIN, m
+                    beside = not (m[4] <= box[2] or m[2] >= box[4])
+                    # a short one stays beside the code, so a sticker only grows when it has to
+                    assert beside or m[3] + render.STICKER_CODE_GAP > box[1], (m, box)
+
+
+def test_big_repeating_sticker_from_the_app_keeps_its_code_clear(ctx, boxes):
+    """The checker's case: Settings → Sticker size big, "Team sync every mon 12:45pm ~1h", Stickers."""
+    ctx, _, c = site(ctx)
+    assert c.patch("/settings", json={"sticker_size": "big"}).status_code == 200
+    day = date.today() + timedelta(days=3)  # "Mon Oct 19": a later day prints its date, the longest "when"
+    task = c.post("/list", json={"content": "Team sync", "due_date": day.isoformat(), "due_time": "12:45",
+                                 "repeat": "weekly", "minutes": 60}).json()
+    r = c.post("/print/stickers", json={"task_ids": [task["id"]], "dry_run": True})
+    assert r.status_code == 200 and r.json()["status"] == "dry_run", r.text
+    code = r.json()["id"]
+    when = f"{day:%a %b %-d} 12:45p ↻  ·  ~1h"
+    assert when in [b[0] for b in boxes]
+    _code_is_clear(boxes, code)
+    assert c.get(f"/printed/{code}/png").status_code == 200
+
+
 # ------------------------------------------------------------------ W4-07: the "Not today" line stays inside the label
 def test_not_today_line_stays_inside_the_margin_with_one_ellipsis(drawn):
     words = ("call the insurance company about claim dentist plants water sam back weekend plans dry cleaning "

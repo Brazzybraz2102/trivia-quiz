@@ -370,6 +370,8 @@ other models (the QL-1110NWB prints black only).
 **Print types** (all manual, all through `jobs._finish`):
 - **Stickers**: one task per small label, cut apart, to stick where the task happens. Each shows
   its tag band, the task big, when, how long, the next tiny step, a numbered box and the code.
+  "When · how long" sits beside the code with a clear gap, or on its own line above it when it would
+  come closer (big stickers, "Mon Oct 19 12:45p ↻  ·  ~1h"), so nothing is printed over the code Snap reads.
 - **Tear-off strips**: one label, one strip per task with dashed cut lines.
 - **Just one thing**: one task, huge, with its tiny steps (every open one, up to 12) and "start by" time
   (due time minus the estimate; the when · about · start by line only breaks between those bits). Picks

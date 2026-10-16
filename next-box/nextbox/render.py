@@ -569,6 +569,9 @@ def _meta_line(s: Sticker) -> str:
     return "  ·  ".join(bits)
 
 
+STICKER_CODE_GAP = 16  # at least this much white between a sticker's "when · how long" and its code
+
+
 def render_sticker(s: Sticker, code: str) -> Image.Image:
     """One task on its own small label, to stick where the task happens (the bill, the door, the car)."""
     canvas = Image.new("L", (WIDTH, 800), 255)
@@ -603,11 +606,25 @@ def render_sticker(s: Sticker, code: str) -> Image.Image:
     d.line((left, y, right, y), fill=0, width=2)
     y += 8
     meta_f = _font(30 if s.big else 24, True)
-    if meta:
-        d.text((left, y), meta, font=meta_f, fill=0)
     cw = d.textlength(f"#{code}", font=foot_f)
+    own_row = bool(meta) and d.textlength(meta, font=meta_f) > right - left - cw - STICKER_CODE_GAP
+    if own_row:
+        # The code is what Snap reads, so nothing is printed over it: when "when · how long" would reach
+        # it (big type, "Mon Oct 19 12:45p ↻  ·  ~1h 30m"), it goes above the code, breaking only between bits.
+        rows: list[str] = []
+        for bit in meta.split("  ·  "):
+            joined = f"{rows[-1]}  ·  {bit}" if rows else ""
+            if joined and d.textlength(joined, font=meta_f) <= right - left:
+                rows[-1] = joined
+            else:
+                rows += _wrap(d, bit, meta_f, right - left)
+        for line in rows:
+            d.text((left, y), line, font=meta_f, fill=0)
+            y += meta_f.size + 8
+    elif meta:
+        d.text((left, y), meta, font=meta_f, fill=0)
     d.text((right - cw, y + 2), f"#{code}", font=foot_f, fill=0)
-    y += meta_f.size + 8 + MARGIN // 2
+    y += (foot_f.size - 2 if own_row else meta_f.size) + 8 + MARGIN // 2
     return canvas.crop((0, 0, WIDTH, y)).convert("RGB")
 
 
