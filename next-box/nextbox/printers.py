@@ -16,7 +16,7 @@ from sqlalchemy import and_, delete, func, insert, select, update
 
 from . import db
 from .config import Settings
-from .printer import COLORS, DRIVERS, PrinterConfig, _host_port, legacy_config
+from .printer import BROTHER_LABELS, BROTHER_MODELS, COLORS, DRIVERS, WIDE_MODELS, PrinterConfig, _host_port, legacy_config
 
 # Why a ticket is being printed. People map each reason to a label color in Settings.
 REASONS = {
@@ -131,10 +131,25 @@ def validate(data: dict, restricted: bool = False) -> PrinterConfig:
     ink = data.get("ink", "black")
     if ink not in ("black", "black_red") or (ink == "black_red" and driver != "brother_ql"):
         raise PrinterError("black+red ink is only for Brother QL printers with a black+red roll")
+    if driver == "brother_ql":
+        # The model and label size go straight to the printer's raster commands, so only known ones.
+        model = str(data.get("model") or "QL-1110NWB").strip().upper()
+        if model not in BROTHER_MODELS:
+            raise PrinterError("pick the Brother model from the list (it's on the front of the printer)")
+        label = str(data.get("label") or "62").strip().lower()
+        if label not in {i for i, _, _ in BROTHER_LABELS}:
+            raise PrinterError("pick the label size from the list (it's on the roll's box)")
+        if label.startswith("pt") != model.startswith("PT-"):
+            raise PrinterError("P-touch tape fits P-touch (PT) printers only, and QL labels fit QL printers only")
+        if label.startswith("102") and model not in WIDE_MODELS:
+            raise PrinterError("102 mm labels fit the QL-1000 series only")
+        data = {**data, "model": model, "label": label}
     if ink == "black_red" and not str(data.get("model") or "QL-1110NWB").upper().startswith("QL-8"):
         # Only the QL-800 series has the second (red) print head; a QL-1100/1110 prints black only.
         raise PrinterError("only the Brother QL-800, QL-810W and QL-820NWB print red. "
                            "Other Brother models print black only; use colored label rolls instead")
+    if ink == "black_red" and data.get("label") != "62":
+        raise PrinterError("the black + red roll (DK-22251) is 62 mm continuous: pick that label size")
     try:
         width = int(data.get("width_px") or DRIVERS[driver]["width"])
         dpi = int(data.get("dpi") or DRIVERS[driver]["dpi"])

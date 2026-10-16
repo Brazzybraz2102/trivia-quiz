@@ -59,7 +59,7 @@
   .user .top { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .user .top b { margin-right:4px; }
   .ev { font:13px/1.4 ui-monospace, monospace; border-top:1px solid var(--line); padding:6px 0; cursor:pointer; word-break:break-word; }
-  .ev pre { white-space:pre-wrap; margin:6px 0 0; font-size:12px; background:var(--bg); padding:8px; border-radius:6px; max-height:320px; overflow:auto; }
+  .ev pre { white-space:pre-wrap; margin:6px 0 0; font-size:12px; background:var(--bg); padding:8px; border-radius:6px; max-height:320px; overflow:auto; cursor:text; }
   .kv { display:grid; grid-template-columns:max-content 1fr; gap:4px 12px; font-size:14px; }
   .kv dt { color:var(--muted); } .kv dd { margin:0; word-break:break-word; }
   .secret { font:600 20px ui-monospace, monospace; letter-spacing:.05em; padding:10px; background:var(--bg); border-radius:8px; text-align:center; margin:8px 0; }
@@ -502,15 +502,20 @@
   <section id="admin">
     <div class="card"><h2>Printers</h2>
       <div id="printerList" class="muted">…</div>
-      <details style="margin-top:10px"><summary><b>Add a printer</b></summary>
-        <div class="field"><label for="npDriver">Kind of printer</label><select id="npDriver"></select></div>
-        <div class="field"><label for="npName">Name</label><input type="text" id="npName" placeholder="Office, Kitchen, Red roll…"></div>
+      <div id="prOut" aria-live="polite"></div>
+      <details id="npForm" style="margin-top:10px"><summary><b id="npTitle">Add a printer</b></summary>
+        <div class="field"><label for="npDriver">Kind of printer</label><select id="npDriver" style="max-width:100%"></select></div>
+        <div class="field"><label for="npName">Name</label><input type="text" id="npName" maxlength="40" placeholder="Office, Kitchen, Red roll…"></div>
         <div class="field"><label for="npAddress">Address</label><input type="text" id="npAddress" autocapitalize="none"><div class="muted" id="npHint"></div></div>
+        <div class="field" id="npBrother"><div class="row" style="margin-top:0">
+          <div><label for="npModel">Model</label><select id="npModel"></select></div>
+          <div style="min-width:0"><label for="npLabel">Label size</label><select id="npLabel" style="max-width:100%"></select></div>
+        </div></div>
         <div class="field"><label for="npColor">Label color loaded</label><select id="npColor"></select></div>
         <div class="field" id="npInkRow"><label><input type="checkbox" id="npInk"> Black + red roll (DK-22251): print overdue tags in red</label></div>
         <div class="field"><label for="npWidth">Print width (dots)</label><input type="number" id="npWidth" style="width:120px"> <span class="muted">58 mm ≈ 384, 80 mm ≈ 576, 62 mm QL = 696, 4 in @203 dpi = 812</span></div>
         <div class="field" id="npHeightRow"><label for="npHeight">Label height (mm, die-cut only)</label><input type="number" id="npHeight" style="width:120px" placeholder="0 = continuous"></div>
-        <div class="row"><button class="go" id="npGo">Add printer</button><span class="err" id="npMsg"></span></div>
+        <div class="row"><button class="go" id="npGo">Add printer</button><button class="plain" id="npCancel" hidden>Cancel</button><span class="err" id="npMsg"></span></div>
       </details>
     </div>
     <div class="card"><h2>Invite people</h2>
@@ -533,8 +538,8 @@
       <div id="users">…</div>
     </div>
     <div class="card" id="addCard"><h2>Add someone</h2>
-      <div class="row"><input type="text" id="nuName" placeholder="username" autocapitalize="none" style="max-width:220px">
-        <select id="nuRole"><option value="user">user</option><option value="admin" data-min="superadmin">admin</option><option value="superadmin" data-min="superadmin">superadmin</option></select>
+      <div class="row"><input type="text" id="nuName" placeholder="username" aria-label="Username" autocapitalize="none" style="max-width:220px">
+        <select id="nuRole" aria-label="Role"><option value="user">user</option><option value="admin" data-min="superadmin">admin</option><option value="superadmin" data-min="superadmin">superadmin</option></select>
         <label class="muted"><input type="checkbox" id="nuBeta"> beta tester</label>
         <button class="go" id="nuGo">Create</button></div>
       <div id="nuOut"></div>
@@ -561,6 +566,9 @@
         <span class="muted" id="suCount"></span>
       </div>
       <div id="suNew"></div>
+      <details style="margin-top:10px"><summary><b id="suHomesTitle">Households</b></summary>
+        <p class="muted">Rename a household, or delete one nobody is in. To empty one, move or remove its people with Manage.</p>
+        <div id="suHomes"></div></details>
     </div>
     <div class="card">
       <div class="bulkbar" id="suBulk" hidden>
@@ -572,6 +580,7 @@
         <button class="plain small" data-bulk="beta_off">Beta off</button>
         <button class="linkish" id="suClear" style="margin-left:auto">Clear</button>
       </div>
+      <div id="suBulkOut" class="pending" role="status" hidden></div>
       <label class="muted"><input type="checkbox" id="suAll"> Select everyone shown</label>
       <div id="suList">…</div>
     </div>
@@ -579,10 +588,11 @@
 
   <section id="usage">
     <div class="card"><h2>How people use Next Box</h2>
-      <p class="muted">Everyone has accepted the data notice (see People). Feedback stays anonymous and isn't included here.</p>
+      <p class="muted"><span id="uConsent"></span> Feedback stays anonymous and isn't included here.</p>
       <div class="row"><select id="uDays" aria-label="Period"><option value="7">last 7 days</option><option value="30" selected>last 30 days</option><option value="90">last 90 days</option></select></div>
       <div id="uTotals" class="kv" style="margin-top:10px"></div>
-      <div id="uChart" class="bars"></div>
+      <div id="uChart" class="bars" role="img"></div>
+      <div class="muted" id="uChartCap" style="display:flex;justify-content:space-between;gap:8px;font-size:12px;margin-top:4px"></div>
     </div>
     <div id="uPeople"></div>
     <div class="card" id="uDetail" hidden><h2>Tickets: <span id="uWho"></span></h2><div id="uTickets"></div></div>
@@ -688,7 +698,7 @@
   <div class="row" style="justify-content:flex-end"><button class="plain" id="meClose">Close</button></div>
 </dialog>
 <dialog id="userDialog">
-  <h2 id="udName">…</h2>
+  <h2 id="udName" tabindex="-1">…</h2>
   <div class="muted" id="udSub"></div>
   <h3>Profile</h3>
   <div class="field"><label for="udEmail">Email</label><input type="text" id="udEmail" autocapitalize="none" placeholder="optional"></div>
@@ -715,7 +725,7 @@
   <h3>What's going on</h3>
   <div id="udInfo" class="muted"></div>
   <h3>Delete</h3>
-  <p class="muted">Removes the account, their built-in list and tags. Their anonymous feedback stays, unlinked. Type their username to confirm.</p>
+  <p class="muted">Removes the account and everything Next Box keeps about them: their built-in list, tags, journal pages and photos, tickets, read-backs and activity. Tasks in a linked to-do app stay in that app, and their anonymous feedback stays, unlinked. Type their username to confirm.</p>
   <div class="row"><input type="text" id="udConfirm" autocapitalize="none" style="max-width:200px" aria-label="Type the username to confirm">
     <button class="go warn" id="udDelete" disabled>Delete account</button></div>
   <div class="row" style="justify-content:flex-end"><button class="plain" id="udClose">Close</button></div>

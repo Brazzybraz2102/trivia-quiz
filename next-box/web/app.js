@@ -206,58 +206,119 @@ $("#defPrinter").onchange = async () => {
   catch (e) { toast(e.message); }
 };
 
-async function loadPrinters() {
-  try {
-    printOpts = await api("/printing-options");
-    const status = await api("/admin/printers/status").catch(() => ({}));
-    const ps = printOpts.printers;
-    $("#printerList").innerHTML = ps.map((p) => `<div class="user" data-pid="${esc(p.id)}"><div class="top">
-        <span class="dot ${status[p.id] ? "on" : "off"}" title="${status[p.id] ? "reachable" : "not answering"}"></span>
-        <b>${esc(p.name)}</b> <span class="muted">${esc(printOpts.drivers[p.driver]?.name || p.driver)}</span></div>
-      <div class="muted">${esc(p.address)} · ${p.width_px} dots${p.ink === "black_red" ? " · black + red roll" : ""}</div>
-      <div class="row">${sw(p.stock_color)}<select class="small" data-p="color" aria-label="Label color">${printOpts.colors.map((c) => `<option ${c === p.stock_color ? "selected" : ""}>${c}</option>`).join("")}</select>
-        <button class="plain small" data-p="preview">Test (preview)</button><button class="plain small" data-p="print">Test print</button>
-        <button class="plain small" data-p="remove">Remove</button></div></div>`).join("") || "No printers yet. Add one below.";
-    if (!$("#npDriver").options.length) {
-      $("#npDriver").innerHTML = Object.entries(printOpts.drivers).map(([k, d]) => `<option value="${k}">${esc(d.name)}</option>`).join("");
-      $("#npColor").innerHTML = printOpts.colors.map((c) => `<option>${c}</option>`).join("");
-      $("#npDriver").onchange = driverHints; driverHints();
-    }
-  } catch (e) { $("#printerList").textContent = e.message; }
+let printerStatus = {};  // printer id → answered (true/false), from the last check; null: couldn't check
+const labelName = (id) => printOpts.drivers.brother_ql?.labels?.find((l) => l.id === id)?.name || `${id} mm`;
+
+// The list shows straight away; whether each printer answers fills in when the (slower) check is back.
+async function loadPrinters(check = true) {
+  try { printOpts = await api("/printing-options"); }
+  catch (e) { $("#printerList").textContent = errText(e); return; }
+  const ps = printOpts.printers;
+  $("#printerList").innerHTML = ps.map((p) => `<div class="user" data-pid="${esc(p.id)}"><div class="top">
+      <span class="dot" aria-hidden="true"></span><b>${esc(p.name)}</b> <span class="muted pstate"></span>
+      <span class="muted">${esc(printOpts.drivers[p.driver]?.name || p.driver)}</span></div>
+    <div class="muted">${esc(p.address)}${p.driver === "brother_ql" ? ` · ${esc(p.model)} · ${esc(labelName(p.label))}` : ""} · ${p.width_px} dots${p.ink === "black_red" ? " · black + red roll" : ""}</div>
+    <div class="row">${sw(p.stock_color)}<select class="small" data-p="color" aria-label="Label color for ${esc(p.name)}">${printOpts.colors.map((c) => `<option ${c === p.stock_color ? "selected" : ""}>${c}</option>`).join("")}</select>
+      <button class="plain small" data-p="edit">Edit</button>
+      <button class="plain small" data-p="preview">Test (preview)</button><button class="plain small" data-p="print">Test print</button>
+      <button class="plain small" data-p="remove">Remove</button></div></div>`).join("") || "No printers yet. Add one below.";
+  showPrinterStatus();
+  if (!$("#npDriver").options.length) {
+    const bq = printOpts.drivers.brother_ql;
+    $("#npDriver").innerHTML = Object.entries(printOpts.drivers).map(([k, d]) => `<option value="${k}">${esc(d.name)}</option>`).join("");
+    $("#npColor").innerHTML = printOpts.colors.map((c) => `<option>${c}</option>`).join("");
+    $("#npModel").innerHTML = bq.models.map((m) => `<option ${m === "QL-1110NWB" ? "selected" : ""}>${esc(m)}</option>`).join("");
+    $("#npLabel").innerHTML = bq.labels.map((l) => `<option value="${esc(l.id)}">${esc(l.name)}</option>`).join("");
+    $("#npDriver").onchange = $("#npModel").onchange = driverHints;
+    driverHints();
+  }
+  if (!check || !ps.length) return;
+  api("/admin/printers/status").then((s) => { printerStatus = s; })
+    .catch(() => { ps.forEach((p) => { if (!(p.id in printerStatus)) printerStatus[p.id] = null; }); })
+    .finally(showPrinterStatus);
 }
+function showPrinterStatus() {
+  $$("#printerList [data-pid]").forEach((row) => {
+    const s = printerStatus[row.dataset.pid];
+    row.querySelector(".dot").className = "dot" + (s === true ? " on" : s === false ? " off" : "");
+    row.querySelector(".pstate").textContent = s === true ? "online" : s === false ? "not answering" : s === null ? "couldn't check" : "checking…";
+  });
+}
+const labelWidth = () => printOpts.drivers.brother_ql.labels.find((l) => l.id === $("#npLabel").value)?.width || 696;
 function driverHints() {
-  const d = printOpts.drivers[$("#npDriver").value];
-  $("#npHint").textContent = "e.g. " + d.address; $("#npWidth").value = d.width;
-  $("#npInkRow").hidden = $("#npDriver").value !== "brother_ql";
-  $("#npHeightRow").hidden = !["zpl", "tspl"].includes($("#npDriver").value);
+  const kind = $("#npDriver").value, d = printOpts.drivers[kind], bq = kind === "brother_ql";
+  $("#npHint").textContent = "e.g. " + d.address; $("#npWidth").value = bq ? labelWidth() : d.width;
+  $("#npBrother").hidden = !bq;
+  $("#npInkRow").hidden = !bq || !$("#npModel").value.startsWith("QL-8");  // only the QL-800 series prints red
+  if ($("#npInkRow").hidden) $("#npInk").checked = false;
+  $("#npHeightRow").hidden = !["zpl", "tspl"].includes(kind);
 }
+$("#npLabel").onchange = () => { $("#npWidth").value = labelWidth(); if ($("#npLabel").value !== "62") $("#npInk").checked = false; };
+$("#npInk").onchange = () => { if ($("#npInk").checked) { $("#npLabel").value = "62"; $("#npWidth").value = labelWidth(); } };  // DK-22251 is 62 mm
+
+// One form adds a printer or, after Edit, saves changes to it (same id, so people's usual printer stays).
+function editPrinter(p) {
+  $("#npDriver").value = p.driver;
+  if (p.driver === "brother_ql") { $("#npModel").value = p.model; $("#npLabel").value = p.label; }
+  driverHints();
+  $("#npName").value = p.name; $("#npAddress").value = p.address; $("#npColor").value = p.stock_color;
+  $("#npInk").checked = p.ink === "black_red"; $("#npWidth").value = p.width_px; $("#npHeight").value = p.label_height_mm || "";
+  $("#npGo").dataset.pid = p.id; $("#npGo").textContent = "Save printer";
+  $("#npTitle").textContent = `Edit ${p.name}`; $("#npCancel").hidden = false; $("#npMsg").textContent = "";
+  $("#npForm").open = true; $("#npForm").scrollIntoView({ behavior: "smooth", block: "nearest" }); $("#npName").focus();
+}
+function resetPrinterForm() {
+  delete $("#npGo").dataset.pid; $("#npGo").textContent = "Add printer";
+  $("#npTitle").textContent = "Add a printer"; $("#npCancel").hidden = true; $("#npMsg").textContent = "";
+  $("#npName").value = $("#npAddress").value = $("#npHeight").value = "";
+  $("#npColor").value = "white"; $("#npInk").checked = false; $("#npModel").value = "QL-1110NWB"; $("#npLabel").value = "62";
+  if (printOpts?.drivers && $("#npDriver").options.length) driverHints();
+}
+$("#npCancel").onclick = () => { resetPrinterForm(); $("#npForm").open = false; };
 $("#npGo").onclick = async () => {
   $("#npMsg").textContent = "";
+  const pid = $("#npGo").dataset.pid, kind = $("#npDriver").value;
+  const body = { driver: kind, name: $("#npName").value, address: $("#npAddress").value, stock_color: $("#npColor").value,
+    ink: $("#npInk").checked ? "black_red" : "black", width_px: Number($("#npWidth").value) || null,
+    label_height_mm: Number($("#npHeight").value) || 0 };
+  if (kind === "brother_ql") Object.assign(body, { model: $("#npModel").value, label: $("#npLabel").value });
   try {
-    await api("/admin/printers", { method: "POST", json: { driver: $("#npDriver").value, name: $("#npName").value,
-      address: $("#npAddress").value, stock_color: $("#npColor").value, ink: $("#npInk").checked ? "black_red" : "black",
-      width_px: Number($("#npWidth").value) || null, label_height_mm: Number($("#npHeight").value) || 0 } });
-    $("#npName").value = $("#npAddress").value = ""; toast("Printer added"); loadPrinters(); loadLabels();
-  } catch (e) { $("#npMsg").textContent = e.message; }
+    await api(pid ? `/admin/printers/${encodeURIComponent(pid)}` : "/admin/printers", { method: pid ? "PATCH" : "POST", json: body });
+    toast(pid ? "Printer saved" : "Printer added");
+    resetPrinterForm(); if (pid) $("#npForm").open = false;
+    loadPrinters(); loadLabels();
+  } catch (e) { $("#npMsg").textContent = errText(e); }
 };
 $("#printerList").addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-p]"); if (!b) return;
-  const pid = b.closest("[data-pid]").dataset.pid;
+  const pid = b.closest("[data-pid]").dataset.pid, p = printOpts.printers.find((x) => x.id === pid);
+  if (!p) return;
   try {
-    if (b.dataset.p === "remove") { if (!confirm("Remove this printer?")) return; await api(`/admin/printers/${pid}`, { method: "DELETE" }); }
-    else {
+    if (b.dataset.p === "edit") return editPrinter(p);
+    if (b.dataset.p === "remove") {
+      const n = p.usual_for || 0;
+      if (!confirm(`Remove ${p.name}?` + (n ? ` It's the usual printer for ${n} ${n === 1 ? "person" : "people"}; their tickets will go to the first printer in the list instead.` : ""))) return;
+      await api(`/admin/printers/${encodeURIComponent(pid)}`, { method: "DELETE" });
+      toast(`Removed ${p.name}`);
+      if ($("#npGo").dataset.pid === pid) { resetPrinterForm(); $("#npForm").open = false; }
+    } else {
       const real = b.dataset.p === "print";
-      if (real && !confirm("Send a real test print?")) return;
-      const r = await api(`/admin/printers/${pid}/test?dry_run=${!real}`, { method: "POST" });
-      $("#nuOut").innerHTML = `<p>${r.status === "printed" ? "Printed" : "Preview"} on ${esc(r.printer.name)}:</p><img src="${png(r.id)}" style="max-width:100%;border:1px solid var(--line);border-radius:6px">`;
+      if (real && !confirm(`Send a real test print to ${p.name}?`)) return;
+      const r = await api(`/admin/printers/${encodeURIComponent(pid)}/test?dry_run=${!real}`, { method: "POST" });
+      const sent = r.status === "printed";
+      const name = esc(r.printer.name);
+      $("#prOut").innerHTML = `<p>${sent ? `Printed on ${name}:` : real ? `Printing is paused or set to preview, so nothing went to ${name}. Here's the preview:` : `Preview for ${name}:`}</p>
+        <img src="${png(r.id)}" alt="Test label for ${esc(r.printer.name)}" style="max-width:100%;border:1px solid var(--line);border-radius:6px">`;
+      $("#prOut").scrollIntoView({ behavior: "smooth", block: "nearest" });
+      if (sent) toast(`Sent to ${r.printer.name}`);
     }
-    loadPrinters(); loadLabels();
-  } catch (err) { toast(err.message); }
+    loadPrinters(false); loadLabels();
+  } catch (err) { toast(errText(err)); }
 });
 $("#printerList").addEventListener("change", async (e) => {
   const sel = e.target.closest("select[data-p=color]"); if (!sel) return;
-  try { await api(`/admin/printers/${sel.closest("[data-pid]").dataset.pid}`, { method: "PATCH", json: { stock_color: sel.value } }); toast("Saved"); loadPrinters(); loadLabels(); }
-  catch (err) { toast(err.message); }
+  try { await api(`/admin/printers/${encodeURIComponent(sel.closest("[data-pid]").dataset.pid)}`, { method: "PATCH", json: { stock_color: sel.value } }); toast("Saved"); loadPrinters(false); loadLabels(); }
+  catch (err) { toast(errText(err)); }
 });
 
 // ---------------------------------------------------------------- usage (superadmin)
@@ -268,12 +329,22 @@ async function loadUsage() {
     const t = u.totals;
     $("#uTotals").innerHTML = [["People", `${t.people} (${t.active} active)`], ["Tickets", `${t.tickets} (${t.printed} printed, ${t.tickets - t.printed} previews)`], ["Read-backs", t.scans]]
       .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
-    const max = Math.max(1, ...u.series.map((d) => d.tickets + d.scans));
-    $("#uChart").innerHTML = u.series.map((d) => `<div style="height:${Math.round((d.tickets + d.scans) / max * 100)}%" title="${d.date}: ${d.tickets} tickets, ${d.scans} scans, ${d.people} people"></div>`).join("");
+    const n = u.people.filter((p) => !p.consented).length;
+    $("#uConsent").innerHTML = n ? `${n} ${n === 1 ? "person hasn't" : "people haven't"} accepted the data notice yet (marked below). <button class="linkish" id="uNoConsent">See who in Users</button>.`
+                                 : "Everyone has accepted the data notice.";
+    $("#uNoConsent")?.addEventListener("click", () => { $("#suStatus").value = "no_consent"; goto("superusers"); });
+    // One bar a day (or a week, for longer periods), described in words too: titles don't show on phones.
+    const s = u.series, week = u.bucket === "week", total = (d) => d.tickets + d.scans;
+    const day = (iso) => new Date(iso + "T12:00").toLocaleDateString([], { month: "short", day: "numeric" });
+    const max = Math.max(0, ...s.map(total)), peak = s.find((d) => total(d) === max);
+    $("#uChart").innerHTML = s.map((d) => `<div style="height:${Math.round(total(d) / Math.max(1, max) * 100)}%" title="${week ? "Week of " : ""}${day(d.date)}: ${d.tickets} tickets, ${d.scans} read-backs, ${d.people} ${d.people === 1 ? "person" : "people"}"></div>`).join("");
+    $("#uChart").setAttribute("aria-label", `${week ? "Weekly" : "Daily"} tickets and read-backs, ${day(s[0].date)} to ${day(s[s.length - 1].date)}: ` +
+      (max ? `most was ${max} ${week ? "in the week of" : "on"} ${day(peak.date)}` : "none yet"));
+    $("#uChartCap").innerHTML = `<span>${day(s[0].date)}</span><span>${week ? "per week" : "per day"} · most ${max}</span><span>${day(s[s.length - 1].date)}</span>`;
     $("#uPeople").innerHTML = u.people.map((p) => `<div class="card"><div class="top" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <b>${esc(p.username)}</b><span class="badge ${p.role !== "user" ? "hot" : ""}">${esc(p.role)}</span>${p.beta ? `<span class="badge">beta</span>` : ""}
         <span class="muted" style="margin-left:auto">active ${when(p.last_active)}</span></div>
-      <div class="muted">${p.app ? esc(p.app) : "no to-do app"} · ${p.consented_at ? "notice accepted " + when(p.consented_at) : "<span class='err'>notice not accepted yet</span>"}</div>
+      <div class="muted">${p.app ? esc(p.app) : "no to-do app"} · ${p.consented ? "notice accepted " + when(p.consented_at) : "<span class='err'>notice not accepted yet</span>"}</div>
       <div style="margin-top:6px">${p.tickets} tickets (${p.printed} printed) · ${p.scans} read-backs · marks: ${p.marks_applied} auto, ${p.marks_confirmed} confirmed, ${p.marks_skipped} skipped</div>
       <div class="muted">${Object.entries(p.by_reason).map(([k, v]) => `${esc(REASON_NAMES[k] || k)} ${v}`).join(" · ") || "no tickets yet"}</div>
       <div class="muted">most used: ${p.top_actions.map(([a, n]) => `${esc(a)} ×${n}`).join(", ") || "nothing yet"}</div>
@@ -288,7 +359,7 @@ $("#uPeople").addEventListener("click", async (e) => {
   $("#uWho").textContent = b.dataset.u; $("#uDetail").hidden = false;
   $("#uTickets").innerHTML = `<div class="tickets">${d.tickets.map((r) => `<div><img loading="lazy" src="${png(r.id)}" alt="">
       <div class="muted">${esc(r.created_at.replace("T", " "))}${r.printer ? " · " + esc(r.printer.name) : ""}${r.dry_run ? " · preview" : ""}</div></div>`).join("") || "<p class='muted'>No tickets.</p>"}</div>
-    <h3>Read-backs</h3>${d.scans.map((r) => `<div class="muted">${esc(r.created_at.replace("T", " "))}: ${r.applied.length} applied, ${r.needs_confirmation.length} needed a tap${r.errors.length ? ", " + r.errors.length + " problems" : ""}</div>`).join("") || "<p class='muted'>None.</p>"}`;
+    <h3>Read-backs</h3>${d.scans.map((r) => `<div class="muted">${esc(r.created_at.replace("T", " "))}: ${r.applied.length} applied, ${r.needs_confirmation.length} needed a tap${r.errors.length ? `, ${r.errors.length} problem${r.errors.length === 1 ? "" : "s"}` : ""}</div>`).join("") || "<p class='muted'>None.</p>"}`;
   $("#uDetail").scrollIntoView({ behavior: "smooth" });
 });
 
@@ -383,7 +454,7 @@ $("#logout").onclick = () => signOut();
 
 // ---------------------------------------------------------------- tabs
 const loaders = { mylist: () => { loadList(); loadToday(); loadGuide(); }, printed: loadHistory, profile: () => loadProfile(),
-                  settings: () => { loadLabels(); loadTags(); loadCalendars(); }, admin: () => { loadAdmin(); loadPrinters(); loadInvites(); },
+                  settings: () => { loadLabels(); loadTags(); loadCalendars(); }, admin: () => { if (me.role !== "superadmin") loadAdmin(); loadPrinters(); loadInvites(); },
                   debug: loadDebug, board: () => loadBoard(), usage: () => loadUsage(), journal: () => loadJournal() };
 function markTab(tab) {  // which screen shows, without loading anything
   $$("#topnav button").forEach((x) => { x.classList.toggle("on", x.dataset.tab === tab); x.toggleAttribute("aria-current", x.dataset.tab === tab); if (x.dataset.tab === tab) x.setAttribute("aria-current", "page"); });
@@ -609,12 +680,16 @@ function feedbackCard(f, controls = true) {
   </div>`;
 }
 
+let boardItems = new Map();  // feedback id → item, so Reply starts from the current reply
 async function loadBoard() {
+  // Staff can look at just the posts they've hidden (they see them under "any status" too).
+  if (me?.role === "superadmin" && !$("#bStatus option[value=hidden]")) $("#bStatus").insertAdjacentHTML("beforeend", `<option value="hidden">hidden</option>`);
   const q = new URLSearchParams();
   if ($("#bType").value) q.set("type", $("#bType").value);
   if ($("#bStatus").value) q.set("status", $("#bStatus").value);
   try {
     const items = await api(`/feedback?${q}`);
+    boardItems = new Map(items.map((f) => [f.id, f]));
     $("#boardList").innerHTML = items.map((f) => feedbackCard(f)).join("") || `<p class="muted">No feedback yet. Be the first.</p>`;
   } catch (e) { $("#boardList").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
@@ -627,10 +702,22 @@ $("#boardList").addEventListener("click", async (e) => {
     if (b.dataset.fb === "withdraw") {
       if (!confirm("Remove this feedback for everyone?")) return;
       await api(`/feedback/${fid}`, { method: "DELETE" }); toast("Removed"); loadBoard();
-    } else if (b.dataset.fb === "reply") {
-      const text = prompt("Public reply (names and contact details are removed):");
-      if (text === null) return;
-      await api(`/admin/feedback/${fid}`, { method: "PATCH", json: { reply: text } }); loadBoard();
+    } else if (b.dataset.fb === "reply") {  // edit in place, starting from the reply that's there
+      if (!card.querySelector(".replyEdit")) {
+        card.querySelector(".revealed").insertAdjacentHTML("beforebegin", `<div class="replyEdit field">
+          <label for="reply-${esc(fid)}">Public reply</label><span class="muted">Names and contact details are removed.</span>
+          <textarea id="reply-${esc(fid)}">${esc(boardItems.get(fid)?.reply || "")}</textarea>
+          <div class="row"><button class="go small" data-fb="replySave">Save reply</button><button class="plain small" data-fb="replyCancel">Cancel</button></div></div>`);
+      }
+      card.querySelector(".replyEdit textarea").focus();
+    } else if (b.dataset.fb === "replyCancel") {
+      card.querySelector(".replyEdit").remove();
+    } else if (b.dataset.fb === "replySave") {
+      const text = card.querySelector(".replyEdit textarea").value.trim(), had = !!boardItems.get(fid)?.reply;
+      if (!text && !had) return card.querySelector(".replyEdit").remove();
+      if (!text && !confirm("Remove the reply?")) return;
+      await api(`/admin/feedback/${fid}`, { method: "PATCH", json: { reply: text } });
+      toast(text ? "Reply saved" : "Reply removed"); loadBoard();
     } else if (b.dataset.fb === "reveal") {
       if (!confirm("Look up who sent this? It's recorded in the audit log (by feedback number only).")) return;
       const who = await api(`/super/feedback/${fid}/identity`);
@@ -655,11 +742,12 @@ function canManage(u) {
   return me.role === "superadmin" || RANK[u.role] < RANK[me.role];
 }
 
+// Household admins only: superadmins manage people in the Users tab (openUser).
 async function loadAdmin() {
   try {
     const users = await api("/admin/users");
     $("#users").innerHTML = users.map((u) => {
-      const m = canManage(u), sup = me.role === "superadmin" && m;
+      const m = canManage(u);
       const badges = [`<span class="badge ${u.role !== "user" ? "hot" : ""}">${esc(u.role)}</span>`,
         u.disabled && `<span class="badge bad">off</span>`, u.beta && `<span class="badge">beta</span>`,
         u.debug && `<span class="badge bad">debug</span>`, u.must_change && `<span class="badge">temp password</span>`].filter(Boolean).join(" ");
@@ -671,17 +759,13 @@ async function loadAdmin() {
           <button class="plain small" data-u="${esc(u.username)}" data-a="signout">Sign out</button>
           <button class="plain small" data-u="${esc(u.username)}" data-a="beta" data-v="${!u.beta}">${u.beta ? "Remove beta" : "Make beta"}</button>
           <button class="plain small" data-u="${esc(u.username)}" data-a="disabled" data-v="${!u.disabled}">${u.disabled ? "Turn on" : "Turn off"}</button>` : ""}
-          ${sup ? `<button class="plain small" data-u="${esc(u.username)}" data-a="debug" data-v="${!u.debug}">${u.debug ? "Debug off" : "Debug on"}</button>
-          <select class="small" data-u="${esc(u.username)}" data-a="role">${["user", "admin", "superadmin"].map((r) => `<option ${r === u.role ? "selected" : ""}>${r}</option>`).join("")}</select>
-          <a class="plain small" href="/super/users/${encodeURIComponent(u.username)}/bundle" style="text-decoration:none;color:inherit;border:1px solid var(--line);border-radius:8px;padding:5px 9px;font-size:13px">Debug bundle</a>
-          <button class="go warn small" data-u="${esc(u.username)}" data-a="delete">Delete</button>` : ""}
         </div></div>`;
     }).join("");
-    $$("#users [data-a]").forEach((el) => (el.tagName === "SELECT" ? el.onchange = () => userAction(el, el.value) : el.onclick = () => userAction(el)));
+    $$("#users [data-a]").forEach((el) => el.onclick = () => userAction(el));
   } catch (e) { $("#users").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
 
-async function userAction(el, value) {
+async function userAction(el) {
   const u = el.dataset.u, a = el.dataset.a, path = `/admin/users/${encodeURIComponent(u)}`;
   try {
     if (a === "activity") return loadActivity(u);
@@ -690,29 +774,39 @@ async function userAction(el, value) {
       const r = await api(`${path}/reset-password`, { method: "POST" });
       showTemp(u, r.temp_password);
     } else if (a === "signout") {
+      if (!confirm(`Sign ${u} out on every device? They can sign straight back in.`)) return;
       const r = await api(`${path}/signout`, { method: "POST" });
       toast(`Signed out ${r.signed_out} device(s)`);
-    } else if (a === "delete") {
-      if (!confirm(`Delete ${u}? This can't be undone.`)) return;
-      await api(path, { method: "DELETE" });
-      toast(`Deleted ${u}`);
     } else {
-      const v = a === "role" ? value : el.dataset.v === "true";
-      if (a === "role" && !confirm(`Make ${u} a ${v}?`)) return loadAdmin();
+      const v = el.dataset.v === "true";
+      if (a === "disabled" && v && !confirm(`Turn off ${u}? They'll be signed out everywhere and can't sign in until you turn them back on.`)) return;
       await api(path, { method: "PATCH", json: { [a]: v } });
       toast("Saved");
     }
-  } catch (e) { toast(e.message); }
+  } catch (e) { toast(errText(e)); }
   loadAdmin();
 }
 
-function showTemp(u, pw) {
-  $("#nuOut").innerHTML = `<p>Give <b>${esc(u)}</b> this one-time password. It won't be shown again, and they'll pick their own when they sign in.</p>
-    <div class="secret">${esc(pw)}</div>
-    <div class="row"><button class="plain small" id="copyTemp">Copy</button></div>`;
-  $("#copyTemp").onclick = () => navigator.clipboard?.writeText(pw).then(() => toast("Copied"));
-  $("#nuOut").scrollIntoView({ behavior: "smooth", block: "center" });
+// Copy, also where the clipboard API isn't offered (Next Box opened at a plain http:// LAN address).
+function copyText(text) {
+  const done = () => toast("Copied"), manual = () => toast("Couldn't copy. Press and hold it to copy instead.", 4000);
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text).then(done, manual);
+  const t = Object.assign(document.createElement("textarea"), { value: text, readOnly: true });
+  t.style.cssText = "position:fixed;opacity:0";
+  ($("dialog[open]") || document.body).appendChild(t);  // inside an open dialog, or the select is blocked
+  t.select();
+  try { document.execCommand("copy") ? done() : manual(); } catch { manual(); }
+  t.remove();
 }
+// A one-time password, with Copy. It stays put until the next one for the same place replaces it.
+function renderTemp(el, u, pw) {
+  el.innerHTML = `<p>Give <b>${esc(u)}</b> this one-time password. It won't be shown again, and they'll pick their own when they sign in.</p>
+    <div class="secret">${esc(pw)}</div>
+    <div class="row"><button class="plain small" data-copy>Copy</button></div>`;
+  el.querySelector("[data-copy]").onclick = () => copyText(pw);
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+function showTemp(u, pw) { renderTemp($("#nuOut"), u, pw); }
 
 $("#nuGo").onclick = async () => {
   try {
@@ -726,10 +820,10 @@ $("#nuGo").onclick = async () => {
 function eventRow(e) {
   const t = new Date(e.ts * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "medium" });
   const extra = { ...e }; delete extra.ts;
-  return `<div class="ev"><span class="${e.ok ? "" : "err"}">${e.ok ? "·" : "✗"}</span> ${esc(t)} <b>${esc(e.user)}</b> ${esc(e.kind)}/${esc(e.action)}
-    ${e.error ? `<span class="err">${esc(e.error)}</span>` : ""}<pre hidden>${esc(JSON.stringify(extra, null, 2))}</pre></div>`;
+  // <details>: opens with a tap, Enter or Space, and screen readers say whether it's open.
+  return `<details class="ev"><summary><span class="${e.ok ? "" : "err"}" aria-hidden="true">${e.ok ? "·" : "✗"}</span> ${esc(t)} <b>${esc(e.user)}</b> ${esc(e.kind)}/${esc(e.action)}
+    ${e.ok ? "" : `<span class="err">failed${e.error ? ": " + esc(e.error) : ""}</span>`}</summary><pre>${esc(JSON.stringify(extra, null, 2))}</pre></details>`;
 }
-function wireEvents(root) { root.querySelectorAll(".ev").forEach((d) => d.onclick = () => { d.querySelector("pre").hidden = !d.querySelector("pre").hidden; }); }
 
 async function loadActivity(u) {
   $("#activityCard").hidden = false;
@@ -737,7 +831,6 @@ async function loadActivity(u) {
   try {
     const evs = await api(`/admin/users/${encodeURIComponent(u)}/activity?limit=100`);
     $("#activity").innerHTML = evs.map(eventRow).join("") || `<p class="muted">No activity yet.</p>`;
-    wireEvents($("#activity"));
   } catch (e) { $("#activity").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
   $("#activityCard").scrollIntoView({ behavior: "smooth" });
 }
@@ -759,14 +852,20 @@ async function loadDiag() {
   try {
     const d = await api("/super/diagnostics");
     const ok = (b) => b ? `<span class="ok">ok</span>` : `<span class="err">problem</span>`;
+    const ps = d.printer.printers || [], a = d.auto_print_last || {};
+    const day = (iso) => new Date(iso + "T12:00").toLocaleDateString([], { dateStyle: "medium" });
     const rows = [
-      ["Printer", `${ok(d.printer.reachable)} ${esc(d.printer.ip || "no IP set")} · ${d.printer.ms} ms · ${esc(d.printer.label)} mm tape`],
-      ["Your to-do app", `${ok(d.todoist.ok)} ${d.todoist.ok ? esc(d.todoist.app) + " · " + d.todoist.projects + " lists" : esc(d.todoist.error)} · ${d.todoist.ms} ms`],
+      ["Printers", ps.length ? ps.map((p) => `${esc(p.name)}: ${p.reachable ? `<span class="ok">online</span>` : `<span class="err">not answering</span>`}` +
+          ` · ${esc(p.stock_color)} labels${p.label ? ` · ${esc(p.label)}${/^\d+$/.test(p.label) ? " mm" : ""}` : ""}`).join("<br>") + ` <span class="muted">(${d.printer.ms} ms)</span>`
+        : "None in your household yet. Add one under Admin → Printers."],
+      ["Your to-do app", d.todoist.ok ? (d.todoist.linked ? `${ok(true)} ${esc(d.todoist.app)} · ${d.todoist.projects} lists · ${d.todoist.ms} ms`
+                                                          : `${ok(true)} Only My list (no linked app)`)
+                                      : `${ok(false)} ${esc(d.todoist.error)} · ${d.todoist.ms} ms`],
       ["Everyone's apps", Object.entries(d.apps || {}).map(([k, v]) => `${esc(k)}: ${v}`).join(" · ")],
       ["Read-back", `${ok(d.vision.key_set)} ${esc(d.vision.model)}${d.vision.key_set ? "" : " · ANTHROPIC_API_KEY missing"}`],
       ["Errors (24h)", d.counts.errors_24h ? `<span class="err">${d.counts.errors_24h}</span>` : "0"],
       ["Totals", `${d.counts.users} people · ${d.counts.printed} tickets · ${d.counts.scans} scans`],
-      ["Auto print", esc(JSON.stringify(d.auto_print_last))],
+      ["Auto print", `${a.enabled === false ? "switched off · " : ""}last real print ${a.real ? day(a.real) : "never"} · last preview ${a.dry ? day(a.dry) : "never"}`],
       ["Storage", `${d.data_dir.used_mb} MB used · ${d.data_dir.disk_free_gb} GB free`],
       ["Server", `v${esc(d.version)} · Python ${esc(d.python)} · up ${Math.round(d.uptime_s / 60)} min`],
       ["Config", Object.entries(d.config).map(([k, v]) => `${esc(k)}=${esc(v)}`).join(" · ")],
@@ -794,7 +893,6 @@ async function loadEvents() {
   try {
     const evs = await api(`/super/events?${q}`);
     $("#events").innerHTML = evs.map(eventRow).join("") || `<p class="muted">Nothing matches.</p>`;
-    wireEvents($("#events"));
   } catch (e) { $("#events").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
 $("#evGo").onclick = loadEvents;
@@ -1063,11 +1161,40 @@ async function loadSuper() {
       `<button class="tile${f !== null && $("#suStatus").value === (f || "") && f !== "" ? " on" : ""}" ${f === null ? "disabled" : `data-f="${f}"`}><b>${o[k]}</b><span>${esc(label)}</span></button>`).join("");
     const cur = $("#suHome").value;
     $("#suHome").innerHTML = `<option value="">All households</option>` +
-      homes.map((h) => `<option value="${esc(h.id)}">${esc(h.name)} (${h.members})</option>`).join("");
-    $("#suHome").value = cur;
+      homes.map((h) => `<option value="${esc(h.id)}">${homeName(h)}</option>`).join("");
+    $("#suHome").value = homes.some((h) => h.id === cur) ? cur : "";
+    renderHomes();
   } catch (e) { $("#suTiles").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
   loadSuperList();
 }
+const homeName = (h) => `${esc(h.name)} (${h.members})`;  // the count tells two similar names apart
+
+// Households: rename any; delete one only when nobody is in it (Home, this Next Box's own, stays).
+function renderHomes() {
+  $("#suHomesTitle").textContent = `Households (${suHomes.length})`;
+  $("#suHomes").innerHTML = suHomes.map((h) => `<div class="mini" data-hid="${esc(h.id)}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <span style="flex:1;min-width:0"><b>${esc(h.name)}</b> · ${h.members} ${h.members === 1 ? "person" : "people"}${h.id === "home" ? " · this Next Box's own" : ""}</span>
+      <button class="plain small" data-home="rename" aria-label="Rename ${esc(h.name)}">Rename</button>
+      ${h.members || h.id === "home" ? "" : `<button class="plain small" data-home="delete" aria-label="Delete ${esc(h.name)}">Delete</button>`}</div>`).join("");
+}
+$("#suHomes").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-home]"); if (!b) return;
+  const h = suHomes.find((x) => x.id === b.closest("[data-hid]").dataset.hid); if (!h) return;
+  const path = `/super/households/${encodeURIComponent(h.id)}`;
+  try {
+    if (b.dataset.home === "rename") {
+      const name = prompt(`New name for ${h.name}`, h.name);
+      if (name === null || name.trim() === h.name) return;
+      await api(path, { method: "PATCH", json: { name } });
+      toast("Household renamed");
+    } else {
+      if (!confirm(`Delete the household "${h.name}"? Nobody is in it. Its invite codes and printers go too.`)) return;
+      await api(path, { method: "DELETE" });
+      toast("Household deleted");
+    }
+    loadSuper();
+  } catch (err) { toast(errText(err), 4000); }
+});
 
 async function loadSuperList() {
   const qs = new URLSearchParams({ q: $("#suQ").value, role: $("#suRole").value, status: $("#suStatus").value,
@@ -1089,7 +1216,7 @@ async function loadSuperList() {
       <div class="who"><div class="top"><b>${esc(u.username)}</b>${badges}</div>
         <div class="muted">${esc(u.email || "no email")} · ${esc(u.household)}</div>
         <div class="muted">last active ${when(lastActive(u))} · ${u.sessions} device(s) · ${u.open_tasks} open tasks · ${u.prints_30d} prints (30d) · ${esc(u.app || "no linked app")}</div></div>
-      <button class="plain small" data-manage>Manage</button></div>`;
+      <button class="plain small" data-manage aria-label="Manage ${esc(u.username)}">Manage</button></div>`;
   }).join("") || `<p class="muted">Nobody matches.</p>`;
   $("#suAll").checked = suRows.length > 0 && suPicked.size === suRows.length;
   renderBulk();
@@ -1124,45 +1251,55 @@ $$("[data-bulk]").forEach((b) => b.onclick = async () => {
   if (!confirm(`${b.textContent} ${names.length} ${names.length === 1 ? "person" : "people"}?`)) return;
   try {
     const r = await api("/super/users/bulk", { method: "POST", json: { usernames: names, action: b.dataset.bulk } });
-    const odd = Object.entries(r.results).filter(([, v]) => v !== "done" && !v.startsWith("signed out"));
-    toast(odd.length ? `${odd.length} skipped: ${odd.map(([u, v]) => `${u} (${v})`).join(", ")}` : "Done");
+    const all = Object.entries(r.results), odd = all.filter(([, v]) => v !== "done" && !v.startsWith("signed out"));
+    const head = `${BULK_DONE[b.dataset.bulk] || "Done:"} ${all.length - odd.length}${odd.length ? `, skipped ${odd.length}` : ""}.`;
+    toast(head);
+    // Who wasn't changed stays on screen until dismissed: a toast is gone before a list can be read.
+    $("#suBulkOut").innerHTML = odd.length ? `<p><b>${esc(head)}</b> Not changed:</p>
+      <ul>${odd.map(([u, v]) => `<li><b>${esc(u)}</b>: ${esc(v.replace(/^skipped: /, ""))}</li>`).join("")}</ul>
+      <button class="linkish" data-dismiss>Dismiss</button>` : "";
+    $("#suBulkOut").hidden = !odd.length;
     suPicked.clear();
     loadSuper();
-  } catch (err) { toast(err.message); }
+  } catch (err) { toast(errText(err)); }
 });
+const BULK_DONE = { signout: "Signed out", disable: "Turned off", enable: "Turned on", beta_on: "Beta on for", beta_off: "Beta off for" };
+$("#suBulkOut").onclick = (e) => { if (e.target.matches("[data-dismiss]")) { $("#suBulkOut").innerHTML = ""; $("#suBulkOut").hidden = true; } };
 
 $("#suAdd").onclick = () => {
-  $("#suNew").innerHTML = `<div class="field"><label>Username</label><input type="text" id="snName" autocapitalize="none"></div>
-    <div class="field"><label>Email (optional)</label><input type="text" id="snEmail" autocapitalize="none"></div>
-    <div class="row"><select id="snRole"><option>user</option><option>admin</option><option>superadmin</option></select>
-      <select id="snHome">${suHomes.map((h) => `<option value="${esc(h.id)}" ${h.id === me.household_id ? "selected" : ""}>${esc(h.name)}</option>`).join("")}</select>
+  $("#suNew").innerHTML = `<div class="field"><label for="snName">Username</label><input type="text" id="snName" autocapitalize="none"></div>
+    <div class="field"><label for="snEmail">Email (optional)</label><input type="text" id="snEmail" autocapitalize="none"></div>
+    <div class="row"><select id="snRole" aria-label="Role"><option>user</option><option>admin</option><option>superadmin</option></select>
+      <select id="snHome" aria-label="Household">${suHomes.map((h) => `<option value="${esc(h.id)}" ${h.id === me.household_id ? "selected" : ""}>${homeName(h)}</option>`).join("")}</select>
       <label class="muted"><input type="checkbox" id="snBeta"> beta tester</label>
       <button class="go" id="snGo">Create</button></div><div id="snOut"></div>`;
   $("#snGo").onclick = async () => {
     try {
       const r = await api("/super/users", { method: "POST", json: { username: $("#snName").value, email: $("#snEmail").value || null,
         role: $("#snRole").value, household_id: $("#snHome").value, beta: $("#snBeta").checked } });
-      $("#snOut").innerHTML = `<p>Give <b>${esc(r.username)}</b> this one-time password. It won't be shown again.</p><div class="secret">${esc(r.temp_password)}</div>`;
+      renderTemp($("#snOut"), r.username, r.temp_password);
+      $("#snName").value = $("#snEmail").value = ""; $("#snBeta").checked = false;  // ready for the next person
       loadSuper();
-    } catch (e) { toast(e.message); }
+    } catch (e) { toast(errText(e)); }
   };
 };
 $("#suNewHome").onclick = async () => {
   const name = prompt("Name for the new household (e.g. Chen family)");
   if (!name) return;
   try { await api("/super/households", { method: "POST", json: { name } }); toast("Household created"); loadSuper(); }
-  catch (e) { toast(e.message); }
+  catch (e) { toast(errText(e), 4000); }
 };
 
 async function openUser(name) {
   let u;
   try { u = await api(`/super/users/${encodeURIComponent(name)}`); } catch (e) { return toast(e.message); }
+  const fresh = !$("#userDialog").open || suOpen?.username !== u.username;  // not just refreshing after an action
   suOpen = u;
   $("#udName").textContent = u.username;
   $("#udSub").textContent = `joined ${when(u.created)} · last active ${when(lastActive(u))} · last sign-in ${when(u.last_login)}${u.consented ? "" : " · hasn't accepted the data notice"}`;
   $("#udEmail").value = u.email || "";
   $("#udRole").value = u.role;
-  $("#udHome").innerHTML = suHomes.map((h) => `<option value="${esc(h.id)}">${esc(h.name)}</option>`).join("");
+  $("#udHome").innerHTML = suHomes.map((h) => `<option value="${esc(h.id)}">${homeName(h)}</option>`).join("");
   $("#udHome").value = u.household_id;
   $("#udOff").checked = u.disabled; $("#udBeta").checked = u.beta; $("#udDebug").checked = u.debug; $("#udTemp").checked = u.must_change;
   const self = u.username === me.username, locked = self || u.protected;
@@ -1170,8 +1307,12 @@ async function openUser(name) {
   // Only the Next Box computer changes the protected admin (the server refuses the rest too).
   const guarded = u.protected && !self;
   for (const id of ["#udReset", "#udSignout", "#udHome", "#udTemp", "#udEmail", "#udPrefs"]) $(id).disabled = guarded;
+  // Your own password and devices live in Profile; from here they'd only fail or sign you out.
+  if (self) for (const id of ["#udReset", "#udSignout", "#udTemp"]) $(id).disabled = true;
   if (u.protected) $("#udSub").textContent += " · protected admin: always a superadmin. Only the Next Box computer can change it";
-  $("#udMsg").textContent = ""; $("#udTempOut").innerHTML = ""; $("#udConfirm").value = ""; $("#udDelete").disabled = true;
+  if (self) $("#udSub").textContent += " · This is you: change your password and sign out devices in Profile";
+  $("#udMsg").textContent = ""; $("#udConfirm").value = ""; $("#udDelete").disabled = true;
+  if (fresh) $("#udTempOut").innerHTML = "";  // a one-time password stays while you keep helping the same person
   $("#udBundle").href = `/super/users/${encodeURIComponent(u.username)}/bundle`;
   $("#udUnlink").disabled = guarded || !u.connection.connected || !!u.connection.legacy;
   $("#udInfo").innerHTML = `
@@ -1184,7 +1325,10 @@ async function openUser(name) {
     ${u.recent.map((e) => `<div class="mini ${e.ok ? "" : "err"}">${when(e.ts)} · ${esc(e.action)}${e.error ? " · " + esc(e.error) : ""}</div>`).join("") || "<div class='mini'>Nothing yet</div>"}
     <h4 style="margin:12px 0 4px">Recent tickets</h4>
     ${u.tickets.map((t) => `<div class="mini"><a href="${png(t.id)}" target="_blank" rel="noopener">#${esc(t.id)}</a> · ${esc(t.kind)} · ${esc((t.created_at || "").replace("T", " "))}${t.dry_run ? " · preview" : ""}</div>`).join("") || "<div class='mini'>None</div>"}`;
-  $("#userDialog").showModal();
+  if (!$("#userDialog").open) {
+    $("#userDialog").showModal();
+    $("#udName").focus();  // not the Email box: on a phone that pops the keyboard over the dialog
+  }
 }
 
 async function udDo(fn, okMsg) {
@@ -1201,7 +1345,7 @@ $("#udSave").onclick = () => {
   for (const [id, k] of [["#udOff", "disabled"], ["#udBeta", "beta"], ["#udDebug", "debug"], ["#udTemp", "must_change"]])
     if ($(id).checked !== u[k]) body[k] = $(id).checked;
   if (!Object.keys(body).length) return toast("Nothing changed");
-  if (body.role && !confirm(`Make ${u.username} a ${body.role}?`)) return;
+  if (body.role && !confirm(`Make ${u.username} ${/^[aeiou]/i.test(body.role) ? "an" : "a"} ${body.role}?`)) return;
   if (body.disabled && !confirm(`Turn off ${u.username}? They'll be signed out everywhere.`)) return;
   udDo(() => api(udPath(), { method: "PATCH", json: body }), "Saved");
 };
@@ -1209,9 +1353,10 @@ $("#udReset").onclick = async () => {
   if (!confirm(`Reset ${suOpen.username}'s password? They'll be signed out everywhere.`)) return;
   try {
     const r = await api(`/admin/users/${encodeURIComponent(suOpen.username)}/reset-password`, { method: "POST" });
-    $("#udTempOut").innerHTML = `<p>One-time password for <b>${esc(r.username)}</b> (shown once):</p><div class="secret">${esc(r.temp_password)}</div>`;
+    await openUser(suOpen.username);  // "Must pick a new password" now shows ticked
+    renderTemp($("#udTempOut"), r.username, r.temp_password);
     loadSuper();
-  } catch (e) { toast(e.message); }
+  } catch (e) { toast(errText(e)); }
 };
 $("#udSignout").onclick = () => udDo(() => api(`/admin/users/${encodeURIComponent(suOpen.username)}/signout`, { method: "POST" }), "Signed out");
 $("#udPrefs").onclick = () => confirm(`Put all of ${suOpen.username}'s settings back to the defaults?`) &&
@@ -1269,14 +1414,20 @@ async function loadInvites() {
     try {
       const homes = await api("/super/households");
       const cur = $("#ivHome").value;
-      $("#ivHome").innerHTML = homes.map((h) => `<option value="${esc(h.id)}">join ${esc(h.name)}</option>`).join("");
-      $("#ivHome").value = cur || me.household_id;
+      $("#ivHome").innerHTML = homes.map((h) => `<option value="${esc(h.id)}">join ${homeName(h)}</option>`).join("");
+      $("#ivHome").value = homes.some((h) => h.id === cur) ? cur : me.household_id;
     } catch {}
   }
-  $("#ivList").innerHTML = list.map((i) => `<div class="mini" data-code="${esc(i.code)}"><b>${esc(i.code)}</b>
+  const row = (i) => `<div class="mini" data-code="${esc(i.code)}"><b>${esc(i.code)}</b>
       · ${esc(i.note || "no note")} · ${i.own_household ? "own household" : "joins " + esc(i.household)}${i.beta ? " · beta" : ""}
       · ${i.status === "used" ? "used by " + esc(i.used_by) : i.status === "expired" ? "expired" : "open until " + when(i.expires)}
-      ${i.status === "open" ? `<button class="linkish" data-revoke>cancel</button>` : ""}</div>`).join("") || "None yet.";
+      ${i.status === "open" ? `<button class="linkish" data-copylink aria-label="Copy the link for ${esc(i.code)}">copy link</button>
+        · <button class="linkish" data-revoke aria-label="Cancel ${esc(i.code)}">cancel</button>` : ""}</div>`;
+  // Open codes first; used and expired ones fold away and can be cleared.
+  const open = list.filter((i) => i.status === "open"), done = list.filter((i) => i.status !== "open");
+  $("#ivList").innerHTML = (open.map(row).join("") || (done.length ? "No open invites." : "None yet.")) +
+    (done.length ? `<details style="margin-top:6px"><summary>Older invites (${done.length})</summary>${done.map(row).join("")}
+      <div class="row"><button class="linkish" id="ivClear">Clear used and expired</button></div></details>` : "");
 }
 $("#ivOwn").onchange = () => { $("#ivHome").disabled = $("#ivOwn").checked; };
 $("#ivGo").onclick = async () => {
@@ -1289,16 +1440,24 @@ $("#ivGo").onclick = async () => {
       <div class="muted" style="word-break:break-all">${esc(link)}</div>
       ${["localhost", "127.0.0.1", "::1"].includes(location.hostname) ? `<p class="err">That link only works on this computer, because you opened Next Box as "${esc(location.hostname)}". Send the code instead, or open Next Box at the phone address that <code>nextbox doctor</code> shows and make the invite there.</p>` : ""}
       <div class="row"><button class="plain small" id="ivCopy">Copy link</button></div>`;
-    $("#ivCopy").onclick = () => navigator.clipboard?.writeText(link).then(() => toast("Copied"));
+    $("#ivCopy").onclick = () => copyText(link);
     $("#ivNote").value = "";
     loadInvites();
   } catch (e) { toast(e.message); }
 };
 $("#ivList").addEventListener("click", async (e) => {
+  if (e.target.id === "ivClear") {
+    try { const r = await api("/admin/invites/clear", { method: "POST" }); toast(r.removed ? `Cleared ${r.removed} old invite${r.removed === 1 ? "" : "s"}` : "Nothing to clear"); loadInvites(); }
+    catch (err) { toast(errText(err)); }
+    return;
+  }
+  const code = e.target.closest("[data-code]")?.dataset.code;
+  if (e.target.matches("[data-copylink]")) return copyText(`${location.origin}/app/#join=${code}`);
   if (!e.target.matches("[data-revoke]")) return;
-  const code = e.target.closest("[data-code]").dataset.code;
   if (!confirm(`Cancel invite ${code}?`)) return;
-  try { await api(`/admin/invites/${encodeURIComponent(code)}`, { method: "DELETE" }); loadInvites(); } catch (err) { toast(err.message); }
+  try { await api(`/admin/invites/${encodeURIComponent(code)}`, { method: "DELETE" }); toast("Invite cancelled"); }
+  catch (err) { toast(errText(err)); }
+  loadInvites();  // either way: a code that was just used or ran out shows as such
 });
 
 
