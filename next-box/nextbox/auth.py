@@ -24,6 +24,7 @@ SESSION_TOUCH = 600  # seconds between "last used" updates of a signed-in device
 MIN_PASSWORD = 8
 USERNAME_RE = re.compile(r"^[a-z0-9_.-]{2,32}$")
 EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$")
+EMAIL_TAKEN = "Another account already uses that email. Use a different one, or leave it empty."
 DEFAULT_HOUSEHOLD = "home"  # self-hosted installs: everyone shares one household
 INVITE_DAYS = 7
 ROLES = ("user", "admin", "superadmin")
@@ -353,7 +354,7 @@ class Accounts:
             if self._row(conn, username):
                 raise AuthError(f"The username {username} already exists. Pick another one.")
             if email and conn.execute(select(db.users.c.username).where(db.users.c.email == email)).first():
-                raise AuthError("that email already has an account")
+                raise AuthError("That email already has an account. Use a different one.")
             conn.execute(insert(db.users).values(
                 username=username, email=email, household_id=household_id, role=role, disabled=False,
                 beta=beta, debug=False, must_change=must_change, salt=salt.hex(),
@@ -377,7 +378,7 @@ class Accounts:
                 if self._row(conn, username):
                     raise AuthError(f"The username {username} already exists. Pick another one.")
                 if email and conn.execute(select(db.users.c.username).where(db.users.c.email == email)).first():
-                    raise AuthError("another account already uses that email")
+                    raise AuthError(EMAIL_TAKEN)
             beta = bool(inv.get("beta"))
             if inv.get("own_household"):
                 household_id, role, made_household = self.create_household(household_name or f"{username}'s home"), "admin", True
@@ -465,7 +466,7 @@ class Accounts:
                 raise AuthError(f"no user {username}")
             if fields.get("email") and conn.execute(select(db.users.c.username).where(and_(
                     db.users.c.email == fields["email"], db.users.c.username != username))).first():
-                raise AuthError("another account already uses that email")
+                raise AuthError(EMAIL_TAKEN)
             if "household_id" in fields and not conn.execute(select(db.households.c.id).where(
                     db.households.c.id == fields["household_id"])).first():
                 raise AuthError("no such household")

@@ -12,6 +12,7 @@ journal or activity.
   they're kept in their own table now, filled once from what older versions had
 - tasks-autoincrement: SQLite reused a deleted task's id; older tasks tables are rebuilt so it can't
 - vision-errors: a failed read-back's error could quote the journal notes it read; only its type stays
+- invites-unnamed: invites made or used by an account an older version deleted still named it
 """
 from __future__ import annotations
 
@@ -37,8 +38,9 @@ def forget_data(engine: Engine, store, username: str) -> None:
     Wins(engine, username).delete_for_user()
     Slides(engine, username).delete_for_user()
     store.delete_for_user(username)
-    with engine.begin() as conn:  # the invite they used stays used, but no longer names them
+    with engine.begin() as conn:  # the invites they used or made stay, but no longer name them
         conn.execute(update(db.invites).where(db.invites.c.used_by == username).values(used_by=DELETED_ACCOUNT))
+        conn.execute(update(db.invites).where(db.invites.c.created_by == username).values(created_by=DELETED_ACCOUNT))
 
 
 DELETED_ACCOUNT = "(deleted account)"  # in place of a deleted person's name on the invite they used
@@ -251,6 +253,19 @@ def tasks_autoincrement(engine: Engine, store=None) -> bool:
     return True
 
 
+def unname_invites(engine: Engine) -> int:
+    """Older versions of forget_data left the invites a deleted account made (and, before 0.14.3, the
+    one it joined with) naming it. Rename those as forget_data does now. Returns how many names changed."""
+    people = select(db.users.c.username)
+    keep = [*NOT_ACCOUNTS, DELETED_ACCOUNT]
+    changed = 0
+    with engine.begin() as conn:
+        for col in (db.invites.c.used_by, db.invites.c.created_by):
+            changed += conn.execute(update(db.invites).where(col.is_not(None), col.not_in(keep), col.not_in(people))
+                                    .values({col.name: DELETED_ACCOUNT})).rowcount
+    return changed
+
+
 def run_startup_fixes(engine: Engine, store) -> None:
     _once(engine, "orphans-v1", lambda: sweep_orphans(engine, store))
     _once(engine, "debug-details-v1", lambda: scrub_debug_details(engine))
@@ -258,3 +273,4 @@ def run_startup_fixes(engine: Engine, store) -> None:
     _once(engine, "wins-v1", lambda: backfill_wins(engine, store))
     _once(engine, "tasks-autoincrement-v1", lambda: tasks_autoincrement(engine, store))
     _once(engine, "vision-errors-v1", lambda: scrub_vision_errors(engine))
+    _once(engine, "invites-unnamed-v1", lambda: unname_invites(engine))

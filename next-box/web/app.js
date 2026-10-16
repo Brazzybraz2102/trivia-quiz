@@ -1852,8 +1852,8 @@ async function markDone(id, btn) {
   btn?.setAttribute("aria-disabled", "true");
   if (btn) listFocus = focusSpot(btn);
   const t = [...listData.tasks, ...(listData.linked || [])].find((x) => x.id === id);
-  try {
-    const r = await api(`/list/${encodeURIComponent(id)}/done`, { method: "POST" });
+  try {  // due: the day this screen showed, so a repeat already done on another device isn't done twice
+    const r = await api(`/list/${encodeURIComponent(id)}/done`, { method: "POST", json: { due: t?.due?.date?.slice(0, 10) } });
     picked.delete(id);
     // A linked app's repeating task has moved on there: Undo can't put its day back.
     const canUndo = r.undo != null && !(t && !String(id).startsWith("nb:") && t.due?.is_recurring);
@@ -2072,7 +2072,7 @@ async function eachPicked(verb, tasks, fn) {
 const bulkBusy = () => $("#bulkDone").getAttribute("aria-disabled") === "true";
 $("#bulkDone").onclick = async () => {
   if (bulkBusy() || !picked.size) return;
-  const ok = await eachPicked("Finishing", pickedTasks(), (t) => api(`/list/${encodeURIComponent(t.id)}/done`, { method: "POST" }));
+  const ok = await eachPicked("Finishing", pickedTasks(), (t) => api(`/list/${encodeURIComponent(t.id)}/done`, { method: "POST", json: { due: t.due?.date?.slice(0, 10) } }));
   const undo = ok.filter(([t, r]) => r.undo != null && !(!String(t.id).startsWith("nb:") && t.due?.is_recurring));
   if (!ok.length) return;
   snack(`Done ${ok.length} ✓${ok.missed}`, undo.length ? async () => {
@@ -5014,7 +5014,7 @@ async function timerDoneNow(b) {  // the card's own Done (or Step done ✓), for
       if (await tickStep(id, i, true, text)) timerTell("Step done ✓", () => tickStep(id, i, false, text));
       return;
     }
-    const r = await api(`/list/${encodeURIComponent(id)}/done`, { method: "POST" });
+    const r = await api(`/list/${encodeURIComponent(id)}/done`, { method: "POST", json: { due: t?.due?.date?.slice(0, 10) } });
     timerClear();
     const canUndo = r.undo != null && !(t && !String(id).startsWith("nb:") && t.due?.is_recurring);  // as My list's Done
     timerTell(`Done ✓ ${t ? shortName(t) : ""}`.trim(), canUndo ? () => undoDone(id, r.undo) : null);
@@ -5247,7 +5247,7 @@ $("#remindBar").addEventListener("click", async (e) => {
   await hold(b, async () => {
     try {
       if (act === "done") {
-        const r = await api(`/list/${encodeURIComponent(id)}/done`, { method: "POST" });
+        const r = await api(`/list/${encodeURIComponent(id)}/done`, { method: "POST", json: { due: t?.due?.date?.slice(0, 10) } });
         const canUndo = r.undo != null && !(t && !String(id).startsWith("nb:") && t.due?.is_recurring);  // as My list's Done
         remindNote(`Done ✓ ${name}`, canUndo ? () => undoDone(id, r.undo) : null, id);
       } else if (act === "tomorrow") {

@@ -162,19 +162,26 @@ def _pg_plan_check(plan: dict) -> list[tuple[int, str]]:
     return passed
 
 
+def _pg_one(conn, sql: str):
+    """Run `sql` on PostgreSQL as ONE prepared statement and return the psycopg cursor. A plain query
+    string (the simple protocol) runs every statement in it, so `SELECT 1; COMMIT; UPDATE users ...`
+    would end the read-only transaction and commit the UPDATE before anything noticed the `;`. A
+    prepared statement (the extended protocol) can't hold a second command: it fails whole, and
+    nothing in it runs."""
+    cur = conn.connection.driver_connection.cursor()
+    cur.execute(sql, prepare=True)
+    return cur
+
+
 def _pg_guard(conn, sql: str) -> list[tuple[int, str]]:
     """Check one query against the real PostgreSQL database before it runs (see _pg_plan_check)."""
     lead = _EXPLAIN.match(sql)
     inner = sql[lead.end():] if lead else sql  # their own EXPLAIN: check what it explains
     try:
-        result = conn.execute(text("EXPLAIN (VERBOSE, FORMAT JSON) " + inner))
-        plan = result.fetchone()[0]
-        more = result.cursor is not None and result.cursor.nextset()
+        plan = _pg_one(conn, "EXPLAIN (VERBOSE, FORMAT JSON) " + inner).fetchone()[0]
     except Exception as exc:  # not a query EXPLAIN takes (COPY, SHOW, two statements, a typo)
         why = str(getattr(exc, "orig", exc)).strip().splitlines()
         raise PermissionError(PG_ONE_QUERY + (f" The database said: {why[0]}" if why else "")) from None
-    if more:
-        raise PermissionError(PG_ONE_QUERY)
     if isinstance(plan, str):
         plan = json.loads(plan)
     passed = _pg_plan_check(plan[0]["Plan"])
@@ -281,9 +288,18 @@ def run_sql(data_dir: Path, sql: str, practice: bool = False, write: bool = Fals
         if raw is not None:
             raw.set_authorizer(_authorizer)
         try:
-            result = conn.execute(text(sql))
-            if result.returns_rows:
-                cols = list(result.keys())
+            if write or engine.dialect.name == "sqlite":  # SQLite refuses a second statement before running any
+                result = conn.execute(text(sql))
+                cols = list(result.keys()) if result.returns_rows else None
+            else:  # PostgreSQL, read-only: one prepared statement, so nothing after a `;` ever runs
+                try:
+                    result = _pg_one(conn, sql)
+                except Exception as exc:  # the practice database has no _pg_guard to say it first
+                    if "multiple commands" not in str(exc):
+                        raise
+                    raise PermissionError(PG_ONE_QUERY) from None
+                cols = [d.name for d in result.description] if result.description else None
+            if cols is not None:
                 if any(i >= len(cols) or cols[i] != name for i, name in passed):  # SELECT notes AS n
                     raise PermissionError(PG_REFUSED)
                 rows = [_mask(cols, tuple(r)) for r in result.fetchmany(limit)]

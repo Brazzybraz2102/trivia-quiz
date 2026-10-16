@@ -14,6 +14,7 @@ from datetime import date, timedelta
 
 from sqlalchemy import and_, delete, func, insert, select, update
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 
 from . import db
 from .providers.base import NotConnected, ProviderError, TaskNotFound, TaskProvider
@@ -343,14 +344,19 @@ class Tags:
     def all(self) -> list[dict]:
         q = select(db.tags).where(db.tags.c.owner == self.owner).order_by(db.tags.c.position, db.tags.c.name)
         flag = f"_tags_seeded:{self.owner}"
-        with self.db.begin() as conn:
-            rows = conn.execute(q).mappings().all()
-            if not rows and not conn.execute(select(db.server_settings.c.key).where(
-                    db.server_settings.c.key == flag)).first():
-                # First visit: a few starter tags. Seeded once, so deleting them all sticks.
-                for i, (name, color) in enumerate(DEFAULT_TAGS):
-                    conn.execute(insert(db.tags).values(owner=self.owner, name=name, color=color, position=i))
-                conn.execute(insert(db.server_settings).values(key=flag, value=True))
+        try:
+            with self.db.begin() as conn:
+                rows = conn.execute(q).mappings().all()
+                if not rows and not conn.execute(select(db.server_settings.c.key).where(
+                        db.server_settings.c.key == flag)).first():
+                    # First visit: a few starter tags. Seeded once, so deleting them all sticks.
+                    for i, (name, color) in enumerate(DEFAULT_TAGS):
+                        conn.execute(insert(db.tags).values(owner=self.owner, name=name, color=color, position=i))
+                    conn.execute(insert(db.server_settings).values(key=flag, value=True))
+                if not rows:  # just seeded, or by another request since the first look (or all removed)
+                    rows = conn.execute(q).mappings().all()
+        except IntegrityError:  # another request (a second tab, Home Assistant) seeded them at the same moment
+            with self.db.connect() as conn:
                 rows = conn.execute(q).mappings().all()
         return [{"name": r["name"], "color": r["color"]} for r in rows]
 
@@ -603,11 +609,12 @@ class LocalTasks(TaskProvider):
             values["priority"] = 3
         return values
 
-    def close_task(self, task_id: str, on_day: date | None = None) -> dict | None:
+    def close_task(self, task_id: str, on_day: date | None = None, seen_due: str | None = None) -> dict | None:
         """Finish it (a repeat moves to its next day) and count it as a win on `on_day` (default
         today; a photo read-back passes the ticket's day). Already finished: nothing changes and
-        None comes back, so a double tap or a second read-back never counts twice. Otherwise
-        returns what undoing it needs."""
+        None comes back, so a double tap or a second read-back never counts twice. `seen_due` is
+        the day the screen showed: a repeat that has moved on from it since (Done on another device,
+        or a second Done at the same moment) isn't finished again. Otherwise returns what undoing it needs."""
         task = self.get_task(task_id)
         num = self._num(task_id)
         day = on_day or self._today()
@@ -616,7 +623,7 @@ class LocalTasks(TaskProvider):
             if task["done"]:
                 return None
             if task["repeat"] and task["due"]:
-                prev = task["due"]["date"][:10]
+                prev = _iso_day(seen_due[:10]) if seen_due else task["due"]["date"][:10]  # WHERE due_date == prev
                 anchor = conn.execute(select(db.tasks.c.repeat_day).where(self._mine(num))).scalar()
                 nxt = next_due(task["repeat"], date.fromisoformat(prev), day, anchor_day=anchor)
                 changed = conn.execute(update(db.tasks).where(self._mine(num), db.tasks.c.due_date == prev).values(
@@ -836,9 +843,9 @@ class Merged(TaskProvider):
             return self.linked.add_task(content, description=description)
         return self.local.add_task(content, description=description)
 
-    def close_task(self, task_id: str, on_day: date | None = None):
+    def close_task(self, task_id: str, on_day: date | None = None, seen_due: str | None = None):
         if is_local(task_id):
-            return self.local.close_task(task_id, on_day=on_day)
+            return self.local.close_task(task_id, on_day=on_day, seen_due=seen_due)
         return self._route(task_id).close_task(task_id)
 
     def reopen_task(self, task_id: str, prev_due: str | None = None, prev_steps: list | None = None):

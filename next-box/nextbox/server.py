@@ -181,6 +181,10 @@ class SkipBody(BaseModel):
     due: str | None = Field(None, max_length=40)  # the day the screen showed when Skip was pressed
 
 
+class DoneBody(BaseModel):
+    due: str | None = Field(None, max_length=40)  # the day the screen showed: a repeat that moved on isn't done twice
+
+
 class StepBody(BaseModel):
     done: bool
     text: str | None = Field(None, max_length=400)  # the step as the screen showed it
@@ -631,7 +635,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         if accounts.too_many_failures(client):
             raise HTTPException(429, "Too many tries. Wait 5 minutes, then try again.")
         if not body.invite.strip():
-            raise HTTPException(400, "you need an invite code to join")
+            raise HTTPException(400, "Type the invite code you were given.")
         if not body.agree:
             raise HTTPException(400, "Please agree to the Terms of Use and Privacy Policy to join.")
         try:
@@ -1372,11 +1376,17 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return result
 
     @app.post("/list/{task_id}/done")
-    def done_list_task(task_id: str, caller: Caller = Depends(person)):
+    def done_list_task(task_id: str, body: DoneBody | None = None, caller: Caller = Depends(person)):
         """Done. `undo` is what /reopen needs to put it back (a repeat's day and ticked steps), or
-        None when it was finished already (a double tap counts once) or its app can't reopen it."""
+        None when it was finished already (a double tap counts once) or its app can't reopen it.
+        body.due: the day the screen showed, so a My list repeat that has moved on since (Done on
+        another device) isn't finished a second time."""
         c = rctx(caller)
-        undo = run(caller, "list_done", c.tasks.close_task, task_id)
+        seen = ((body.due if body else None) or "")[:10]
+        undo = run(caller, "list_done", c.tasks.close_task, task_id,
+                   **({"seen_due": seen} if seen and is_local(task_id) else {}))
+        if undo is None and is_local(task_id):
+            return {"ok": True, "undo": None}  # done already: nothing changed, its slide count included
         slides = Slides(accounts.db, caller.name)
         slid = slides.counts().get(task_id)
         slides.clear(task_id)
