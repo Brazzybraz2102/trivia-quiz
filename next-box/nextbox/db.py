@@ -55,6 +55,7 @@ sessions = Table(
     Column("expires", BigInteger, nullable=False),
     Column("ip", String(64), nullable=False, default=""),
     Column("agent", String(200), nullable=False, default=""),
+    Column("last_used", BigInteger, nullable=True),  # added in 0.10.2: when the device was last used (10-minute steps)
 )
 
 invites = Table(

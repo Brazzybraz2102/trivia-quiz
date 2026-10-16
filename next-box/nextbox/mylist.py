@@ -131,6 +131,10 @@ def parse_dump(text: str, today: date) -> list[dict]:
 
 
 # --- tags ------------------------------------------------------------------------------------
+class TagExists(ValueError):
+    pass
+
+
 class Tags:
     def __init__(self, root_or_url, owner: str):
         self.db = root_or_url if isinstance(root_or_url, Engine) else db.database(root_or_url)
@@ -175,6 +179,14 @@ class Tags:
             if tag_name(name) not in known:
                 self.set(name, "white")
                 known.add(tag_name(name))
+
+    def add(self, name: str, color: str) -> dict:
+        """A new tag only: an existing one keeps its color (change that with set)."""
+        name = tag_name(name)
+        mine = next((t for t in self.all() if t["name"] == name), None)
+        if mine:
+            raise TagExists(f"You already have #{name} ({mine['color']}). Change its color in the list above.")
+        return self.set(name, color)
 
     def remove(self, name: str) -> None:
         self.all()

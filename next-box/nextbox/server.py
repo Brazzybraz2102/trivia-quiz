@@ -31,14 +31,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import jobs, printer, scan, upkeep
-from .auth import ROLES, Accounts, AuthError, default_prefs, rank
+from .auth import PREF_HINTS, ROLES, Accounts, AuthError, default_prefs, rank
 from .config import PROJECT_DIR
 from .connections import Builder, Connections, NotConnected
 from .events import Events, ServerSettings
 from .feedback import Feedback, FeedbackError
 from .jobs import Context, print_text
 from .journal import Journal, Slides, Wins, slugs as find_slugs
-from .mylist import TAG_COLORS, LocalTasks, Tags, is_local, parse_dump
+from .mylist import TAG_COLORS, LocalTasks, TagExists, Tags, is_local, parse_dump
 from .printer import COLORS, DRIVERS
 from .printers import REASONS, PrinterError, Printers
 from .printers import validate as validate_printer
@@ -76,6 +76,7 @@ class PasswordBody(BaseModel):
 
 class ProfileBody(BaseModel):
     email: str | None = None
+    display_name: str | None = None  # left out: unchanged
 
 
 class DeleteMeBody(BaseModel):
@@ -169,6 +170,15 @@ class CalendarBody(BaseModel):
 
 class TagBody(BaseModel):
     color: str
+
+
+class NewTagBody(BaseModel):
+    name: str
+    color: str
+
+
+class CalendarName(BaseModel):
+    name: str
 
 
 class PickBody(BaseModel):
@@ -618,6 +628,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 "household": (accounts.household(user["household_id"]) or {}).get("name", ""),
                 "created": user.get("created"), "last_login": user.get("last_login"),
                 "protected": accounts.protected() == name,
+                "can_delete": accounts.removable(name),  # not the protected admin or the last superadmin
                 "must_change": user["must_change"], "prefs": user["prefs"],
                 "announcement": s["announcement"], "printing_paused": s["printing_paused"],
                 "data_notice": DATA_NOTICE,
@@ -701,16 +712,27 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     # ---------------------------------------------------------- your own account
     @app.patch("/auth/profile")
     def edit_profile(body: ProfileBody, caller: Caller = Depends(person)):
+        """Your name to show and your email, together: both are checked before either is saved."""
+        given = body.model_fields_set
+        name = (body.display_name or "").strip()
         try:
-            user = accounts.update(caller.name, email=(body.email or "").strip() or None)
+            if "display_name" in given and len(name) > 40:
+                raise AuthError(PREF_HINTS["display_name"])
+            if "email" in given:
+                accounts._check_email((body.email or "").strip() or None)  # its format, before anything is saved
+                user = accounts.update(caller.name, email=(body.email or "").strip() or None)
+            else:
+                user = accounts.get(caller.name)
+            prefs = accounts.set_prefs(caller.name, {"display_name": name}) if "display_name" in given else user["prefs"]
         except AuthError as exc:
             raise HTTPException(400, str(exc)) from exc
         events.log(caller.name, "profile_changed", kind="auth")
-        return {"email": user.get("email")}
+        return {"email": user.get("email"), "prefs": prefs}
 
     @app.get("/auth/export")
-    def export_my_data(caller: Caller = Depends(person)):
-        """Everything Next Box keeps about you, as a file. Never includes passwords or tokens."""
+    def export_my_data(format: str = "json", caller: Caller = Depends(person)):
+        """Everything Next Box keeps about you, as a file. Never includes passwords or tokens.
+        format=zip: the same data.json plus your journal photos and ticket images."""
         from sqlalchemy import select as _select
 
         from . import db as _db
@@ -728,13 +750,46 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             "calendars": [{k: c.get(k) for k in ("name", "provider", "calendars")} for c in connections.calendars(caller.name)],
             "tickets": [{k: v for k, v in t.items() if k != "png"} for t in ctx.store.list_printed(10_000, by=caller.name)],
             "read_backs": ctx.store.list_scans(10_000, by=caller.name),
-            "journal": Journal(accounts.db, caller.name).pages("0000-00-00", "9999-99-99"),  # photos: GET /journal/{id}/photo
+            "journal": Journal(accounts.db, caller.name).pages("0000-00-00", "9999-99-99"),  # photos: in the .zip
             "wins": Wins(accounts.db, caller.name).between("0000-00-00", "9999-99-99"),
-            "devices": accounts.sessions_for(caller.name),
+            "devices": accounts.sessions_for(caller.name, caller.token),
         }
-        events.log(caller.name, "export_data", kind="auth")
+        events.log(caller.name, "export_data", kind="auth", detail={"format": "zip" if format == "zip" else "json"})
+        if format == "zip":
+            return _export_zip(caller, data)
         return Response(json.dumps(data, indent=2, default=str), media_type="application/json",
                         headers={"Content-Disposition": f'attachment; filename="next-box-{caller.name}.json"'})
+
+    def _export_zip(caller: Caller, data: dict):
+        """data.json, journal/<page>.jpg for each page with a photo, tickets/<id>.png for each ticket.
+        Built in a temporary file (kept in memory while small), then streamed."""
+        import tempfile
+        import zipfile
+
+        from fastapi.responses import StreamingResponse
+        journal = Journal(accounts.db, caller.name)
+        out = tempfile.SpooledTemporaryFile(max_size=32 * 1024 * 1024)
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("data.json", json.dumps(data, indent=2, default=str))
+            for page in data["journal"]:
+                photo = journal.photo(page["id"]) if page.get("has_photo") else None
+                if photo:
+                    z.writestr(f"journal/{page['day']}-{page['id']}.jpg", photo, compress_type=zipfile.ZIP_STORED)
+            for t in data["tickets"]:
+                png = ctx.store.get_png(t["id"]) if t.get("id") else None
+                if png:
+                    z.writestr(f"tickets/{t['id']}.png", png, compress_type=zipfile.ZIP_STORED)
+        size = out.tell()
+        out.seek(0)
+
+        def chunks():
+            try:
+                while block := out.read(256 * 1024):
+                    yield block
+            finally:
+                out.close()
+        return StreamingResponse(chunks(), media_type="application/zip", headers={
+            "Content-Disposition": f'attachment; filename="next-box-{caller.name}.zip"', "Content-Length": str(size)})
 
     @app.post("/auth/delete-account")
     def delete_my_account(body: DeleteMeBody, request: Request, response: Response,
@@ -784,6 +839,18 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.get("/auth/sessions")
     def my_sessions(caller: Caller = Depends(person)):
         return accounts.sessions_for(caller.name, caller.token)
+
+    @app.delete("/auth/sessions/{sid}")
+    def end_my_session(sid: str, caller: Caller = Depends(person)):
+        """Sign out one of your other devices (the short id from GET /auth/sessions)."""
+        try:
+            accounts.end_session_id(caller.name, sid, keep=caller.token)
+        except KeyError:
+            raise HTTPException(404, "That device is already signed out.") from None
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        events.log(caller.name, "signout_device", kind="auth")
+        return {"ok": True}
 
     @app.post("/auth/signout-others")
     def signout_others(caller: Caller = Depends(person)):
@@ -1096,6 +1163,16 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.get("/tags")
     def get_tags(caller: Caller = Depends(person)):
         return {"tags": Tags(accounts.db, caller.name).all(), "colors": list(TAG_COLORS)}
+
+    @app.post("/tags")
+    def add_tag(body: NewTagBody, caller: Caller = Depends(person)):
+        """A new tag (the name goes in the body, so any typed name works). An existing tag keeps its color."""
+        try:
+            return Tags(accounts.db, caller.name).add(body.name, body.color)
+        except TagExists as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.put("/tags/{name}")
     def put_tag(name: str, body: TagBody, caller: Caller = Depends(person)):
@@ -1503,10 +1580,22 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         events.log(caller.name, "calendar_remove")
         return {"ok": True}
 
+    @app.patch("/calendars/{cal_id}")
+    def rename_calendar(cal_id: str, body: CalendarName, caller: Caller = Depends(person)):
+        try:
+            entry = connections.rename_calendar(caller.name, cal_id, body.name)
+        except KeyError:
+            raise HTTPException(404, "That calendar was already removed.") from None
+        except ProviderError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        events.log(caller.name, "calendar_rename")
+        return entry
+
     @app.get("/calendars/today")
     def calendar_today(caller: Caller = Depends(person)):
-        found, problems = connections.events_for(caller.name, ctx.today())
-        return {"events": found, "problems": problems}
+        failing: dict[str, str] = {}
+        found, problems = connections.events_for(caller.name, ctx.today(), failing=failing)
+        return {"events": found, "problems": problems, "failing": failing}  # failing: {calendar id: what's wrong}
 
     # ------------------------------------------------- sign in with Google / Microsoft / TickTick
     @app.get("/connect/{app_name}/{purpose}/start")
@@ -1551,8 +1640,15 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return oauth.setup_status()
 
     @app.get("/connection")
-    def get_connection(caller: Caller = Depends(person)):
-        return connections.status(caller.name)
+    def get_connection(check: bool = False, caller: Caller = Depends(person)):
+        """check=1 also asks the linked app whether the saved sign-in still works (ok, error)."""
+        if not check:
+            return connections.status(caller.name)
+        result = connections.check(caller.name)
+        if not result["ok"]:
+            events.log(caller.name, "connection_check", ok=False, detail={"provider": result.get("provider")},
+                       error=result["error"])
+        return result
 
     @app.put("/connection")
     def put_connection(body: ConnectBody, caller: Caller = Depends(person)):
@@ -1573,6 +1669,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.delete("/connection")
     def delete_connection(caller: Caller = Depends(person)):
         connections.disconnect(caller.name)
+        if caller.prefs.get("new_tasks_to") == "linked":  # no linked app now: new tasks go to My list
+            accounts.set_prefs(caller.name, {"new_tasks_to": "nextbox"})
         events.log(caller.name, "disconnect")
         return connections.status(caller.name)
 

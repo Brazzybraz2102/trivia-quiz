@@ -223,7 +223,29 @@
   :root[data-theme="dark"] input[type=date] { color-scheme:dark; }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) input[type=date] { color-scheme:dark; } }
   .tagrow { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
-  @media (max-width:520px) { .setting { flex-wrap:wrap; } }
+  /* Phones: checkboxes and small number boxes stay in one column on the right; wide controls
+     (lists, sliders, text) always sit on their own line under the label. */
+  @media (max-width:520px) {
+    .setting { display:grid; grid-template-columns:1fr auto; align-items:center; }
+    .setting:has(select), .setting:has(input[type=range]), .setting:has(input[type=text]) { grid-template-columns:1fr; }
+    .setting:has(select) select, .setting:has(input[type=text]) input { justify-self:start; max-width:100%; }
+  }
+  .setting[hidden], .menu [hidden] { display:none; }
+  .setting .label .err { display:block; color:var(--warn); }
+  input[type=url] { width:100%; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  #mePanel a, #pDeletePanel a { color:var(--accent); }
+  /* Settings: the jump bar stays at the top while you scroll, and a card's heading lands below it. */
+  #setJump { position:sticky; top:0; z-index:4; background:var(--bg); padding:6px 0; }
+  #settings > .card { scroll-margin-top:60px; }
+  @media (max-width:720px) {
+    #setJump { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
+    #setJump::-webkit-scrollbar { display:none; }
+    #setJump button { flex:none; }
+  }
+  .device { display:flex; gap:8px; align-items:center; padding:8px 0; border-top:1px solid var(--line); }
+  .device:first-child { border-top:0; }
+  .device .muted { font-size:13px; overflow-wrap:anywhere; }
+  .calstatus:empty { display:none; }
 </style>
 </head>
 <body>
@@ -448,10 +470,12 @@
     </div>
 
     <div class="card"><h2>Your details</h2>
+      <form id="pForm" novalidate>
       <div class="field"><label for="pDisplay">Name to show</label><input type="text" id="pDisplay" maxlength="40" placeholder="e.g. Mike"></div>
-      <div class="field"><label for="pEmail">Email</label><input type="email" id="pEmail" autocapitalize="none" placeholder="you@example.com">
+      <div class="field"><label for="pEmail">Email</label><input type="email" id="pEmail" autocapitalize="none" autocomplete="email" placeholder="you@example.com">
         <div class="muted">Optional. You can sign in with it instead of your username.</div></div>
-      <div class="row"><button class="go" id="pSave">Save</button><span id="pMsg" class="muted"></span></div>
+      <div class="row"><button class="go" id="pSave" type="submit">Save</button><span id="pMsg" class="muted" role="alert"></span></div>
+      </form>
     </div>
 
     <div class="card"><h2>Password</h2>
@@ -465,7 +489,7 @@
     </div>
 
     <div class="card"><h2>Signed-in devices</h2>
-      <div id="sessions" class="muted">…</div>
+      <div id="sessions">…</div>
       <div class="row"><button class="plain" id="signoutOthers">Sign out other devices</button>
         <button class="plain" id="logout">Sign out</button></div>
     </div>
@@ -474,18 +498,20 @@
       <h3>What the admin can see</h3>
       <p class="muted" id="noticeText"></p>
       <p class="muted" id="noticeWhen"></p>
-      <div class="row"><a class="plain" href="/auth/export" style="text-decoration:none;color:inherit;border:1px solid var(--line);border-radius:8px;padding:9px 13px">Download my data</a>
+      <p class="muted">Download my data saves one .zip file: your list, settings, journal pages and photos, and ticket images.</p>
+      <div class="row"><a class="plain" href="/auth/export?format=zip" style="text-decoration:none;color:inherit;border:1px solid var(--line);border-radius:8px;padding:9px 13px">Download my data</a>
         <button class="go warn" id="pDelete">Delete my account</button></div>
       <div id="pDeletePanel"></div>
     </div>
   </section>
 
   <section id="settings">
-    <div class="chips" id="setJump" style="margin-bottom:12px">
-      <button data-jump="setGeneral">General</button><button data-jump="focusCard">Focus</button>
-      <button data-jump="tagCard">Tags</button><button data-jump="calCard">Calendars</button>
-      <button data-jump="appCard">Linked app</button><button data-jump="printCard">Printing</button>
-      <button data-jump="readCard">Read-back</button><button data-jump="helpCard">Help</button>
+    <div class="chips" id="setJump" style="margin-bottom:12px" role="group" aria-label="Jump to">
+      <button data-jump="setGeneral">General</button><button data-jump="tagCard">Tags</button>
+      <button data-jump="focusCard">Focus</button><button data-jump="calCard">Calendars</button>
+      <button data-jump="appCard">Linked app</button><button data-jump="labelCard">Label colors</button>
+      <button data-jump="printCard">Printing</button><button data-jump="readCard">Read-back</button>
+      <button data-jump="helpCard">Help</button>
     </div>
 
     <div class="card" id="setGeneral"><h2>General</h2>
@@ -503,8 +529,8 @@
     <div class="card" id="tagCard"><h2>Tags &amp; colors</h2>
       <p class="muted">Each tag has a color. Stickers print on the roll loaded with that color, or with the tag's pattern on plain white labels.</p>
       <div id="tagList">…</div>
-      <div class="row"><input type="text" id="newTag" placeholder="New tag, e.g. errand" style="max-width:200px">
-        <select id="newTagColor" aria-label="Color"></select><button class="go" id="addTag">Add tag</button></div>
+      <form class="row" id="tagForm"><input type="text" id="newTag" placeholder="New tag, e.g. errand" style="max-width:200px" maxlength="24" aria-label="New tag name" autocapitalize="none">
+        <select id="newTagColor" aria-label="Color"></select><button class="go" id="addTag" type="submit">Add tag</button></form>
     </div>
 
     <div class="card" id="focusCard"><h2>Focus &amp; ADHD helpers</h2>
@@ -533,15 +559,15 @@
       <div id="appConnect" hidden>
         <div class="row"><select id="provSel" aria-label="To-do app"></select></div>
         <div id="provFields"></div>
-        <div class="row"><button class="go" id="provGo">Connect</button><span id="provMsg" class="err"></span></div>
+        <div class="row"><button class="go" id="provGo">Connect</button><button class="plain" id="provCancel" type="button" hidden>Cancel</button><span id="provMsg" class="err" role="status"></span></div>
         <details class="muted" style="margin-top:10px"><summary>Other apps</summary><div id="provOther"></div></details>
       </div>
     </div>
 
     <div class="card" id="labelCard"><h2>Printers &amp; label colors</h2>
       <p class="muted" id="printersLoaded">…</p>
-      <label class="setting"><div class="label"><b>My usual printer</b><span>Used whenever a color below isn't loaded anywhere.</span></div><select id="defPrinter" aria-label="My usual printer"></select></label>
-      <h3>Which labels for what</h3>
+      <label class="setting" id="defPrinterRow"><div class="label"><b>My usual printer</b><span id="defPrinterNote">Used whenever a color below isn't loaded anywhere.</span></div><select id="defPrinter" aria-label="My usual printer"></select></label>
+      <h3 id="ruleHead">Which labels for what</h3>
       <div id="colorRules"></div>
       <label class="setting"><div class="label"><b>Overdue tasks on their own ticket</b><span>Today's list prints in two parts, so overdue (expired) tasks come out on their color.</span></div><input type="checkbox" data-pref="split_overdue"></label>
     </div>
@@ -553,7 +579,7 @@
         <select data-pref="sticker_size" aria-label="Sticker size"><option value="normal">Normal</option><option value="big">Big</option></select></label>
       <label class="setting"><div class="label"><b>Paper size</b><span>For "Print on paper" on a regular printer.</span></div>
         <select data-pref="paper_size" aria-label="Paper size"><option value="letter">US Letter</option><option value="a4">A4</option><option value="a5">A5 journal page</option><option value="half_letter">Half letter journal page (5.5 × 8.5 in)</option></select></label>
-      <label class="setting"><div class="label"><b>Default list filter</b><span>Pre-fills "List from a filter".</span></div><input type="text" style="max-width:220px" data-pref="default_filter" placeholder="#Groceries"></label>
+      <label class="setting"><div class="label"><b>Default list filter</b><span>Pre-fills "List from a filter".</span></div><input type="text" style="max-width:220px" data-pref="default_filter" placeholder="#Groceries" maxlength="200"></label>
     </div>
 
     <div class="card" id="readCard"><h2>Read-back</h2>
