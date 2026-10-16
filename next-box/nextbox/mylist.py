@@ -275,23 +275,59 @@ class LocalTasks(TaskProvider):
                 conn.execute(update(db.tasks).where(self._mine(num)).values(**values))
         return self.get_task(task_id)
 
-    def close_task(self, task_id: str) -> None:
+    def close_task(self, task_id: str, on_day: date | None = None) -> dict | None:
+        """Finish it (a repeat moves to its next day) and count it as a win on `on_day` (default
+        today; a photo read-back passes the ticket's day). Already finished: nothing changes and
+        None comes back, so a double tap or a second read-back never counts twice. Otherwise
+        returns what undoing it needs."""
         task = self.get_task(task_id)
         num = self._num(task_id)
+        day = on_day or self._today()
+        now = int(time.time())
         with self.db.begin() as conn:
+            if task["done"]:
+                return None
             if task["repeat"] and task["due"]:
-                nxt = next_due(task["repeat"], date.fromisoformat(task["due"]["date"][:10]), self._today())
-                conn.execute(update(db.tasks).where(self._mine(num)).values(
-                    due_date=nxt.isoformat(), steps=[{**s, "done": False} for s in task["steps"]]))
+                prev = task["due"]["date"][:10]
+                nxt = next_due(task["repeat"], date.fromisoformat(prev), day)
+                changed = conn.execute(update(db.tasks).where(self._mine(num), db.tasks.c.due_date == prev).values(
+                    due_date=nxt.isoformat(), steps=[{**s, "done": False} for s in task["steps"]])).rowcount
+                undo = {"prev_due": prev, "prev_steps": [bool(s.get("done")) for s in task["steps"]]}
             else:
-                conn.execute(update(db.tasks).where(self._mine(num)).values(done_at=int(time.time())))
-            conn.execute(insert(db.events).values(  # counts toward "done yesterday" on the next ticket
+                changed = conn.execute(update(db.tasks).where(self._mine(num), db.tasks.c.done_at.is_(None))
+                                       .values(done_at=now)).rowcount
+                undo = {"prev_due": (task["due"] or {}).get("date")}
+            if not changed:
+                return None  # finished on another device a moment ago
+            conn.execute(insert(db.events).values(  # ids only: admins read events
                 ts=time.time(), user=self.owner, household_id=self.household, kind="activity",
-                action="task_done", ok=True, detail={"source": "nextbox"}))
+                action="task_done", ok=True, detail={"source": "nextbox", "task_id": f"{PREFIX}{num}"}))
+            conn.execute(insert(db.wins).values(  # counts toward "done yesterday" and the journal's wins
+                owner=self.owner, household_id=self.household, day=day.isoformat(), ts=now,
+                task_id=f"{PREFIX}{num}", source="nextbox", content=task["content"][:500]))
+        return undo
 
-    def reopen(self, task_id: str) -> dict:
+    def reopen(self, task_id: str, prev_due: str | None = None, prev_steps: list | None = None) -> dict:
+        """Not done after all. A repeat goes back to `prev_due` (and its ticked steps). Either way
+        the win it counted is taken back."""
+        task = self.get_task(task_id)
+        num = self._num(task_id)
+        values: dict = {}
+        if task["done"]:
+            values["done_at"] = None
+        elif task["repeat"] and prev_due:
+            values["due_date"] = _iso_day(str(prev_due)[:10])
+            if prev_steps is not None and len(prev_steps) == len(task["steps"]):
+                values["steps"] = [{**s, "done": bool(d)} for s, d in zip(task["steps"], prev_steps)]
+        if not values:
+            return task
+        w = db.wins.c
         with self.db.begin() as conn:
-            conn.execute(update(db.tasks).where(self._mine(self._num(task_id))).values(done_at=None))
+            conn.execute(update(db.tasks).where(self._mine(num)).values(**values))
+            newest = conn.execute(select(w.id).where(w.owner == self.owner, w.task_id == f"{PREFIX}{num}")
+                                  .order_by(w.ts.desc(), w.id.desc()).limit(1)).scalar()
+            if newest is not None:
+                conn.execute(delete(db.wins).where(w.id == newest))
         return self.get_task(task_id)
 
     def set_due_date(self, task_id: str, date_iso: str) -> None:
@@ -419,8 +455,23 @@ class Merged(TaskProvider):
             return self.linked.add_task(content, description=description)
         return self.local.add_task(content, description=description)
 
-    def close_task(self, task_id: str) -> None:
-        self._route(task_id).close_task(task_id)
+    def close_task(self, task_id: str, on_day: date | None = None):
+        if is_local(task_id):
+            return self.local.close_task(task_id, on_day=on_day)
+        return self._route(task_id).close_task(task_id)
+
+    def reopen_task(self, task_id: str, prev_due: str | None = None, prev_steps: list | None = None):
+        """Undo a finish. Linked apps without a reopen raise NotImplementedError."""
+        if is_local(task_id):
+            return self.local.reopen(task_id, prev_due=prev_due, prev_steps=prev_steps)
+        reopen = getattr(self._route(task_id), "reopen_task", None)
+        if reopen is None:
+            raise NotImplementedError
+        return reopen(task_id)
+
+    def linked_name(self) -> str:
+        from .providers import display_name
+        return display_name(self._linked_key()) if self.linked is not None else "your linked app"
 
     def set_due_date(self, task_id: str, date_iso: str) -> None:
         self._route(task_id).set_due_date(task_id, date_iso)

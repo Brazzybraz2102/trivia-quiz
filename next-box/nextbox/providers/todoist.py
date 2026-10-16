@@ -106,6 +106,10 @@ class Todoist(TaskProvider):
     def close_task(self, task_id: str) -> None:
         self._request("POST", f"/tasks/{self._id(task_id)}/close")
 
+    def reopen_task(self, task_id: str) -> None:
+        """Undo a close (a read-back that misread a ✓)."""
+        self._request("POST", f"/tasks/{self._id(task_id)}/reopen")
+
     def set_due_date(self, task_id: str, date_iso: str) -> None:
         # due_date, never due_string: a due_string would replace a recurring rule.
         self._request("POST", f"/tasks/{self._id(task_id)}", json={"due_date": date_iso})

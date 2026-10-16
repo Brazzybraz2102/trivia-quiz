@@ -92,7 +92,8 @@ function clearPerson() {
   for (const id of ["#scanResult", "#printResult", "#listResult", "#listBody", "#nowText", "#nowStep", "#todayEvents", "#guideSteps",
     "#jDays", "#slugList", "#winsChart", "#winsTotal", "#hist", "#boardList", "#tagList", "#calList", "#appStatus", "#provFields",
     "#calFields", "#sessions", "#pName", "#pFacts", "#pDeletePanel", "#mePanel", "#suTiles", "#suList", "#suNew", "#users",
-    "#activity", "#events", "#diag", "#nuOut", "#ivOut", "#ivList", "#printerList", "#uPeople", "#uTickets", "#udInfo", "#udTempOut"]) {
+    "#activity", "#events", "#diag", "#nuOut", "#ivOut", "#ivList", "#printerList", "#uPeople", "#uTickets", "#udInfo", "#udTempOut",
+    "#scanPending", "#scanRecentList"]) {
     const el = $(id); if (el) el.innerHTML = "";
   }
   for (const id of ["#printResult", "#listResult", "#todayCard", "#guideCard", "#slugCard", "#jNew", "#activityCard", "#uDetail"]) $(id).hidden = true;
@@ -438,42 +439,187 @@ $$("[data-act]").forEach((b) => b.onclick = async () => {
 
 // ---------------------------------------------------------------- read back
 const VERB = { drop: "Delete", done: "Complete", tomorrow: "Move to tomorrow" };
+const MARK_STATUS = { applied: "Done ✓", skipped: "Skipped", error: "Couldn't apply", undone: "Undone", already: "Already done",
+                      applying: "Working on it…", undoing: "Undoing…" };
+const scanNotes = {};  // notes read from a photo, shown with it here (they're kept only in your journal)
+let scanFile = null;
+const shortTime = (iso) => new Date(iso).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+const waitingIn = (r) => r.needs_confirmation.filter((p) => p.status === "pending");
 
-function renderScan(rec) {
-  const pend = rec.needs_confirmation.filter((p) => p.status === "pending");
-  let h = `<div class="card"><h2>Scan ${esc(rec.id)}${rec.label_id ? ` · ticket #${esc(rec.label_id)}` : ""}</h2>`;
-  rec.errors.forEach((e) => h += `<p class="err">${esc(e)}</p>`);
-  rec.applied.forEach((a) => h += `<p class="applied">✓ ${esc(VERB[a.mark])}: ${esc(a.content)}</p>`);
-  rec.needs_confirmation.filter((p) => p.status !== "pending")
-    .forEach((p) => h += `<p class="muted">${esc(p.status)}: ${esc(VERB[p.mark])} ${esc(p.content)}</p>`);
-  pend.forEach((p) => h += `<div class="pending"><b>${esc(VERB[p.mark])}?</b> ${esc(p.content)}
-      <div class="muted">row ${p.row} · confidence ${p.confidence}${p.note ? " · " + esc(p.note) : ""}</div>
-      <div class="row"><button class="go ${p.mark === "drop" ? "warn" : ""}" data-row="${p.row}" data-d="confirm">Confirm</button>
-      <button class="plain" data-row="${p.row}" data-d="skip">Skip</button></div></div>`);
-  if (rec.message) h += `<p class="applied">${esc(rec.message)}</p>`;
-  if (rec.notes) h += `<h3>Your notes</h3><p style="white-space:pre-wrap">${esc(rec.notes)}</p>`;
-  if (rec.journal_id) h += `<p class="muted">Saved to your journal. <button class="linkish" data-go-tab="journal">Open Journal</button></p>`;
-  if (!rec.applied.length && !rec.needs_confirmation.length && !rec.errors.length && !rec.journal_id) h += `<p class="muted">No marks found.</p>`;
-  $("#scanResult").innerHTML = h + "</div>";
-  $("#scanResult").querySelectorAll("[data-row]").forEach((b) => b.onclick = async () => {
-    b.disabled = true;
-    try {
-      renderScan(await api(`/scan/${rec.id}/confirm`, { method: "POST", json: { decisions: { [b.dataset.row]: b.dataset.d } } }));
-    } catch (e) { alert(e.message); b.disabled = false; }
-  });
+function ignoredLine(i) {
+  const what = `${VERB[i.mark] || ""} ${i.content || ""}`.trim();
+  return { "not on this label": `Row ${i.row} isn't on this ticket`, "duplicate row": `Row ${i.row} was read twice`,
+           "already done": `Already done: ${i.content}`, "already moved": `Already moved: ${i.content}`,
+           "read before": `Already read from this ticket: ${what}` }[i.reason] || `Row ${i.row}: ${i.reason}`;
 }
 
+function scanCard(rec) {
+  if (rec.notes !== undefined) scanNotes[rec.id] = { notes: rec.notes, win: rec.win || "" };
+  const kept = scanNotes[rec.id] || {};
+  const conflict = rec.label_conflict;
+  const pend = waitingIn(rec);
+  let h = `<div class="card scanrec" data-scan="${esc(rec.id)}">
+    <h2 tabindex="-1">${rec.label_id ? `Read back: ticket #${esc(rec.label_id)}` : "Read back"}</h2>
+    <p class="muted">${esc(shortTime(rec.created_at))}</p>`;
+  if (rec.previous_scan) h += `<p class="muted">You read this ticket back earlier (${esc(shortTime(rec.previous_scan.created_at))}). Marks from then were left alone.</p>`;
+  if (conflict) h += `<div class="pending"><b>The photo shows #${esc(conflict.read)} but you typed #${esc(conflict.typed)}. Which one?</b>
+      <p class="muted">Nothing changes until you pick.</p>
+      <div class="row"><button class="go" data-label="${esc(conflict.read)}">#${esc(conflict.read)} (in the photo)</button>
+      <button class="plain" data-label="${esc(conflict.typed)}">#${esc(conflict.typed)} (typed)</button></div></div>`;
+  rec.errors.forEach((e) => h += `<p class="err">${esc(e)}</p>`);
+  if (rec.status === "failed" && rec.journal_id) h += `<div class="row"><button class="go" data-retry>Try again</button></div>`;
+  if (rec.candidates) {
+    h += rec.candidates.length ? `<div class="tickets">${rec.candidates.map((c) => `<button data-label="${esc(c.id)}">
+        <img src="/printed/${encodeURIComponent(c.id)}/png" alt="" loading="lazy">
+        <span><b>#${esc(c.id)}</b><br>${esc(shortTime(c.created_at))} · ${c.rows} task${c.rows === 1 ? "" : "s"}</span></button>`).join("")}</div>`
+      : `<p class="muted">You haven't printed a ticket with tasks yet.</p>`;
+    h += `<details style="margin-top:8px"><summary class="muted">Type the code instead</summary>
+        <div class="row"><input type="text" data-code-input aria-label="Ticket code" autocapitalize="characters" spellcheck="false" placeholder="e.g. 260930-P9AM or P9AM" style="max-width:240px">
+        <button class="plain" data-code-go>Use this code</button></div></details>`;
+  }
+  rec.applied.forEach((a) => h += a.status === "undone"
+    ? `<p class="muted">Undone: ${esc(VERB[a.mark])} ${esc(a.content)}</p>`
+    : `<div class="done-row"><span class="applied">✓ ${esc(VERB[a.mark])}: ${esc(a.content)}</span>${a.status === "undoing" ? `<span class="muted">Undoing…</span>`
+        : `<button class="linkish" data-undo="${a.row}" aria-label="Undo: ${esc(VERB[a.mark])} ${esc(a.content)}">Undo</button>`}</div>`);
+  rec.needs_confirmation.filter((p) => p.status !== "pending").forEach((p) => h += p.status === "applied" && p.mark !== "drop"
+    ? `<div class="done-row"><span class="applied">✓ ${esc(VERB[p.mark])}: ${esc(p.content)}</span><button class="linkish" data-undo="${p.row}" aria-label="Undo: ${esc(VERB[p.mark])} ${esc(p.content)}">Undo</button></div>`
+    : `<p class="${p.status === "error" ? "err" : "muted"}">${esc(p.reason === "already moved" ? "Already moved" : MARK_STATUS[p.status] || p.status)}: ${esc(VERB[p.mark])} ${esc(p.content)}${p.status === "error" && p.error ? ` (${esc(p.error)})` : ""}</p>`);
+  pend.forEach((p) => h += `<div class="pending"><b>${esc(VERB[p.mark])}?</b> ${esc(p.content)}
+      <div class="muted">row ${p.row} · ${Math.round(p.confidence * 100)}% sure${p.note ? " · " + esc(p.note) : ""}</div>
+      ${conflict ? "" : `<div class="row"><button class="go ${p.mark === "drop" ? "warn" : ""}" data-row="${p.row}" data-d="confirm" aria-label="Confirm: ${esc(VERB[p.mark])} ${esc(p.content)}">Confirm</button>
+      <button class="plain" data-row="${p.row}" data-d="skip" aria-label="Skip ${esc(p.content)}">Skip</button></div>`}</div>`);
+  if (pend.length > 1 && !conflict) h += `<div class="row"><button class="linkish" data-skip-all>Skip all ${pend.length}</button></div>`;
+  (rec.ignored || []).forEach((i) => h += `<p class="ignored">${esc(ignoredLine(i))}</p>`);
+  if (rec.message) h += `<p class="applied">${esc(rec.message)}</p>`;
+  if (kept.win) h += `<p class="jwin"><b>Your win:</b> ${esc(kept.win)}</p>`;
+  if (kept.notes) h += `<h3>Your notes</h3><p style="white-space:pre-wrap">${esc(kept.notes)}</p>`;
+  if (rec.journal_id) h += `<p class="muted">Saved to your journal. <button class="linkish" data-go-tab="journal">Open Journal</button></p>`;
+  if (!rec.applied.length && !rec.needs_confirmation.length && !rec.errors.length && !rec.journal_id && !(rec.ignored || []).length) h += `<p class="muted">No marks found.</p>`;
+  return h + `<p class="err" data-msg role="alert"></p></div>`;
+}
+
+function makeScanCard(rec) {
+  const box = document.createElement("div");
+  box.innerHTML = scanCard(rec);
+  const card = box.firstElementChild;
+  wireScanCard(card, rec);
+  return card;
+}
+
+function wireScanCard(card, rec) {
+  const act = async (btn, path, json) => {
+    card.querySelectorAll("button").forEach((b) => b.disabled = true);
+    try {
+      const fresh = makeScanCard(await api(`/scan/${encodeURIComponent(rec.id)}/${path}`, { method: "POST", json }));
+      card.replaceWith(fresh);
+      fresh.querySelector("h2").focus({ preventScroll: true });
+      loadWaiting(); loadRecent();
+    } catch (e) {
+      card.querySelectorAll("button").forEach((b) => b.disabled = false);
+      card.querySelector("[data-msg]").textContent = errText(e);
+    }
+  };
+  card.querySelectorAll("[data-row]").forEach((b) => b.onclick = () => act(b, "confirm", { decisions: { [b.dataset.row]: b.dataset.d } }));
+  card.querySelector("[data-skip-all]")?.addEventListener("click", (e) =>
+    act(e.target, "confirm", { decisions: Object.fromEntries(waitingIn(rec).map((p) => [p.row, "skip"])) }));
+  card.querySelectorAll("[data-undo]").forEach((b) => b.onclick = () => act(b, "undo", { row: Number(b.dataset.undo) }));
+  card.querySelectorAll("[data-label]").forEach((b) => b.onclick = () => act(b, "label", { label_id: b.dataset.label }));
+  card.querySelector("[data-retry]")?.addEventListener("click", (e) => {
+    card.querySelector("[data-msg]").innerHTML = `<span class="muted"><span class="spin" aria-hidden="true"></span>Reading your page again…</span>`;
+    act(e.target, "retry");
+  });
+  const code = card.querySelector("[data-code-input]");
+  card.querySelector("[data-code-go]")?.addEventListener("click", (e) => code.value.trim() && act(e.target, "label", { label_id: code.value.trim() }));
+  code?.addEventListener("keydown", (e) => { if (e.key === "Enter") card.querySelector("[data-code-go]").click(); });
+}
+
+function renderScan(rec) {
+  const card = makeScanCard(rec);
+  $("#scanResult").replaceChildren(card);
+  $(`#scanPending [data-scan="${CSS.escape(rec.id)}"]`)?.remove();  // shown above now
+  card.querySelector("h2").focus({ preventScroll: true });
+  card.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+}
+
+// How many marks from photos are waiting for a tap: on the Snap button and at the top of My list.
+function setWaiting(n) {
+  $$("[data-waiting]").forEach((b) => {
+    b.hidden = !n;
+    b.innerHTML = n ? `<span class="sr-only">, </span>${n}<span class="sr-only"> waiting</span>` : "";
+  });
+  $("#waitingNote").hidden = !n;
+  $("#waitingText").textContent = n === 1 ? "1 mark from a photo is waiting for you." : `${n} marks from photos are waiting for you.`;
+}
+
+async function loadWaiting(render = false) {
+  let recs;
+  try { recs = await api("/scans?pending=true&limit=20"); } catch { return; }
+  setWaiting(recs.reduce((n, r) => n + waitingIn(r).length, 0));
+  if (!render) return;
+  const shown = $("#scanResult [data-scan]")?.dataset.scan;
+  const others = recs.filter((r) => r.id !== shown);
+  $("#scanPending").innerHTML = others.length ? `<h2 class="sectionhead">Still waiting for you</h2>` : "";
+  others.forEach((r) => $("#scanPending").append(makeScanCard(r)));
+}
+
+async function loadRecent() {
+  let recs;
+  try { recs = await api("/scans?limit=8"); } catch { return; }
+  $("#scanRecent").hidden = !recs.length;
+  $("#scanRecentList").innerHTML = recs.map((r) => {
+    const applied = r.applied.filter((a) => a.status !== "undone").length + r.needs_confirmation.filter((p) => p.status === "applied").length;
+    const bits = [r.label_id ? `ticket #${r.label_id}` : "no ticket", `${applied} applied`,
+                  waitingIn(r).length ? `${waitingIn(r).length} waiting` : "", r.status === "failed" ? "couldn't read it" : ""].filter(Boolean);
+    return `<button class="recent" data-open-scan="${esc(r.id)}"><b>${esc(shortTime(r.created_at))}</b><span class="muted">${esc(bits.join(" · "))}</span></button>`;
+  }).join("");
+}
+$("#scanRecentList").onclick = async (e) => {
+  const b = e.target.closest("[data-open-scan]");
+  if (!b) return;
+  try { renderScan(await api(`/scan/${encodeURIComponent(b.dataset.openScan)}`)); } catch (err) { toast(errText(err)); }
+};
+loaders.scan = () => { loadWaiting(true); loadRecent(); };
+
+// Picking the photo: the camera, or one already taken (the night-time journal photo, a screenshot).
+function choosePhoto(file) {
+  scanFile = file || null;
+  const img = $("#scanPreview");
+  if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
+  delete img.dataset.url;
+  img.removeAttribute("src");
+  $("#scanChosen").hidden = !scanFile;
+  $("#scanNoPreview").hidden = true;
+  $("#scanGo").disabled = !scanFile;
+  if (!scanFile) { $("#photo").value = ""; $("#photoCam").value = ""; return; }
+  img.hidden = false;
+  img.dataset.url = URL.createObjectURL(scanFile);
+  img.src = img.dataset.url;
+  $("#scanName").textContent = scanFile.name || "Your photo";
+}
+$("#scanPreview").onerror = () => { if (!scanFile) return; $("#scanPreview").hidden = true; $("#scanNoPreview").hidden = false; };
+$("#snapCam").onclick = () => $("#photoCam").click();
+$("#snapLib").onclick = () => $("#photo").click();
+$("#photoCam").onchange = (e) => choosePhoto(e.target.files[0]);
+$("#photo").onchange = (e) => choosePhoto(e.target.files[0]);
+$("#scanRetake").onclick = () => { choosePhoto(null); $("#snapCam").focus(); };
+
 $("#scanGo").onclick = async () => {
-  const f = $("#photo").files[0];
-  if (!f) return alert("Pick a photo first");
+  if (!scanFile) return;
   const fd = new FormData();
-  fd.append("photo", f);
+  fd.append("photo", scanFile);
   if ($("#scanLabel").value.trim()) fd.append("label_id", $("#scanLabel").value.trim().replace(/^#/, ""));
   $("#scanGo").disabled = true;
-  $("#scanResult").innerHTML = `<p class="muted">Reading…</p>`;
-  try { renderScan(await api("/scan", { method: "POST", body: fd })); }
-  catch (e) { $("#scanResult").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
-  finally { $("#scanGo").disabled = false; }
+  $("#scanResult").innerHTML = `<p class="muted"><span class="spin" aria-hidden="true"></span>Reading your page… this can take up to a minute.</p>`;
+  try {
+    const rec = await api("/scan", { method: "POST", body: fd });
+    renderScan(rec);
+    if (!(rec.status === "failed" && !rec.journal_id)) {  // read (or kept to try again): one more tap mustn't read it twice
+      choosePhoto(null);
+      $("#scanLabel").value = ""; $("#scanCode").open = false;
+    }
+    loadWaiting(true); loadRecent();
+  } catch (e) { $("#scanResult").innerHTML = `<p class="err">${esc(errText(e))}</p>`; }
+  finally { $("#scanGo").disabled = !scanFile; }
 };
 
 // ---------------------------------------------------------------- history
@@ -895,6 +1041,7 @@ async function loadList() {
   const ids = new Set([...listData.tasks, ...(listData.linked || [])].map((t) => t.id));
   picked = new Set([...picked].filter((id) => ids.has(id)));
   renderList();
+  setWaiting(listData.marks_waiting || 0);
   if (guide && !guide.steps.find((x) => x.key === "tasks")?.done && listData.tasks.length) loadGuide();
 }
 
@@ -1483,69 +1630,117 @@ document.addEventListener("click", (e) => {
   const t = e.target.closest("[data-go-tab]");
   if (t) goto(t.dataset.goTab);
 });
-const dayName = (iso) => {
-  const d = new Date(iso + "T12:00:00");
-  const today = new Date(); today.setHours(12, 0, 0, 0);
-  const diff = Math.round((today - d) / 86400000);
-  if (diff === 0) return "Today";
-  if (diff === 1) return "Yesterday";
-  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
-};
-let jUntil = "";
+// "Today" and "Yesterday" come from the server (`d`), whose clock files the pages, not this device's.
+const dayName = (iso, d = {}) => d.is_today ? "Today" : d.is_yesterday ? "Yesterday"
+  : new Date(iso + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+let jUntil = "", jToday = "";
+const NO_JOURNAL = `<div class="card"><p class="muted">Nothing here yet. Print today's label, paste it in your journal,
+      write on the right page tonight, then Snap both pages.</p></div>`;
 
 async function loadJournal(more = false) {
-  if (!more) { jUntil = ""; $("#jDays").innerHTML = `<p class="muted">Loading…</p>`; loadWins(); loadSlugs(); }
+  await flushJournal();  // an edit still being typed is saved before the pages are drawn again
+  if (!more) { jUntil = ""; $("#jDays").innerHTML = `<p class="muted">Loading…</p>`; $("#jEnd").hidden = true; loadWins(); loadSlugs(); }
   try {
     const r = await api(`/journal?days=14${jUntil ? "&until=" + jUntil : ""}`);
+    jToday = r.today;
     const html = r.days.map(dayCard).join("");
-    if (!more) $("#jDays").innerHTML = html || `<div class="card"><p class="muted">Nothing here yet. Print today's label, paste it in your journal,
-      write on the right page tonight, then Snap both pages.</p></div>`;
+    if (!more) $("#jDays").innerHTML = html || NO_JOURNAL;
     else $("#jDays").insertAdjacentHTML("beforeend", html);
     jUntil = r.next_until;
-    $("#jOlder").hidden = !r.total_pages && !r.days.length;
+    $("#jOlder").hidden = !r.has_more;
+    $("#jEnd").hidden = !(more && !r.has_more);
     wireJournal();
-  } catch (e) { $("#jDays").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  } catch (e) { $("#jDays").innerHTML = `<p class="err">${esc(errText(e))}</p>`; }
 }
 $("#jOlder").onclick = () => loadJournal(true);
 
+function winsHtml(w) {
+  if (!w.count) return "";
+  const named = new Map();
+  w.items.forEach((t) => named.set(t, (named.get(t) || 0) + 1));
+  const items = [...named].map(([t, n]) => `<li>${esc(t)}${n > 1 ? ` ×${n}` : ""}</li>`).join("");
+  const linked = w.linked ? `<li class="muted">${items ? "+" : ""}${w.linked} ${items ? "more " : ""}in your linked app</li>` : "";
+  return `<div data-wins><p><b>Wins: ${w.count} ✓</b></p><ul class="winlist">${items}${linked}</ul></div>`;
+}
+
+function pageHtml(p, d) {
+  const made = new Date(p.created * 1000);
+  const local = `${made.getFullYear()}-${String(made.getMonth() + 1).padStart(2, "0")}-${String(made.getDate()).padStart(2, "0")}`;
+  const time = made.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const when = local === d.day ? time : `written ${made.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+  return `<div class="jpage" data-page="${esc(p.id)}" data-photo="${p.has_photo ? "1" : ""}">
+      ${p.has_photo ? `<button class="jphoto" data-jphoto aria-label="Open the photo of this page"><img loading="lazy" src="/journal/${esc(p.id)}/photo" alt=""></button>` : ""}
+      <label class="sr-only" for="jn-${esc(p.id)}">Notes for ${esc(dayName(d.day, d))}, ${esc(when)}</label>
+      <textarea id="jn-${esc(p.id)}" placeholder="${p.has_photo ? "No handwritten notes were found. Type some if you like." : ""}">${esc(p.notes)}</textarea>
+      <div class="row"><span class="muted" data-jstate>${esc(when)}</span>
+        <button class="plain small warn" data-jdel>${p.has_photo ? "Delete page" : "Delete note"}</button></div></div>`;
+}
+
 function dayCard(d) {
-  const w = d.wins;
-  const named = w.items.filter(Boolean);
-  const extra = Math.max(0, w.count - named.length);
-  const wins = w.count || named.length
-    ? `<p><b>Wins: ${Math.max(w.count, named.length)} ✓</b></p>${named.length ? `<ul class="winlist">${named.map((t) => `<li>${esc(t)}</li>`).join("")}${extra ? `<li class="muted">+${extra} more in your linked app</li>` : ""}</ul>` : ""}`
-    : "";
-  const pages = d.pages.map((p) => `<div class="jpage" data-page="${esc(p.id)}">
-      ${p.has_photo ? `<a href="/journal/${esc(p.id)}/photo" target="_blank" rel="noopener"><img loading="lazy" src="/journal/${esc(p.id)}/photo" alt="Journal page photo"></a>` : ""}
-      <textarea aria-label="Notes" placeholder="${p.has_photo ? "No handwritten notes were found. Type some if you like." : ""}">${esc(p.notes)}</textarea>
-      <div class="row"><button class="plain small" data-jsave>Save</button><button class="plain small warn" data-jdel>Delete page</button>
-        <span class="muted">${new Date(p.created * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span></div></div>`).join("");
-  return `<div class="card jday"><h3>${esc(dayName(d.day))}</h3>${wins}${pages}</div>`;
+  const written = d.pages.filter((p) => p.win).map((p) => `<p class="jwin"><b>Your win:</b> ${esc(p.win)}</p>`).join("");
+  return `<div class="card jday"><h3>${esc(dayName(d.day, d))}</h3>${written}${winsHtml(d.wins)}${d.pages.map((p) => pageHtml(p, d)).join("")}</div>`;
 }
 
 function fitText(t) { t.style.height = "auto"; t.style.height = (t.scrollHeight + 4) + "px"; }
 
+// Notes save themselves a moment after you stop typing.
+const jPending = new Map();  // page id -> { timer, textarea, state }
+async function saveNote(id, t, state) {
+  jPending.delete(id);
+  try {
+    await api(`/journal/${id}`, { method: "PATCH", json: { notes: t.value }, keepalive: true });
+    state.textContent = "Saved ✓"; state.className = "muted";
+  } catch (e) { state.textContent = errText(e); state.className = "err"; }
+}
+function flushJournal() {
+  const all = [...jPending.entries()];
+  all.forEach(([, x]) => clearTimeout(x.timer));
+  return Promise.all(all.map(([id, x]) => saveNote(id, x.t, x.state)));
+}
+window.addEventListener("pagehide", () => { flushJournal(); });
+
 function wireJournal() {
-  $$("#jDays textarea").forEach((t) => { fitText(t); t.oninput = () => fitText(t); });  // show the whole page of notes
-  $$("#jDays [data-jsave]").forEach((b) => b.onclick = async () => {
-    const page = b.closest("[data-page]");
-    try { await api(`/journal/${page.dataset.page}`, { method: "PATCH", json: { notes: page.querySelector("textarea").value } }); toast("Saved"); }
-    catch (e) { toast(e.message); }
+  $$("#jDays textarea").forEach((t) => {
+    fitText(t);  // show the whole page of notes
+    t.oninput = () => {
+      fitText(t);
+      const page = t.closest("[data-page]"), id = page.dataset.page, state = page.querySelector("[data-jstate]");
+      clearTimeout(jPending.get(id)?.timer);
+      state.textContent = "Saving…"; state.className = "muted";
+      jPending.set(id, { timer: setTimeout(() => saveNote(id, t, state), 800), t, state });
+    };
   });
   $$("#jDays [data-jdel]").forEach((b) => b.onclick = async () => {
-    const page = b.closest("[data-page]");
-    if (!confirm("Delete this journal page and its photo? This can't be undone.")) return;
-    try { await api(`/journal/${page.dataset.page}?confirm=true`, { method: "DELETE" }); page.remove(); toast("Deleted"); }
-    catch (e) { toast(e.message); }
+    const page = b.closest("[data-page]"), id = page.dataset.page;
+    if (!confirm(page.dataset.photo ? "Delete this page and its photo? This can't be undone." : "Delete this note? This can't be undone.")) return;
+    clearTimeout(jPending.get(id)?.timer); jPending.delete(id);
+    try {
+      await api(`/journal/${id}?confirm=true`, { method: "DELETE" });
+      const day = page.closest(".jday");
+      page.remove();
+      if (day && !day.querySelector(".jpage, [data-wins], .jwin")) day.remove();
+      if (!$("#jDays .jday")) $("#jDays").innerHTML = NO_JOURNAL;
+      toast("Deleted");
+    } catch (e) { toast(errText(e)); }
   });
 }
+$("#jDays").addEventListener("click", (e) => {  // a photo opens here, so its address stays out of the history
+  const b = e.target.closest("[data-jphoto]");
+  if (!b) return;
+  $("#photoBig").src = b.querySelector("img").src;
+  $("#photoDialog").showModal();
+});
+$("#photoClose").onclick = () => $("#photoDialog").close();
+$("#photoDialog").addEventListener("close", () => $("#photoBig").removeAttribute("src"));
 
 async function loadWins() {
   try {
     const r = await api("/journal/wins?days=7");
     const max = Math.max(1, ...r.series.map((x) => x.count));
-    $("#winsChart").innerHTML = r.series.map((x) => `<div title="${esc(x.day)}: ${x.count} done"><i style="height:${Math.round(x.count / max * 52)}px"></i>${x.count || ""}<br>${esc(new Date(x.day + "T12:00:00").toLocaleDateString(undefined, { weekday: "narrow" }))}</div>`).join("");
-    $("#winsTotal").textContent = r.total ? `${r.total} things done this week. That counts.` : "Your wins this week will show here.";
+    const wd = (x) => new Date(x.day + "T12:00:00").toLocaleDateString(undefined, { weekday: "short" });
+    $("#winsChart").innerHTML = r.series.map((x) => `<div class="${x.is_today ? "today" : ""}" aria-hidden="true"><i style="height:${Math.round(x.count / max * 52)}px"></i>${x.count || ""}<span>${esc(wd(x))}</span></div>`).join("");
+    $("#winsChart").setAttribute("aria-label", `Wins this week: ${r.series.map((x) => `${wd(x)}${x.is_today ? " (today)" : ""} ${x.count}`).join(", ")}`);
+    $("#winsTotal").textContent = r.total ? `${r.total} ${r.total === 1 ? "thing" : "things"} done this week. That counts.` : "Your wins this week will show here.";
   } catch { $("#winsChart").innerHTML = ""; }
 }
 
@@ -1553,9 +1748,10 @@ async function loadSlugs() {
   try {
     const r = await api("/journal/slugs");
     $("#slugCard").hidden = !r.slugs.length;
-    $("#slugList").innerHTML = r.slugs.map((s) => `<div class="slug" data-task="${esc(s.id)}">
+    $("#slugList").innerHTML = r.slugs.map((s) => `<div class="slug" data-task="${esc(s.id)}" data-content="${esc(s.content)}">
         <div><b>${esc(s.content)}</b><div class="muted">${s.moves ? `moved ${s.moves}×` : ""}${s.moves && s.waiting_days ? " · " : ""}${s.waiting_days ? `waiting ${s.waiting_days}d` : ""}</div></div>
         <div class="row" style="margin:0">${s.id.startsWith("nb:") ? `<button class="plain small" data-slug-steps>Make it smaller</button>` : ""}
+          <button class="plain small" data-slug-go>Let it go</button><button class="linkish small" data-slug-not>Not a slug</button>
           <button class="plain small" data-slug-focus>Print just this</button></div></div>`).join("");
     $$("#slugList [data-slug-focus]").forEach((b) => b.onclick = async () => {
       const id = b.closest("[data-task]").dataset.task;
@@ -1564,17 +1760,57 @@ async function loadSlugs() {
       try { const t = await api("/print/focus", { method: "POST", json: { task_id: id, dry_run } }); toast(t.status === "printed" ? "Printed" : "Preview made: see Printed"); }
       catch (e) { toast(e.message); }
     });
-    $$("#slugList [data-slug-steps]").forEach((b) => b.onclick = () => goto("mylist", `[data-id="${b.closest("[data-task]").dataset.task}"]`));
+    $$("#slugList [data-slug-steps]").forEach((b) => b.onclick = () => makeSmaller(b.closest("[data-task]").dataset.task));
+    $$("#slugList [data-slug-go]").forEach((b) => b.onclick = async () => {
+      const s = b.closest("[data-task]");
+      if (!confirm(`Let go of "${s.dataset.content}"? It will be deleted.`)) return;
+      try { await api(`/list/${encodeURIComponent(s.dataset.task)}?confirm=true`, { method: "DELETE" }); dropSlug(s, "Let go. One less thing."); }
+      catch (e) { toast(errText(e)); }
+    });
+    $$("#slugList [data-slug-not]").forEach((b) => b.onclick = async () => {
+      const s = b.closest("[data-task]");
+      try { await api(`/journal/slugs/${encodeURIComponent(s.dataset.task)}`, { method: "DELETE" }); dropSlug(s, "Okay. It's off this list."); }
+      catch (e) { toast(errText(e)); }
+    });
   } catch { $("#slugCard").hidden = true; }
 }
+function dropSlug(el, msg) {
+  el.remove();
+  if (!$("#slugList .slug")) $("#slugCard").hidden = true;
+  toast(msg);
+}
 
-$("#jWrite").onclick = () => { $("#jNew").hidden = false; $("#jText").focus(); };
+// "Make it smaller": the task's tiny steps, right here.
+const STEPS_HINT = $("#tdSteps").placeholder;
+async function makeSmaller(id) {
+  if (!listData.tasks.some((t) => t.id === id)) await loadList();
+  const t = listData.tasks.find((x) => x.id === id);
+  if (!t) return toast(TASK_GONE);
+  openTask(t);
+  $("#tdSteps").placeholder = "What's a 2-minute first step?";
+  $("#tdSteps").focus();
+}
+$("#taskDialog").addEventListener("close", () => {
+  $("#tdSteps").placeholder = STEPS_HINT;
+  if ($("#journal").classList.contains("on")) loadSlugs();
+});
+
+$("#jWrite").onclick = () => {
+  // Today by this Next Box's clock; just after midnight, the note is probably about last night.
+  const today = jToday || new Date().toISOString().slice(0, 10);
+  const d = new Date(today + "T12:00:00");
+  if (new Date().getHours() < 4) d.setDate(d.getDate() - 1);
+  $("#jDay").max = today;
+  $("#jDay").value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  $("#jNew").hidden = false; $("#jText").focus();
+};
 $("#jCancel").onclick = () => { $("#jNew").hidden = true; };
 $("#jSave").onclick = async () => {
+  if (!$("#jText").value.trim()) return toast("Write something first");
   try {
-    await api("/journal", { method: "POST", json: { notes: $("#jText").value } });
+    await api("/journal", { method: "POST", json: { notes: $("#jText").value, day: $("#jDay").value || null } });
     $("#jText").value = ""; $("#jNew").hidden = true; toast("Saved to your journal"); loadJournal();
-  } catch (e) { toast(e.message); }
+  } catch (e) { toast(errText(e)); }
 };
 
 

@@ -176,7 +176,7 @@
     #revmark { padding-bottom:110px; }
     .printbar { bottom:calc(64px + env(safe-area-inset-bottom)); }
   }
-  .wins { display:flex; align-items:flex-end; gap:6px; height:70px; margin:6px 0 2px; }
+  .wins { display:flex; align-items:flex-end; gap:6px; height:88px; margin:6px 0 2px; }
   .wins div { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; font-size:11px; color:var(--muted); }
   .wins div i { display:block; width:100%; max-width:34px; background:var(--ok); border-radius:4px 4px 0 0; min-height:2px; }
   .jday h3 { margin:0 0 6px; }
@@ -185,6 +185,36 @@
   .jpage textarea { min-height:90px; }
   .winlist { margin:4px 0 8px; padding-left:20px; }
   .slug { display:flex; justify-content:space-between; gap:8px; align-items:center; padding:8px 0; border-top:1px solid var(--line); flex-wrap:wrap; }
+  /* Snap and the journal */
+  .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+  .navcount { display:inline-block; min-width:18px; padding:0 5px; margin-left:5px; border-radius:99px; background:var(--warn); color:#fff; font:700 11px/18px system-ui, sans-serif; text-align:center; vertical-align:1px; }
+  .navcount[hidden] { display:none; }
+  .bottombar button { position:relative; }
+  .bottombar button span.navcount { position:absolute; top:0; left:calc(50% + 6px); font-size:11px; line-height:18px; margin:0; }
+  #scanPreview { display:block; max-width:100%; max-height:260px; margin-top:10px; border-radius:8px; border:1px solid var(--line); background:#fff; }
+  .spin { display:inline-block; width:16px; height:16px; margin-right:8px; vertical-align:-3px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation-duration:4s; } }
+  .scanrec h2:focus { outline:none; }
+  .scanrec .done-row { display:flex; justify-content:space-between; align-items:baseline; gap:8px; margin:6px 0; }
+  .scanrec .ignored { color:var(--muted); font-size:13px; margin:3px 0; }
+  .sectionhead { font-size:15px; margin:18px 0 8px; }
+  .tickets button { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:6px; color:var(--fg); font:inherit; font-size:13px; text-align:left; cursor:pointer; }
+  .tickets button span { display:block; margin-top:4px; }
+  .recent { display:flex; flex-wrap:wrap; gap:4px 8px; width:100%; background:none; border:0; border-top:1px solid var(--line); padding:10px 2px; color:var(--fg); font:inherit; text-align:left; cursor:pointer; }
+  .recent:first-child { border-top:0; }
+  .waitnote { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; background:var(--note); color:var(--noteFg); border-color:transparent; }
+  .waitnote[hidden] { display:none; }
+  .jwin { background:var(--note); color:var(--noteFg); border-radius:8px; padding:8px 10px; margin:6px 0; overflow-wrap:anywhere; }
+  .jphoto { display:block; background:none; border:0; padding:0; cursor:zoom-in; max-width:100%; }
+  .wins div span { display:block; }
+  .wins div.today span { color:var(--fg); font-weight:700; }
+  .wins div.today span::after { content:""; display:block; width:6px; height:6px; margin:2px auto 0; border-radius:50%; background:var(--accent); }
+  #photoDialog { max-width:920px; }
+  #photoDialog img { display:block; max-width:100%; max-height:75vh; margin:0 auto; border-radius:6px; }
+  input[type=date] { padding:9px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  :root[data-theme="dark"] input[type=date] { color-scheme:dark; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) input[type=date] { color-scheme:dark; } }
   .tagrow { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); }
   @media (max-width:520px) { .setting { flex-wrap:wrap; } }
 </style>
@@ -251,7 +281,7 @@
 <nav id="topnav" aria-label="Main">
   <button data-tab="mylist" class="on" aria-current="page">My list</button>
   <button data-tab="print">Print</button>
-  <button data-tab="scan">Snap</button>
+  <button data-tab="scan">Snap<span class="navcount" data-waiting hidden></span></button>
   <button data-tab="journal">Journal</button>
   <button data-tab="printed">Printed</button>
   <button data-tab="board">Feedback</button>
@@ -265,6 +295,8 @@
 <main>
   <label class="dry" id="dryRow"><input type="checkbox" id="dry" checked> Preview only (don't send to the printer)</label>
   <section id="mylist" class="on">
+    <div class="card waitnote" id="waitingNote" hidden><span id="waitingText"></span>
+      <button class="go small" data-go-tab="scan">Open Snap</button></div>
     <div class="card now" id="nowCard">
       <div class="muted">Just one thing</div>
       <div class="big" id="nowText">…</div>
@@ -330,20 +362,35 @@
     <div class="card"><h2>Snap your page</h2>
       <p class="muted">Mark the label ✓ done, → move, ✗ drop, then take a photo. In a journal, get both pages in the photo:
         your handwritten notes are read too and saved to your Journal. Drops and anything uncertain wait for you here.</p>
-      <input type="file" id="photo" accept="image/*" capture="environment">
-      <div class="row"><input type="text" id="scanLabel" placeholder="Ticket code (optional, e.g. 260930-P9AM)"></div>
-      <div class="row"><button class="go" id="scanGo">Read back</button></div></div>
-    <div id="scanResult"></div>
+      <input type="file" id="photoCam" class="sr-only" accept="image/*" capture="environment" tabindex="-1" aria-hidden="true">
+      <input type="file" id="photo" class="sr-only" accept="image/*" tabindex="-1" aria-hidden="true">
+      <div class="row"><button class="go" id="snapCam" type="button">📷 Take a photo</button>
+        <button class="plain" id="snapLib" type="button">Choose from photos</button></div>
+      <div id="scanChosen" hidden>
+        <img id="scanPreview" alt="The photo you picked">
+        <p class="muted" id="scanNoPreview" hidden>No preview for this kind of photo, but it can still be read.</p>
+        <div class="row"><span class="muted" id="scanName"></span>
+          <button class="plain small" id="scanRetake" type="button">Pick a different photo</button></div>
+      </div>
+      <details id="scanCode" class="muted" style="margin-top:10px"><summary>Type the ticket code (optional)</summary>
+        <label for="scanLabel" class="muted" style="display:block;margin-top:6px">Ticket code, like 260930-P9AM. The last 4 letters are enough.</label>
+        <input type="text" id="scanLabel" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="e.g. P9AM"></details>
+      <div class="row"><button class="go" id="scanGo" disabled>Read back</button></div></div>
+    <div id="scanResult" role="status" aria-live="polite"></div>
+    <div id="scanPending"></div>
+    <div class="card" id="scanRecent" hidden><h2>Recent read-backs</h2><div id="scanRecentList"></div></div>
   </section>
 
   <section id="journal">
     <div class="card"><h2>Your journal</h2>
       <p class="muted">Every page you snap is kept here with its photo, so a lost notebook is never a lost record.
         Only you can read your journal.</p>
-      <div class="wins" id="winsChart" aria-label="Wins this week"></div>
+      <div class="wins" id="winsChart" role="img" aria-label="Wins this week"></div>
       <p class="muted" id="winsTotal"></p>
       <div class="row"><button class="go" id="jWrite">Write a note</button><button class="plain" data-go-tab="scan">Snap a page</button></div>
       <div id="jNew" hidden>
+        <div class="row"><label for="jDay">For</label><input type="date" id="jDay"></div>
+        <label for="jText" class="sr-only">Your note</label>
         <textarea id="jText" placeholder="How did today go? What helped? What got in the way?"></textarea>
         <div class="row"><button class="go" id="jSave">Save</button><button class="plain" id="jCancel">Cancel</button></div>
       </div>
@@ -353,7 +400,7 @@
       <div id="slugList"></div>
     </div>
     <div id="jDays"></div>
-    <div class="row"><button class="plain" id="jOlder" hidden>Older days</button></div>
+    <div class="row"><button class="plain" id="jOlder" hidden>Older days</button><span class="muted" id="jEnd" hidden>That's everything.</span></div>
   </section>
 
   <section id="printed"><div id="hist" class="hist"></div></section>
@@ -612,7 +659,7 @@
 <nav class="bottombar" aria-label="Main (phone)">
   <button data-go="mylist" class="on"><span aria-hidden="true">✓</span>My list</button>
   <button data-go="print"><span aria-hidden="true">🖨</span>Print</button>
-  <button data-go="scan"><span aria-hidden="true">📷</span>Snap</button>
+  <button data-go="scan"><span aria-hidden="true">📷</span>Snap<span class="navcount" data-waiting hidden></span></button>
   <button data-go="journal"><span aria-hidden="true">📓</span>Journal</button>
   <button id="moreBtn" aria-haspopup="dialog"><span aria-hidden="true">☰</span>More</button>
 </nav>
@@ -625,6 +672,10 @@
     <a href="terms.html" target="_blank" rel="noopener">📄 Terms of Use</a>
   </div>
   <div class="row" style="justify-content:flex-end"><button class="plain" id="moreClose">Close</button></div>
+</dialog>
+<dialog id="photoDialog" aria-label="Journal page photo">
+  <img id="photoBig" alt="Your journal page">
+  <div class="row" style="justify-content:flex-end"><button class="plain" id="photoClose">Close</button></div>
 </dialog>
 </div>
 

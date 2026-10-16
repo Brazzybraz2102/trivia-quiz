@@ -8,6 +8,8 @@ journal or activity.
 - orphans: rows left behind by accounts deleted before purge_user existed
 - debug-details: debug mode used to copy task text and journal notes into events
 - dates: due dates and journal days stored as 20261016 or 2026-W42-5 instead of 2026-10-16
+- wins: wins used to be worked out from events (deleted after 180 days) and read-backs (90 days);
+  they're kept in their own table now, filled once from what older versions had
 """
 from __future__ import annotations
 
@@ -18,8 +20,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
 from . import db
-from .journal import Journal, Slides
-from .mylist import LocalTasks, Tags
+from .journal import Journal, Slides, Wins
+from .mylist import LocalTasks, Tags, is_local
 
 # Not people: what the CLI and Home Assistant print as before any account exists. Left alone.
 NOT_ACCOUNTS = frozenset({"", "cli", "key"})
@@ -30,6 +32,7 @@ def forget_data(engine: Engine, store, username: str) -> None:
     LocalTasks(engine, username).delete_for_user()
     Tags(engine, username).delete_for_user()
     Journal(engine, username).delete_for_user()
+    Wins(engine, username).delete_for_user()
     Slides(engine, username).delete_for_user()
     store.delete_for_user(username)
 
@@ -66,7 +69,7 @@ def sweep_orphans(engine: Engine, store) -> list[str]:
         people = {r[0] for r in conn.execute(select(db.users.c.username))}
         owners: set[str] = set()
         for col in (db.tickets.c.by, db.scans.c.by, db.tasks.c.owner, db.tags.c.owner, db.journal.c.owner,
-                    db.task_slides.c.owner):
+                    db.task_slides.c.owner, db.wins.c.owner):
             owners |= {r[0] for r in conn.execute(select(col).distinct())}
     gone = sorted(owners - people - NOT_ACCOUNTS)
     for name in gone:
@@ -117,7 +120,47 @@ def normalise_dates(engine: Engine) -> int:
     return changed
 
 
+def backfill_wins(engine: Engine, store) -> int:
+    """Fill the wins table from what older versions kept: task_done events, finished My list tasks
+    (their names), and read-backs that finished a linked app's task (by id only, never its text)."""
+    with engine.connect() as conn:
+        if conn.execute(select(db.wins.c.id).limit(1)).first():
+            return 0
+        homes = {r[0]: r[1] for r in conn.execute(select(db.users.c.username, db.users.c.household_id))}
+        named: dict[tuple, list] = {}  # (owner, day) -> My list tasks finished that day
+        for num, owner, content, done_at in conn.execute(select(
+                db.tasks.c.id, db.tasks.c.owner, db.tasks.c.content, db.tasks.c.done_at)
+                .where(db.tasks.c.done_at.is_not(None)).order_by(db.tasks.c.done_at)):
+            named.setdefault((owner, date.fromtimestamp(done_at).isoformat()), []).append((f"nb:{num}", content, done_at))
+        found = []  # (owner, day, ts, task_id, source, content, scan_id)
+        for user, ts, detail in conn.execute(select(db.events.c.user, db.events.c.ts, db.events.c.detail)
+                                             .where(db.events.c.action == "task_done").order_by(db.events.c.ts)):
+            day, detail = date.fromtimestamp(ts).isoformat(), detail or {}
+            if detail.get("source", "nextbox") == "nextbox":
+                pool = named.get((user, day)) or []
+                task_id, content, _ = pool.pop(0) if pool else (detail.get("task_id"), None, None)
+                found.append((user, day, int(ts), task_id, "nextbox", content, None))
+            else:
+                found.append((user, day, int(ts), detail.get("task_id"), "linked", None, None))
+        for (owner, day), pool in named.items():  # finished, but the event was already cleared out
+            found += [(owner, day, int(ts), task_id, "nextbox", content, None) for task_id, content, ts in pool]
+    for rec in store.list_scans(1_000_000):
+        marks = rec.get("applied", []) + [p for p in rec.get("needs_confirmation", []) if p.get("status") == "applied"]
+        for a in marks:
+            if a.get("mark") == "done" and not is_local(str(a.get("task_id", ""))):
+                ts = int(datetime.fromisoformat(rec["created_at"]).timestamp())
+                found.append((rec.get("by", ""), rec["created_at"][:10], ts, str(a["task_id"]), "readback", None, rec["id"]))
+    rows = [{"owner": o, "household_id": homes[o], "day": d, "ts": ts, "task_id": (t or None) and str(t)[:200],
+             "source": s, "content": (c or "")[:500] or None, "scan_id": sid}
+            for o, d, ts, t, s, c, sid in found if o in homes]
+    if rows:
+        with engine.begin() as conn:
+            conn.execute(insert(db.wins), rows)
+    return len(rows)
+
+
 def run_startup_fixes(engine: Engine, store) -> None:
     _once(engine, "orphans-v1", lambda: sweep_orphans(engine, store))
     _once(engine, "debug-details-v1", lambda: scrub_debug_details(engine))
     _once(engine, "dates-v1", lambda: normalise_dates(engine))
+    _once(engine, "wins-v1", lambda: backfill_wins(engine, store))

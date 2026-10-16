@@ -192,7 +192,27 @@ journal = Table(
     Column("photo", LargeBinary, nullable=True),                     # JPEG
     Column("scan_id", String(16), nullable=True),
     Column("label_id", String(16), nullable=True),
+    # Added in 0.10.2 (filled in by _add_missing_columns on older databases):
+    Column("win", Text, nullable=True),                              # handwritten after "Today's win:"
+    Column("photo_sha", String(64), nullable=True),                  # the same photo twice is one page
     Index("ix_journal_owner_day", "owner", "day"),
+)
+
+# Wins: one row per task finished, filed under the day it was done (the ticket's day for a photo
+# read-back). Private like the journal and kept until the account is deleted. `content` is kept for
+# My list tasks only: a linked app's task text is never stored, so those show as a count.
+wins = Table(
+    "wins", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("owner", String(32), nullable=False),
+    Column("household_id", String(32), nullable=False),
+    Column("day", String(10), nullable=False),                       # YYYY-MM-DD
+    Column("ts", BigInteger, nullable=False),
+    Column("task_id", String(200), nullable=True),
+    Column("source", String(16), nullable=False),                    # nextbox | linked | readback
+    Column("content", String(500), nullable=True),
+    Column("scan_id", String(16), nullable=True),
+    Index("ix_wins_owner_day", "owner", "day"),
 )
 
 # How many times each task was moved to a later day ("slid"). Only ids and counts, never the task

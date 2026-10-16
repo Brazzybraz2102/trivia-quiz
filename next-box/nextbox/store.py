@@ -9,6 +9,7 @@ import contextlib
 import io
 import zipfile
 import os
+import re
 import secrets
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta
@@ -23,7 +24,12 @@ ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
 def normalize_id(label_id: str) -> str:
-    return label_id.strip().lstrip("#").upper()
+    """However a ticket code was typed or read: '#261015-mesr', '261015 MESR', '261015MESR'."""
+    code = re.sub(r"\s+", "", str(label_id)).lstrip("#").upper()
+    code = re.sub(r"[‐-―_]", "-", code)  # other dashes
+    if re.fullmatch(r"\d{6}[A-Z2-9]{4}", code):
+        code = f"{code[:6]}-{code[6:]}"
+    return code
 
 
 def _zip_images(images: list) -> bytes:
@@ -160,19 +166,30 @@ class Store:
 
     @contextlib.contextmanager
     def edit_scan(self, scan_id: str) -> Iterator[dict]:
-        with self.db.begin() as conn:
+        """Read, change and save one read-back as a single step: two taps at once (or two devices)
+        wait for each other, so the second sees what the first did. Keep the work inside short and
+        don't write to the database from in there (SQLite has one writer at a time)."""
+        with self.db.connect() as conn:
+            if conn.dialect.name == "sqlite":
+                conn.exec_driver_sql("BEGIN IMMEDIATE")  # take the write lock before reading
             q = select(db.scans.c.record).where(db.scans.c.id == scan_id)
             if conn.dialect.name == "postgresql":
-                q = q.with_for_update()  # two taps at once can't both apply a delete
-            row = conn.execute(q).first()
-            if not row:
-                raise KeyError(scan_id)
-            record = dict(row[0])
-            yield record
-            conn.execute(update(db.scans).where(db.scans.c.id == scan_id).values(record=record))
+                q = q.with_for_update()
+            try:
+                row = conn.execute(q).first()
+                if not row:
+                    raise KeyError(scan_id)
+                record = dict(row[0])
+                yield record
+                conn.execute(update(db.scans).where(db.scans.c.id == scan_id).values(record=record))
+            except BaseException:
+                conn.rollback()
+                raise
+            conn.commit()
 
     def list_scans(self, limit: int = 20, by: str | None = None, household: str | None = None,
-                   since: str | None = None) -> list[dict]:
+                   since: str | None = None, until: str | None = None) -> list[dict]:
+        """`since`/`until`: created_at bounds (`until` is exclusive)."""
         q = select(db.scans.c.record).order_by(db.scans.c.created_at.desc(), db.scans.c.id.desc()).limit(limit)
         if by is not None:
             q = q.where(db.scans.c.by == by)
@@ -180,6 +197,8 @@ class Store:
             q = q.where(db.scans.c.household_id == household)
         if since is not None:
             q = q.where(db.scans.c.created_at >= since)
+        if until is not None:
+            q = q.where(db.scans.c.created_at < until)
         with self.db.connect() as conn:
             return [r[0] for r in conn.execute(q)]
 
