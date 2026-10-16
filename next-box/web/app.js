@@ -156,6 +156,7 @@ function clearPerson() {
     "#jFound", "#jBack"]) $(id).hidden = true;
   $("#journal").classList.remove("searching"); jData.clear(); lines = { items: [], opener: null };
   listData = { tasks: [], linked: [], tags: [] }; picked = new Set(); skipped = new Set(); guide = null; showingDone = false;
+  forgetListExtras();
   conn = null; printOpts = null; update = null; editing = null; suRows = []; suPicked = new Set(); suOpen = null;
   $("#lookOut").innerHTML = ""; $("#lookNotes").checked = false; lookText = ""; lookPrivacy();  // the AI helpers
   markTab("mylist");
@@ -1390,8 +1391,14 @@ let listData = { tasks: [], linked: [], tags: [] };
 let picked = new Set();
 let showingDone = false;
 let skipped = new Set();  // "Not now" on this device, until the page reloads
+let listFilter = { q: "", tag: "" }, filterFor = "";  // My list's search and tag, remembered per person on this device
+let shownOpen = [];         // the open tasks the list shows now (what "Prints the N shown" prints)
+const openSteps = new Set();  // rows whose tiny steps are shown
+let nowAsk = null;            // Just one thing: the task whose last step was just ticked ("Finish the task?")
 const tagColor = (name) => (listData.tags.find((t) => t.name === name) || {}).color || "white";
 const tagChip = (name) => { const c = tagColor(name); return `<span class="tag tc-${esc(c)}${c === "red" ? " solid" : ""}">${esc(name)}</span>`; };
+// A tag on a row is a button: it shows only the tasks with that tag.
+const tagButton = (name) => { const c = tagColor(name); return `<button type="button" class="tag tc-${esc(c)}${c === "red" ? " solid" : ""}" data-ftag="${esc(name)}" title="Show only #${esc(name)}" aria-label="${esc(name)}: show only this tag">${esc(name)}</button>`; };
 const today = () => new Date().toLocaleDateString("en-CA");  // YYYY-MM-DD, local
 const dayAfter = (iso, n = 1) => { const d = new Date(iso + "T12:00"); d.setDate(d.getDate() + n); return d.toLocaleDateString("en-CA"); };
 // "15:30" as Settings → 24-hour times says: 15:30, or 3:30p like the tickets.
@@ -1422,24 +1429,96 @@ function doneText(ts) {
 function taskRow(t) {
   const steps = t.steps || [];
   const doneSteps = steps.filter((s) => s.done).length;
-  const bits = (t.done ? [t.done_at ? doneText(t.done_at) : "done"] :
-    [whenText(t), t.repeat ? "↻ " + t.repeat : "", t.minutes ? `~${t.minutes}m` : "",
-     steps.length ? `steps ${doneSteps}/${steps.length}` : "", t.source && t.source !== "nextbox" ? "in " + (listData.linked_name || t.source) : ""])
-    .filter(Boolean).map(esc).join(" · ");
-  const meta = bits + (t.description ? `${bits ? " " : ""}<span aria-hidden="true" title="Has notes">📝</span><span class="sr-only">has notes</span>` : "");
   const local = String(t.id).startsWith("nb:");
+  const sid = "st-" + String(t.id).replace(/[^\w-]/g, "_");
+  const showSteps = local && !t.done && steps.length > 0 && openSteps.has(t.id);
+  const slid = !t.done && (listData.slides || {})[t.id];  // a slug, as the Journal counts them
+  const bits = (t.done ? [esc(t.done_at ? doneText(t.done_at) : "done")] :
+    [esc(whenText(t)), t.repeat ? esc("↻ " + t.repeat) : "", t.minutes ? esc(`~${t.minutes}m`) : "",
+     !steps.length ? "" : local ? `<button type="button" class="linkish stepsbtn" data-steps aria-expanded="${showSteps}" aria-controls="${sid}">steps ${doneSteps}/${steps.length}<span class="sr-only"> done</span></button>`
+       : esc(`steps ${doneSteps}/${steps.length}`),
+     slid ? `<span class="slid" title="Moved to a later day ${slid} times"><span aria-hidden="true">slid ${slid}×</span><span class="sr-only">moved to a later day ${slid} times</span></span>` : "",
+     t.source && t.source !== "nextbox" ? esc("in " + (listData.linked_name || t.source)) : ""])
+    .filter(Boolean).join(" · ");
+  const meta = bits + (t.description ? `${bits ? " " : ""}<span aria-hidden="true" title="Has notes">📝</span><span class="sr-only">has notes</span>` : "");
   const name = esc(shortName(t));
   const full = !picked.has(t.id) && picked.size >= MAX_PICK;
+  const canMove = !t.done && (!t.due || t.due.date.slice(0, 10) <= today());  // "→ Tomorrow" never moves a task sooner
+  const stepList = showSteps ? `<ul class="rowsteps" id="${sid}" aria-label="Tiny steps">${steps.map((s, i) => `<li><label>
+      <input type="checkbox" data-step="${i}" ${s.done ? "checked" : ""}><span>${esc(s.text)}</span></label></li>`).join("")}</ul>` : "";
   return `<div class="task${t.done ? " done-row" : ""}" data-id="${esc(t.id)}">
-    ${t.done ? "" : `<label class="pickbox"><input type="checkbox" class="pick" aria-label="Pick “${name}” for printing" ${picked.has(t.id) ? "checked" : ""}${full ? " disabled" : ""}></label>`}
+    ${t.done ? "" : `<label class="pickbox"><input type="checkbox" class="pick" aria-label="Pick “${name}”" ${picked.has(t.id) ? "checked" : ""}${full ? " disabled" : ""}></label>`}
     <div class="body">
-      <div class="text${t.priority >= 3 ? " urgent" : ""}">${(t.labels || []).map(tagChip).join("")}${t.priority >= 4 ? "!! " : t.priority >= 3 ? "! " : ""}${esc(t.content)}</div>
-      ${meta ? `<div class="meta">${meta}</div>` : ""}
+      <div class="text${t.priority >= 3 ? " urgent" : ""}">${(t.labels || []).map(tagButton).join("")}${t.priority >= 4 ? "!! " : t.priority >= 3 ? "! " : ""}${esc(t.content)}</div>
+      ${meta ? `<div class="meta">${meta}</div>` : ""}${stepList}
     </div>
     <div class="acts">
       ${t.done ? (local ? `<button class="plain small" data-reopen aria-label="Undo: “${name}” isn't done">Undo</button>` : "") :
-        `${local ? `<button class="plain small" data-edit aria-label="Edit “${name}”">Edit</button>` : ""}<button class="done" data-done aria-label="Mark “${name}” done">✓</button>`}
+        `${local ? `<button class="plain small" data-edit aria-label="Edit “${name}”">Edit</button>` : ""}${canMove
+          ? `<button class="move" data-move aria-label="Move “${name}” to tomorrow" title="Move to tomorrow">→</button>` : ""}<button class="done" data-done aria-label="Mark “${name}” done">✓</button>`}
     </div></div>`;
+}
+
+// --- search and tag filter (this device remembers each person's last one) ---
+const filterKey = () => (me ? `nb.listFilter:${me.username}` : "");
+function loadFilter() {
+  if (!me || filterFor === me.username) return;
+  filterFor = me.username;
+  listFilter = { q: "", tag: "" };
+  try {
+    const v = JSON.parse(localStorage.getItem(filterKey()) || "null");
+    if (v && typeof v === "object") listFilter = { q: String(v.q || "").slice(0, 200), tag: String(v.tag || "").slice(0, 40) };
+  } catch {}
+  $("#listSearch").value = listFilter.q;
+}
+function saveFilter() {
+  try {
+    const k = filterKey();
+    if (k) listFilter.q.trim() || listFilter.tag ? localStorage.setItem(k, JSON.stringify(listFilter)) : localStorage.removeItem(k);
+  } catch {}
+}
+const filtering = () => !!(listFilter.q.trim() || listFilter.tag);
+const fold = (s) => String(s || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();  // café → cafe
+function matches(t) {  // every word somewhere in the task, its #tags, notes or steps; accents and case don't matter
+  if (listFilter.tag && !(t.labels || []).includes(listFilter.tag)) return false;
+  const words = fold(listFilter.q).split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const hay = fold([t.content, t.description, ...(t.labels || []).map((l) => "#" + l), ...(t.steps || []).map((s) => s.text)].join(" \n "));
+  return words.every((w) => hay.includes(w));
+}
+function setFilter(change, focusTag = null) {
+  listFilter = { ...listFilter, ...change };
+  saveFilter();
+  renderList();
+  if (focusTag !== null) $$("#listTags [data-ftag]").find((b) => b.dataset.ftag === focusTag)?.focus();
+}
+function renderTagFilter() {  // the tags on open tasks, most used first; "All" clears
+  const counts = new Map();
+  for (const t of [...listData.tasks.filter((x) => !x.done), ...(listData.linked || [])]) {
+    for (const l of new Set(t.labels || [])) counts.set(l, (counts.get(l) || 0) + 1);
+  }
+  if (listFilter.tag && !counts.has(listFilter.tag)) counts.set(listFilter.tag, 0);
+  const names = [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a) || a.localeCompare(b));
+  $("#listTags").hidden = !names.length;
+  $("#listTags").innerHTML = !names.length ? "" : `<button type="button" data-ftag="" aria-pressed="${!listFilter.tag}">All</button>` +
+    names.map((n) => `<button type="button" data-ftag="${esc(n)}" class="tc-${esc(tagColor(n))}" aria-pressed="${listFilter.tag === n}">
+      <span class="tdot" aria-hidden="true"></span>${esc(n)} <span class="n">${counts.get(n)}</span></button>`).join("");
+}
+$("#listTags").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-ftag]");
+  if (b) setFilter({ tag: b.dataset.ftag === listFilter.tag ? "" : b.dataset.ftag }, b.dataset.ftag === listFilter.tag ? "" : b.dataset.ftag);
+});
+let searchTimer = null;
+$("#listSearch").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => setFilter({ q: $("#listSearch").value.slice(0, 200) }), 150);
+});
+$("#listFilterClear").onclick = () => { $("#listSearch").value = ""; setFilter({ q: "", tag: "" }); $("#listSearch").focus(); };
+function forgetListExtras() {  // signing out: nothing of this person's list stays on screen
+  listFilter = { q: "", tag: "" }; filterFor = ""; shownOpen = []; openSteps.clear(); nowAsk = null;
+  clearTimeout(previewTimer); previewN++;
+  $("#dumpPreview").hidden = true; $("#dumpLines").innerHTML = ""; $("#dumpDropped").textContent = ""; $("#dumpPreviewSay").textContent = "";
+  $("#listTags").innerHTML = ""; $("#listTags").hidden = true; $("#listFilterSay").textContent = ""; $("#bulkActs").hidden = true;
 }
 
 // Where keyboard focus was in the list, so it comes back to the same place after the list is redrawn
@@ -1448,7 +1527,8 @@ let listFocus = null;
 function focusSpot(el) {
   const row = el?.closest?.("#listBody .task");
   if (!row) return null;
-  const kind = ["[data-done]", "[data-edit]", "[data-reopen]", ".pick"].find((s) => el.matches(s)) || "[data-done]";
+  const kind = el.dataset?.step != null ? `[data-step="${el.dataset.step}"]`
+    : ["[data-done]", "[data-edit]", "[data-reopen]", "[data-move]", "[data-steps]", ".pick"].find((s) => el.matches(s)) || "[data-done]";
   const after = [];
   for (let r = row.nextElementSibling; r; r = r.nextElementSibling) if (r.dataset.id) after.push(r.dataset.id);
   return { id: row.dataset.id, kind, after };
@@ -1468,41 +1548,67 @@ function restoreFocus(spot) {
 function renderList() {
   const spot = listFocus || focusSpot(document.activeElement);
   listFocus = null;
+  loadFilter();
   const now = today();
-  const open = listData.tasks.filter((t) => !t.done);  // the server sends them in ticket order
-  const done = listData.tasks.filter((t) => t.done);
+  const all = listData.tasks.filter((t) => !t.done);  // the server sends them in ticket order
+  const shown = filtering() ? matches : () => true;
+  const open = all.filter(shown);
+  const done = listData.tasks.filter((t) => t.done && shown(t));
+  const linked = (listData.linked || []).filter(shown);
   const groups = [
     ["Today", open.filter((t) => t.due && t.due.date.slice(0, 10) <= now), "today"],
     ["Coming up", open.filter((t) => t.due && t.due.date.slice(0, 10) > now)],
     ["Someday", open.filter((t) => !t.due)],
-    [`From ${listData.linked_name || "linked app"} (today)`, listData.linked || []],
+    [`From ${listData.linked_name || "linked app"} (today)`, linked],
     ["Done", showingDone ? done : [], "done"],
   ];
-  const html = groups.filter(([, ts, key]) => ts.length || (key === "done" && showingDone))
+  shownOpen = groups.filter(([, , key]) => key !== "done").flatMap(([, ts]) => ts);
+  const html = groups.filter(([, ts, key]) => ts.length || (key === "done" && showingDone && !filtering()))
     .map(([name, ts, key]) => `<div class="group">${esc(name)} (${ts.length})${key === "today" && ts.length > 1
         ? ` <button class="linkish" data-pickall>Pick all</button>` : ""}</div>`
       + (ts.length ? ts.map(taskRow).join("") : `<p class="muted">Nothing finished yet. It'll show here when you tick something.</p>`)).join("");
-  $("#listBody").innerHTML = html || `<p class="muted">Your list is empty. Use the brain dump above to get things out of your head.</p>`;
+  const total = all.length + (listData.linked || []).length;
+  const words = listFilter.q.trim();
+  $("#listBody").innerHTML = html || (filtering() && total
+    ? `<p class="muted">Nothing on your list matches ${[words && `“${esc(words)}”`, listFilter.tag && `#${esc(listFilter.tag)}`].filter(Boolean).join(" with ")}.
+       <button class="linkish" data-clear-filter>Show everything</button></p>`
+    : `<p class="muted">Your list is empty. Use Brain dump above, or + Add task.</p>`);
   $("#listBody").classList.toggle("muted", !html);
+  renderTagFilter();
+  $("#listFilterSay").textContent = !filtering() ? "" : `Showing ${shownOpen.length} of ${total}` +
+    (listFilter.tag ? ` with #${listFilter.tag}` : "") + (words ? ` matching “${words}”` : "");
+  $("#listFilterClear").hidden = !filtering();
   updatePicks();
   renderNow();
   restoreFocus(spot);
 }
 
-// The print bar: how many are picked, Clear, and the 30-at-once limit shown before pressing.
+// The print bar: how many are picked, Clear, and the 30-at-once limit shown before pressing. With a search
+// or a tag on and nothing picked, it prints what's shown. Picked tasks get Done, → Tomorrow, Tag… and Delete….
 function updatePicks() {
   const n = picked.size;
-  $("#pickCount").textContent = !n ? "Nothing picked: stickers for today's tasks" : n >= MAX_PICK ? `${n} picked (the most at once)` : `${n} picked`;
+  const hidden = filtering() ? [...picked].filter((id) => !shownOpen.some((t) => t.id === id)).length : 0;
+  const m = Math.min(shownOpen.length, MAX_PICK);
+  $("#pickCount").textContent = n ? (n >= MAX_PICK ? `${n} picked (the most at once)` : `${n} picked`) + (hidden ? ` · ${hidden} not shown` : "")
+    : !filtering() ? "Nothing picked: stickers for today's tasks"
+    : !m ? "Nothing shown to print" : shownOpen.length > MAX_PICK ? `Prints the first ${m} shown` : `Prints the ${m} shown`;
   $("#pickClear").hidden = !n;
+  $("#bulkActs").hidden = !n;
   $$("#listBody .pick").forEach((b) => { b.disabled = !b.checked && n >= MAX_PICK; });
   $(".printbar").classList.toggle("sticky", n > 0);  // it follows you down the list only while something is picked
+}
+// What Stickers and Tear-off strips print: the picked tasks, else the ones shown, else today's.
+function printPicks() {
+  if (picked.size) return { task_ids: [...picked] };
+  if (filtering()) return shownOpen.length ? { task_ids: shownOpen.slice(0, MAX_PICK).map((t) => t.id) } : null;
+  return {};
 }
 
 function renderNow() {
   const open = [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])];
   const dueNow = open.filter((x) => x.due && x.due.date.slice(0, 10) <= today());
   const one = listData.one_thing;
-  let t = one && !skipped.has(one.id) && open.some((x) => x.id === one.id) ? one : null;
+  let t = one && !skipped.has(one.id) ? open.find((x) => x.id === one.id) || null : null;  // the list's copy: a ticked step shows at once
   if (!t) t = dueNow.find((x) => !skipped.has(x.id)) || null;  // next in ticket order
   const setAside = dueNow.filter((x) => skipped.has(x.id)).length;
   const brandNew = !listData.tasks.length && !(listData.linked || []).length;
@@ -1515,12 +1621,24 @@ function renderNow() {
     : "Nothing due today.";
   text.classList.toggle("long", !!t && t.content.length > 120);
   text.classList.add("clamp");
-  const step = t && (t.steps || []).find((s) => !s.done);
-  $("#nowStep").textContent = step ? "Next tiny step: " + step.text
+  // Tiny steps (My list tasks only): "Step done ✓" first, and after the last one, "Finish the task?"
+  const steps = t && String(t.id).startsWith("nb:") ? t.steps || [] : [];
+  const at = steps.findIndex((s) => !s.done), step = steps[at];
+  if (nowAsk && (!t || nowAsk !== t.id || at >= 0)) nowAsk = null;
+  const asking = !!t && nowAsk === t.id;
+  $("#nowStep").textContent = asking ? "All steps done. Finish the task?"
+    : step ? `Next tiny step${steps.length > 1 ? ` (${at + 1} of ${steps.length})` : ""}: ${step.text}`
+    : t && steps.length ? "All steps done ✓"
     : t ? [whenText(t), t.minutes ? `about ${t.minutes} min` : ""].filter(Boolean).join(" · ")
     : brandNew ? "Start by emptying your head into Brain dump."
     : !setAside && open.length ? "Pick anything from your list, or rest." : "";
-  for (const b of ["#nowDone", "#nowPrint", "#nowSkip"]) { $(b).hidden = !t; $(b).disabled = false; }
+  for (const b of ["#nowDone", "#nowPrint", "#nowSkip", "#nowTomorrow"]) { $(b).hidden = !t || (asking && b !== "#nowDone"); $(b).disabled = false; }
+  $("#nowStepDone").hidden = !step || asking;
+  $("#nowDone").className = step && !asking ? "plain" : "go";
+  $("#nowDone").textContent = asking ? "Yes, finish it ✓" : step ? "Whole task done" : "Done ✓";
+  $("#nowNotYet").hidden = !asking;
+  $("#nowRepeatSkip").hidden = !t || asking || !String(t.id).startsWith("nb:") || !t.repeat || !t.due;
+  if (t?.due && t.due.date.slice(0, 10) > today()) $("#nowTomorrow").hidden = true;  // never moves it sooner
   $("#nowAgain").hidden = !!t || !setAside;
   $("#nowStart").hidden = !!t || !brandNew;
   $("#nowMore").hidden = !(text.scrollHeight > text.clientHeight + 2);  // a long task: the rest on request
@@ -1554,6 +1672,11 @@ document.addEventListener("visibilitychange", refreshIfStale);
 window.addEventListener("pageshow", (e) => { if (e.persisted) refreshIfStale(); });
 
 $("#listBody").addEventListener("change", (e) => {
+  if (e.target.dataset.step != null) {
+    const row = e.target.closest(".task"), i = +e.target.dataset.step;
+    const t = listData.tasks.find((x) => x.id === row.dataset.id);
+    return tickStep(row.dataset.id, i, e.target.checked, t?.steps?.[i]?.text, e.target);
+  }
   if (!e.target.classList.contains("pick")) return;
   const id = e.target.closest(".task").dataset.id;
   if (e.target.checked && picked.size >= MAX_PICK) { e.target.checked = false; return updatePicks(); }
@@ -1563,18 +1686,27 @@ $("#listBody").addEventListener("change", (e) => {
 $("#listBody").addEventListener("click", async (e) => {
   if (e.target.closest("[data-pickall]")) {
     const now = today();
-    for (const t of listData.tasks.filter((x) => !x.done && x.due && x.due.date.slice(0, 10) <= now)) {
+    for (const t of shownOpen.filter((x) => String(x.id).startsWith("nb:") && x.due && x.due.date.slice(0, 10) <= now)) {
       if (picked.size >= MAX_PICK) break;
       picked.add(t.id);
     }
     $$("#listBody .task").forEach((r) => { const b = r.querySelector(".pick"); if (b) b.checked = picked.has(r.dataset.id); });
     return updatePicks();
   }
+  if (e.target.closest("[data-clear-filter]")) return $("#listFilterClear").click();
+  const tagBtn = e.target.closest("[data-ftag]");
+  if (tagBtn) return setFilter({ tag: tagBtn.dataset.ftag }, tagBtn.dataset.ftag);
   const row = e.target.closest(".task");
   if (!row) return;
   const id = row.dataset.id;
   const btn = e.target.closest("button");
-  if (btn?.matches("[data-done]")) { await markDone(id, btn); }
+  if (btn?.matches("[data-steps]")) {
+    openSteps.has(id) ? openSteps.delete(id) : openSteps.add(id);
+    listFocus = focusSpot(btn);
+    renderList();
+  }
+  else if (btn?.matches("[data-move]")) { await moveTask(id, "tomorrow", btn); }
+  else if (btn?.matches("[data-done]")) { await markDone(id, btn); }
   else if (btn?.matches("[data-reopen]")) {
     listFocus = focusSpot(btn);
     try { await api(`/list/${encodeURIComponent(id)}/reopen`, { method: "POST" }); loadList(); } catch (err) { listError(err, id); }
@@ -1619,12 +1751,73 @@ async function undoDone(id, undo) {
   } catch (err) { listError(err, id); }
 }
 
-// A message with an Undo button that stays long enough to use it (longer with bigger text).
+// "→ Tomorrow" (or any day) in one tap, here or in the linked app, with Undo. A move to a later day
+// counts as a slide, as a → on paper does; Undo takes that back too.
+const dayWords = (iso) => !iso ? "no date" : iso === today() ? "today" : iso === dayAfter(today()) ? "tomorrow"
+  : new Date(iso + "T12:00").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+async function moveTask(id, to, btn) {
+  if (btn?.getAttribute("aria-disabled") === "true") return;
+  btn?.setAttribute("aria-disabled", "true");
+  if (btn?.closest("#listBody")) listFocus = focusSpot(btn);
+  try {
+    const r = await api(`/list/${encodeURIComponent(id)}/move`, { method: "POST", json: { to } });
+    if (!r.moved) return toast(`It's on ${dayWords(r.to)} already`);
+    snack(`Moved to ${dayWords(r.to)}`, () => undoMove(id, r.undo));
+    await loadList();
+  } catch (err) { listError(err, id); }
+  finally { btn?.removeAttribute("aria-disabled"); }
+}
+async function undoMove(id, undo) {
+  try {
+    const r = await api(`/list/${encodeURIComponent(id)}/move`, { method: "POST", json: undo });
+    toast(`Back to ${dayWords(r.to)}`);
+    loadList();
+  } catch (err) { listError(err, id); }
+}
+
+// Tick one tiny step (on a row, or Just one thing's "Step done ✓"). After the last one: finish the task?
+async function tickStep(id, i, done, text, box = null) {
+  const t = listData.tasks.find((x) => x.id === id);
+  if (box) listFocus = focusSpot(box);
+  try {
+    const r = await api(`/list/${encodeURIComponent(id)}/steps/${i}`, { method: "PATCH", json: { done, text } });
+    if (t) t.steps = r.steps;
+    const all = r.steps.length > 0 && r.steps.every((s) => s.done);
+    if (!box && done && all) nowAsk = id;  // Just one thing asks on the card itself
+    renderList();
+    if (box && done && all) snack(`All ${r.steps.length === 1 ? "steps" : r.steps.length + " steps"} done ✓`, () => markDone(id), "Finish the task");
+    return r;
+  } catch (err) {
+    if (box) box.checked = !done;
+    if (err.status === 409) { toast(err.message); loadList(); } else listError(err, id);
+    return null;
+  }
+}
+
+// Skip this time: a repeating task moves on to its next day. Not a win, not a slide.
+async function skipRepeat(id, btn) {
+  const t = listData.tasks.find((x) => x.id === id);
+  if (!t?.due || btn?.getAttribute("aria-disabled") === "true") return;
+  btn?.setAttribute("aria-disabled", "true");
+  try {
+    const r = await api(`/list/${encodeURIComponent(id)}/skip`, { method: "POST", json: { due: t.due.date.slice(0, 10) } });
+    if (!r.undo) toast("It had moved on already");
+    else snack(`Skipped. Next: ${dayWords(r.undo.next_due)}`, async () => {
+      try { await api(`/list/${encodeURIComponent(id)}/unskip`, { method: "POST", json: r.undo }); toast(`Back to ${dayWords(r.undo.prev_due)}`); loadList(); }
+      catch (err) { listError(err, id); }
+    });
+    await loadList();
+  } catch (err) { listError(err, id); }
+  finally { btn?.removeAttribute("aria-disabled"); }
+}
+
+// A message with an Undo button (or another action) that stays long enough to use it (longer with bigger text).
 let snackTimer = null;
-function snack(msg, undo) {
+function snack(msg, undo, label = "Undo") {
   const box = $("#snack");
   clearTimeout(snackTimer);
   $("#snackUndo").hidden = !undo;
+  $("#snackUndo").textContent = label;
   $("#snackUndo").onclick = undo ? () => { hide(true); undo(); } : null;
   box.classList.add("show");
   $("#snackText").textContent = "";
@@ -1638,6 +1831,22 @@ function snack(msg, undo) {
 }
 
 $("#nowDone").onclick = () => $("#nowCard").dataset.id && markDone($("#nowCard").dataset.id, $("#nowDone"));
+$("#nowStepDone").onclick = async () => {
+  const id = $("#nowCard").dataset.id, b = $("#nowStepDone");
+  const t = listData.tasks.find((x) => x.id === id), i = (t?.steps || []).findIndex((s) => !s.done);
+  if (i < 0 || b.getAttribute("aria-disabled") === "true") return;
+  b.setAttribute("aria-disabled", "true");
+  const text = t.steps[i].text;
+  try {
+    const r = await tickStep(id, i, true, text);
+    if (!r) return;
+    snack("Step done ✓", () => tickStep(id, i, false, text));
+    if (nowAsk === id) $("#nowDone").focus();  // "All steps done. Finish the task?" Yes is right there
+  } finally { b.removeAttribute("aria-disabled"); }
+};
+$("#nowNotYet").onclick = () => { nowAsk = null; renderNow(); $("#nowDone").focus(); };
+$("#nowTomorrow").onclick = () => $("#nowCard").dataset.id && moveTask($("#nowCard").dataset.id, "tomorrow", $("#nowTomorrow"));
+$("#nowRepeatSkip").onclick = () => $("#nowCard").dataset.id && skipRepeat($("#nowCard").dataset.id, $("#nowRepeatSkip"));
 $("#nowSkip").onclick = () => { skipped.add($("#nowCard").dataset.id); listData.one_thing = null; renderNow(); };
 $("#nowPrint").onclick = () => printFrom("/print/focus", { task_id: $("#nowCard").dataset.id }, $("#nowPrint"));
 $("#printTodayList").onclick = () => printFrom("/print/today", { source: "manual" }, $("#printTodayList"));
@@ -1667,8 +1876,122 @@ async function printFrom(path, body, button) {
   }
   finally { done(); }
 }
-$("#printStickers").onclick = () => printFrom("/print/stickers", picked.size ? { task_ids: [...picked] } : {}, $("#printStickers"));
-$("#printStrips").onclick = () => printFrom("/print/strips", picked.size ? { task_ids: [...picked] } : {}, $("#printStrips"));
+for (const [b, path] of [["#printStickers", "/print/stickers"], ["#printStrips", "/print/strips"]]) {
+  $(b).onclick = () => { const body = printPicks(); body ? printFrom(path, body, $(b)) : toast("Nothing shown to print. Show everything first."); };
+}
+
+// Bulk actions on the picked tasks: Done and → Tomorrow (one Undo for all of them), Tag… and Delete….
+// One task at a time, through the same calls as a single tap, so linked tasks go to their own app.
+const BULK = ["#bulkDone", "#bulkTomorrow", "#bulkTag", "#bulkDelete", "#pickClear", "#printStickers", "#printStrips"];
+function pickedTasks() {
+  const all = [...listData.tasks, ...(listData.linked || [])];
+  return [...picked].map((id) => all.find((t) => t.id === id)).filter((t) => t && !t.done);
+}
+async function eachPicked(verb, tasks, fn) {
+  const ok = [], failed = [];
+  BULK.forEach((s) => $(s).setAttribute("aria-disabled", "true"));
+  try {
+    for (const [i, t] of tasks.entries()) {
+      $("#pickCount").textContent = `${verb} ${i + 1} of ${tasks.length}…`;
+      try { ok.push([t, await fn(t)]); }
+      catch (e) { failed.push([t, e]); if (!e.status) break; }  // offline: stop, don't try the rest
+    }
+  } finally { BULK.forEach((s) => $(s).removeAttribute("aria-disabled")); }
+  for (const [t] of ok) picked.delete(t.id);
+  updatePicks();  // the bar says what's picked again, not "3 of 5…"
+  if (failed.length && !ok.length) {  // nothing changed: say why (some did: the message about them says how many didn't)
+    const [t, e] = failed[0];
+    toast(`${failed.length === 1 ? `“${shortName(t)}”` : plural(failed.length, "task")} didn't change: ${errText(e)}`, { error: true });
+    if (failed.some(([, x]) => x.message === TASK_GONE)) loadList();
+  }
+  ok.missed = failed.length ? ` · ${failed.length} didn't change` : "";
+  return ok;
+}
+const bulkBusy = () => $("#bulkDone").getAttribute("aria-disabled") === "true";
+$("#bulkDone").onclick = async () => {
+  if (bulkBusy() || !picked.size) return;
+  const ok = await eachPicked("Finishing", pickedTasks(), (t) => api(`/list/${encodeURIComponent(t.id)}/done`, { method: "POST" }));
+  const undo = ok.filter(([t, r]) => r.undo != null && !(!String(t.id).startsWith("nb:") && t.due?.is_recurring));
+  if (!ok.length) return;
+  snack(`Done ${ok.length} ✓${ok.missed}`, undo.length ? async () => {
+    for (const [t, r] of undo) { try { await api(`/list/${encodeURIComponent(t.id)}/reopen`, { method: "POST", json: r.undo || {} }); } catch {} }
+    toast(`Back on your list${undo.length < ok.length ? ` (${undo.length} of ${ok.length})` : ""}`);
+    loadList();
+  } : null);
+  await loadList();
+  $("#printStickers").focus();
+};
+$("#bulkTomorrow").onclick = async () => {
+  if (bulkBusy() || !picked.size) return;
+  const ok = await eachPicked("Moving", pickedTasks(), (t) => api(`/list/${encodeURIComponent(t.id)}/move`, { method: "POST", json: { to: "tomorrow" } }));
+  if (!ok.length) return;
+  const moved = ok.filter(([, r]) => r.moved);
+  if (moved.length) snack(`Moved ${moved.length} to tomorrow${ok.missed}`, async () => {
+    for (const [t, r] of moved) { try { await api(`/list/${encodeURIComponent(t.id)}/move`, { method: "POST", json: r.undo }); } catch {} }
+    toast("Back where they were");
+    loadList();
+  });
+  else toast(`They're on tomorrow already${ok.missed}`);
+  await loadList();
+  $("#printStickers").focus();
+};
+function bulkDialog(title, body, buttons) {
+  $("#bulkTitle").textContent = title;
+  $("#bulkBody").innerHTML = body;
+  $("#bulkButtons").innerHTML = buttons;
+  $("#bulkDialog").showModal();
+}
+$("#bulkDialog").addEventListener("close", () => { if (!$("#taskDialog").open) $("#printStickers").focus(); });
+closeOnBackdrop($("#bulkDialog"));
+$("#bulkTag").onclick = () => {
+  if (bulkBusy() || !picked.size) return;
+  const tasks = pickedTasks(), mine = tasks.filter((t) => String(t.id).startsWith("nb:"));
+  const on = [...new Set(mine.flatMap((t) => t.labels || []))];
+  const away = tasks.length - mine.length;
+  bulkDialog(`Tag ${plural(mine.length, "task")}`,
+    (!mine.length ? `<p class="muted">Tags are for My list tasks. Change these in ${esc(listData.linked_name || "your linked app")}.</p>`
+      : `<p class="muted">Add one:</p><div class="chips">${listData.tags.map((g) => `<button type="button" class="tc-${esc(g.color)}" data-btag="${esc(g.name)}" data-add="1"><span class="tdot" aria-hidden="true"></span>${esc(g.name)}</button>`).join("") || `<span class="muted">No tags yet. Add some in Settings.</span>`}</div>`
+        + (on.length ? `<p class="muted">Or take one off:</p><div class="chips">${on.map((n) => `<button type="button" data-btag="${esc(n)}" aria-label="Take #${esc(n)} off">✕ ${esc(n)}</button>`).join("")}</div>` : "")
+        + (away ? `<p class="muted">${away === 1 ? "1 is" : `${away} are`} in ${esc(listData.linked_name || "your linked app")}: tag ${away === 1 ? "it" : "them"} there.</p>` : "")),
+    `<button class="plain" id="bulkCancel">Close</button>`);
+  $("#bulkBody").classList.add("bulktags");
+  $("#bulkCancel").onclick = () => $("#bulkDialog").close();
+  $("#bulkBody").onclick = async (e) => {
+    const b = e.target.closest("[data-btag]");
+    if (!b || b.getAttribute("aria-disabled") === "true") return;
+    const name = b.dataset.btag, adding = !!b.dataset.add;
+    const change = mine.filter((t) => (t.labels || []).includes(name) !== adding);
+    $$("#bulkBody [data-btag]").forEach((x) => x.setAttribute("aria-disabled", "true"));
+    $("#bulkDialog").close();
+    if (!change.length) return toast(adding ? `They all have #${name} already` : `None of them has #${name}`);
+    const ok = await eachPicked(adding ? "Tagging" : "Untagging", change, (t) => api(`/list/${encodeURIComponent(t.id)}`, { method: "PATCH",
+      json: { tags: adding ? [...(t.labels || []), name] : (t.labels || []).filter((x) => x !== name) } }));
+    for (const t of mine) picked.add(t.id);  // still picked: tagging is often the first of a few steps
+    updatePicks();
+    if (!ok.length) return;
+    toast(`${adding ? "Added" : "Took"} #${name} ${adding ? "to" : "off"} ${plural(ok.length, "task")}${ok.missed}`);
+    await loadList();
+  };
+};
+$("#bulkDelete").onclick = () => {
+  if (bulkBusy() || !picked.size) return;
+  const tasks = pickedTasks(), away = tasks.filter((t) => !String(t.id).startsWith("nb:")).length;
+  const n = tasks.length;
+  bulkDialog(`Delete ${plural(n, "task")}? This can't be undone.`,
+    `<ul class="bulklist">${tasks.map((t) => `<li>${esc(shortName(t))}</li>`).join("")}</ul>`
+      + (away ? `<p class="muted">${away === 1 ? "1 is" : `${away} are`} in ${esc(listData.linked_name || "your linked app")}: deleted there too.</p>` : ""),
+    `<button class="go warn" id="bulkDelGo">Delete ${n}</button><button class="plain" id="bulkCancel">Cancel</button>`);
+  $("#bulkBody").classList.remove("bulktags");
+  $("#bulkCancel").onclick = () => $("#bulkDialog").close();
+  $("#bulkCancel").focus();  // the safe choice has focus
+  $("#bulkDelGo").onclick = async () => {
+    $("#bulkDialog").close();
+    const ok = await eachPicked("Deleting", tasks, (t) => api(`/list/${encodeURIComponent(t.id)}?confirm=true`, { method: "DELETE" }));
+    if (!ok.length) return;
+    toast(`Deleted ${plural(ok.length, "task")}${ok.missed}`);
+    await loadList();
+  };
+};
 $("#showDone").onclick = () => {
   showingDone = !showingDone;
   $("#showDone").textContent = showingDone ? "Hide done" : "Show done";
@@ -1683,7 +2006,7 @@ function saveDraft() {
   try { const v = $("#dumpText").value; if (draftKey()) v.trim() ? localStorage.setItem(draftKey(), v) : localStorage.removeItem(draftKey()); } catch {}
 }
 function restoreDraft() {
-  try { const v = draftKey() && localStorage.getItem(draftKey()); if (v && !$("#dumpText").value.trim()) $("#dumpText").value = v; } catch {}
+  try { const v = draftKey() && localStorage.getItem(draftKey()); if (v && !$("#dumpText").value.trim()) { $("#dumpText").value = v; runPreview(); } } catch {}
 }
 function forgetDraft() {
   try { if (draftKey()) localStorage.removeItem(draftKey()); } catch {}
@@ -1723,6 +2046,7 @@ $("#dumpGo").onclick = async () => {
       (r.left_out || []).length ? `Left out ${r.left_out.length} line${r.left_out.length === 1 ? "" : "s"} ticked already ([x]).` : "",
       ...(r.notes || []), r.error || ""].filter(Boolean).join(" ");
     if (r.error) $("#dumpMsg").className = "err";
+    runPreview();
     await loadList();
     if (!toApp) flashRows(r.added.map((t) => t.id));
   } catch (e) {
@@ -1734,6 +2058,53 @@ $("#dumpGo").onclick = async () => {
   }
   finally { $("#dumpGo").disabled = false; }
 };
+// Brain dump's live preview: what each line becomes (day, time, tags, how long, repeat), before anything is
+// added. The server only parses (POST /list/dump?preview=1); an answer for older text is thrown away.
+let previewTimer = null, previewN = 0;
+$("#dumpText").addEventListener("input", () => { clearTimeout(previewTimer); previewTimer = setTimeout(runPreview, 450); });
+try { if (localStorage.getItem("nb.dumpPreview") === "closed") $("#dumpPreview").open = false; } catch {}
+$("#dumpPreview").addEventListener("toggle", () => {
+  try { $("#dumpPreview").open ? localStorage.removeItem("nb.dumpPreview") : localStorage.setItem("nb.dumpPreview", "closed"); } catch {}
+});
+const PREVIEW_ROWS = 60;
+function previewChips(x, r) {
+  const c = [];
+  if (x.due_date) c.push(["", "📅 " + dayWords(x.due_date)]);
+  if (x.due_time) c.push(["", "🕒 " + fmtClock(x.due_time)]);
+  if (x.repeat) c.push(["", "↻ " + x.repeat]);
+  if (x.minutes) c.push(["", `~${x.minutes}m`]);
+  if (x.priority >= 3) c.push(["", "! urgent"]);
+  return c.map(([k, s]) => `<span class="pchip ${k}">${esc(s)}</span>`).join("")
+    + (x.tags || []).map((n) => (r.over_tags || []).includes(n) ? `<span class="pchip warn">#${esc(n)} stays in the words (30 tags is the most)</span>`
+      : tagChip(n) + ((r.new_tags || []).includes(n) ? `<span class="pchip">new tag</span>` : "")).join("");
+}
+async function runPreview() {
+  const text = $("#dumpText").value, n = ++previewN;
+  if (!text.trim()) { $("#dumpPreview").hidden = true; $("#dumpPreviewSay").textContent = ""; return; }
+  let r;
+  try { r = await api("/list/dump?preview=1", { method: "POST", json: { text } }); }
+  catch { if (n === previewN) $("#dumpPreview").hidden = true; return; }  // the preview is a help, never an error
+  if (n !== previewN || !me) return;  // typed more since, or signed out
+  const ok = r.lines.filter((x) => !x.problem && !x.ticked);
+  const bad = r.lines.filter((x) => x.problem).length, left = r.lines.filter((x) => x.ticked).length + r.dropped.length;
+  const where = r.to && r.to !== "My list" ? ` to ${r.to}` : "";
+  const sum = ok.length ? dumpSummary(ok.map((x) => ({ due: x.due_date ? { date: x.due_date } : null }))) : "";
+  const head = [ok.length ? `Adds ${plural(ok.length, "task")}${where}${sum && !where ? `: ${sum}` : ""}` : "Nothing to add yet",
+    bad ? `${plural(bad, "line")} to fix` : "", left ? `${left} left out` : ""].filter(Boolean).join(" · ");
+  $("#dumpPreviewHead").textContent = head;
+  if ($("#dumpPreviewSay").textContent !== head) $("#dumpPreviewSay").textContent = head;  // said when it changes, not on every key
+  $("#dumpLines").innerHTML = r.lines.slice(0, PREVIEW_ROWS).map((x) => x.problem
+      ? `<li class="bad"><span class="ln">${x.line}</span>${esc(x.problem)}. <span>(“${esc(x.text)}”)</span></li>`
+      : x.ticked ? `<li class="left"><span class="ln">${x.line}</span>${esc(x.content)} <span class="pchip">ticked already: left out</span></li>`
+      : `<li><span class="ln">${x.line}</span><b>${esc(x.content)}</b><div class="pchips">${previewChips(x, r)}</div></li>`).join("")
+    + (r.lines.length > PREVIEW_ROWS ? `<li class="left">…and ${plural(r.lines.length - PREVIEW_ROWS, "more line")}</li>` : "");
+  const drop = r.dropped.map((d) => `“${d.text}”`).join(", ");
+  $("#dumpDropped").textContent = [
+    r.dropped.length ? `${r.dropped.length === 1 ? "1 line has" : `${r.dropped.length} lines have`} no task words, so ${r.dropped.length === 1 ? "it'll be" : "they'll be"} left out: ${drop}.` : "",
+    r.more ? `${plural(r.more, "more line")} will wait in the box: 200 at a time.` : "", ...(r.notes || [])].filter(Boolean).join(" ");
+  $("#dumpPreview").hidden = false;
+}
+
 // New rows light up for a moment, so they're easy to find.
 function flashRows(ids) {
   const want = new Set(ids);
@@ -1743,11 +2114,14 @@ function flashRows(ids) {
   });
 }
 
-// edit dialog
+// edit dialog (and "+ Add task", which opens it empty: editing.id is null until it's saved)
 let editing = null;
+let editSteps = [];  // the tiny steps as the dialog shows them: [{text, done}]
+const MAX_STEPS = 12;  // the server keeps at most 12
 function openTask(t) {
   editing = t;
-  $("#tdTitle").textContent = "Edit task";
+  const creating = !t.id;
+  $("#tdTitle").textContent = creating ? "New task" : "Edit task";
   $("#tdContent").value = t.content;
   $("#tdDate").value = t.due ? t.due.date.slice(0, 10) : "";
   $("#tdTime").value = t.due && t.due.date.length > 10 ? t.due.date.slice(11, 16) : "";
@@ -1755,15 +2129,148 @@ function openTask(t) {
   $("#tdRepeat").value = t.repeat || "";
   $("#tdPriority").value = String(Math.min(4, Math.max(1, t.priority || 1)));
   $("#tdNotes").value = t.description || "";
-  $("#tdSteps").value = (t.steps || []).map((s) => s.text).join("\n");
+  editSteps = (t.steps || []).map((s) => ({ text: s.text, done: !!s.done }));
+  $("#tdStepNew").value = "";
+  drawSteps();
   const on = new Set(t.labels || []);
   // Your tags, plus any this task still has whose tag was removed, so saving never drops one quietly.
   const names = [...new Set([...listData.tags.map((g) => g.name), ...(t.labels || [])])];
   $("#tdTags").innerHTML = names.map((g) => `<button type="button" data-tag="${esc(g)}" class="${on.has(g) ? "on" : ""}">${esc(g)}</button>`).join("")
     || `<span class="muted">No tags yet. Add some in Settings.</span>`;
+  $("#tdDelete").hidden = creating;
+  $("#tdSkipRepeat").hidden = creating || !t.repeat || !t.due;
+  const elsewhere = creating && me?.prefs?.new_tasks_to === "linked" && listData.linked_name;
+  $("#tdWhere").hidden = !elsewhere;
+  $("#tdWhere").textContent = elsewhere ? `This goes on My list. (Brain dump sends new tasks to ${listData.linked_name}.)` : "";
+  dayChips();
   focusLabel();
   $("#taskDialog").showModal();
+  fitSteps();
+  if (creating) $("#tdContent").focus();
 }
+function openNewTask() {  // a tag that's being shown starts ticked, so the new task shows up in it
+  openTask({ id: null, content: "", description: "", priority: 1, due: null, labels: listData.tags.some((g) => g.name === listFilter.tag) ? [listFilter.tag] : [], steps: [] });
+}
+$("#addTask").onclick = openNewTask;
+
+// The tiny steps: tick, edit, ↑/↓, ✕, and "Add a step". Saved with the rest of the task.
+function drawSteps(focus = null) {
+  const n = editSteps.length;
+  $("#tdStepList").innerHTML = editSteps.map((s, i) => `<li data-i="${i}" class="${s.done ? "done" : ""}">
+      <input type="checkbox" data-sdone ${s.done ? "checked" : ""} aria-label="Step ${i + 1} done">
+      <textarea data-stext rows="1" maxlength="200" aria-label="Step ${i + 1}">${esc(s.text)}</textarea>
+      <button type="button" class="plain" data-smove="-1" aria-label="Move step ${i + 1} up"${i === 0 ? " disabled" : ""}>↑</button>
+      <button type="button" class="plain" data-smove="1" aria-label="Move step ${i + 1} down"${i === n - 1 ? " disabled" : ""}>↓</button>
+      <button type="button" class="plain" data-sdel aria-label="Remove step ${i + 1}">✕</button></li>`).join("");
+  $("#tdStepList").hidden = !n;
+  fitSteps();
+  const full = n >= MAX_STEPS;
+  $("#tdStepNew").disabled = full; $("#tdStepAdd").disabled = full; $("#tdStepsFull").hidden = !full;
+  if (focus) {  // focus.sel: where focus goes in that step, first choice first (a disabled ↑ falls back to ↓)
+    const li = $(`#tdStepList li[data-i="${focus.i}"]`);
+    const el = li && ([...(focus.sel || []), "[data-sdel]"].map((s) => li.querySelector(s)).find((b) => b && !b.disabled));
+    (el || ($("#tdStepNew").disabled ? $("#tdStepList input") : $("#tdStepNew")))?.focus();
+  }
+  focusLabel();
+}
+// Each step's box grows to show all of it (once the dialog is open and the boxes have a size).
+const fitSteps = () => { if ($("#taskDialog").open) $$("#tdStepList textarea").forEach(fitText); };
+function setEditSteps(texts, done = false) {  // fill the step list from elsewhere (e.g. "Make it smaller")
+  editSteps = texts.map((x) => String(x).trim()).filter(Boolean).slice(0, MAX_STEPS).map((text) => ({ text, done }));
+  drawSteps();
+}
+function addSteps(text) {
+  const room = MAX_STEPS - editSteps.length;
+  const lines = String(text).split(/\r?\n/).map((x) => x.replace(/^\s*(?:[-*•]|\d{1,2}[.)])\s+/, "").trim()).filter(Boolean);
+  editSteps.push(...lines.slice(0, Math.max(0, room)).map((t) => ({ text: t.slice(0, 200), done: false })));
+  if (lines.length > room) toast(`${MAX_STEPS} steps is the most, so ${plural(lines.length - room, "line")} didn't fit.`);
+  return lines.length > 0;
+}
+$("#tdStepAdd").onclick = () => {
+  if (!$("#tdStepNew").value.trim()) { toast("Type a step first"); return $("#tdStepNew").focus(); }
+  addSteps($("#tdStepNew").value);
+  $("#tdStepNew").value = "";
+  drawSteps({ i: -1 });
+  if (!$("#tdStepNew").disabled) $("#tdStepNew").focus();
+};
+$("#tdStepNew").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); if ($("#tdStepNew").value.trim()) $("#tdStepAdd").click(); }
+});
+$("#tdStepNew").addEventListener("paste", (e) => {  // a pasted list becomes one step per line
+  const text = e.clipboardData?.getData("text") || "";
+  if (!/\n/.test(text.trim())) return;
+  e.preventDefault();
+  addSteps(text);
+  drawSteps({ i: -1 });
+  if (!$("#tdStepNew").disabled) $("#tdStepNew").focus();
+});
+$("#tdStepList").addEventListener("input", (e) => {
+  const li = e.target.closest("li"), i = +li.dataset.i;
+  if (e.target.matches("[data-stext]")) { editSteps[i].text = e.target.value.replace(/\s*\n\s*/g, " "); fitText(e.target); }
+  if (e.target.matches("[data-sdone]")) { editSteps[i].done = e.target.checked; li.classList.toggle("done", e.target.checked); }
+});
+$("#tdStepList").addEventListener("keydown", (e) => {  // Enter in a step goes on to "Add a step", not Save
+  if (e.key === "Enter" && e.target.matches("[data-stext]") && !e.isComposing) { e.preventDefault(); $("#tdStepNew").focus(); }
+});
+$("#tdStepList").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  const i = +b.closest("li").dataset.i;
+  if (b.matches("[data-sdel]")) {
+    editSteps.splice(i, 1);
+    drawSteps(editSteps.length ? { i: Math.min(i, editSteps.length - 1), sel: ["[data-sdel]"] } : { i: -1 });
+  } else if (b.dataset.smove) {
+    const dir = Number(b.dataset.smove), j = i + dir;
+    if (j < 0 || j >= editSteps.length) return;
+    [editSteps[i], editSteps[j]] = [editSteps[j], editSteps[i]];
+    drawSteps({ i: j, sel: [`[data-smove="${dir}"]`, `[data-smove="${-dir}"]`] });  // keep pressing ↓ to carry it down
+  }
+});
+// The steps as they'd be saved: what's typed in "Add a step" counts too, so it's never lost.
+function stepsNow() {
+  const out = editSteps.map((s) => ({ text: s.text.trim().slice(0, 200), done: !!s.done })).filter((s) => s.text);
+  const typed = $("#tdStepNew").value.trim();
+  if (typed && out.length < MAX_STEPS) out.push({ text: typed.slice(0, 200), done: false });
+  return out;
+}
+
+// Day chips: Today, Tomorrow, This weekend, Next week, No date. They set the Day field.
+function quickDay(kind) {
+  const now = today(), wd = new Date(now + "T12:00").getDay();  // 0 Sunday … 6 Saturday
+  return kind === "today" ? now : kind === "tomorrow" ? dayAfter(now)
+    : kind === "weekend" ? (wd === 6 || wd === 0 ? now : dayAfter(now, 6 - wd))  // Saturday, or today at the weekend
+    : kind === "nextweek" ? dayAfter(now, (8 - wd) % 7 || 7) : "";                // next Monday
+}
+function dayChips() {
+  const v = $("#tdDate").value;
+  $$("#tdDays [data-day]").forEach((b) => {
+    const d = quickDay(b.dataset.day);
+    b.setAttribute("aria-pressed", String(d === v));
+    b.title = d ? new Date(d + "T12:00").toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }) : "";
+    if (d && b.dataset.day !== "today" && b.dataset.day !== "tomorrow") b.setAttribute("aria-label", `${b.textContent}, ${b.title}`);
+  });
+  // Clearing the day of a repeating task ends the repeat (a repeat needs a day): say so before Save.
+  const ends = !!editing?.id && !!editing.due && !v && !!(editing.repeat || $("#tdRepeat").value);
+  const msg = ends ? "Clearing the day stops it repeating. Pick a day to keep it going." : "";
+  if ($("#tdRepeatWarn").textContent !== msg) $("#tdRepeatWarn").textContent = msg;
+}
+$("#tdDays").onclick = (e) => {
+  const b = e.target.closest("[data-day]");
+  if (!b) return;
+  $("#tdDate").value = quickDay(b.dataset.day);
+  $("#tdDate").dispatchEvent(new Event("input", { bubbles: true }));  // the same as typing it: chips, warning, "Save &"
+};
+for (const id of ["#tdDate", "#tdRepeat"]) for (const ev of ["input", "change"]) $(id).addEventListener(ev, dayChips);
+// Skip this time (a repeating task): unsaved changes are saved first, then it moves on to its next day.
+$("#tdSkipRepeat").onclick = async () => {
+  const id = editing?.id;
+  if (!id) return;
+  if (!$("#tdContent").value.trim()) return $("#taskForm").reportValidity();
+  try { await saveEditing(); } catch (err) { return listError(err, id); }
+  $("#taskDialog").close();
+  await loadList();
+  skipRepeat(id, null);
+};
 $("#tdTags").onclick = (e) => {
   const b = e.target.closest("[data-tag]");
   if (!b) return;
@@ -1798,20 +2305,25 @@ function editBody() {
   }
   const tags = $$("#tdTags [data-tag].on").map((b) => b.dataset.tag);
   if ([...tags].sort().join("\n") !== [...(t.labels || [])].sort().join("\n")) body.tags = tags;
-  const old = new Map((t.steps || []).map((s) => [s.text, s.done]));
-  const steps = $("#tdSteps").value.split("\n").map((x) => x.trim()).filter(Boolean);
-  if (steps.join("\n") !== (t.steps || []).map((s) => s.text).join("\n")) body.steps = steps.map((text) => ({ text, done: !!old.get(text) }));
+  const steps = stepsNow();
+  if (JSON.stringify(steps) !== JSON.stringify((t.steps || []).map((s) => ({ text: s.text, done: !!s.done })))) body.steps = steps;
   return body;
 }
 async function saveEditing() {
   const body = editBody();
+  if (!editing.id) {  // + Add task: made now, on My list (a tag it started with counts as chosen)
+    const task = await api("/list", { method: "POST", json: { ...body, content: $("#tdContent").value.trim(),
+      tags: $$("#tdTags [data-tag].on").map((b) => b.dataset.tag), steps: stepsNow() } });
+    editing = { ...editing, id: task.id };
+    return { ...body, created: task };
+  }
   if (Object.keys(body).length) await api(`/list/${encodeURIComponent(editing.id)}`, { method: "PATCH", json: body });
   return body;
 }
 // While there are unsaved changes, the print button says it saves them first.
 const FOCUS_LABEL = $("#tdFocus").textContent;
 function focusLabel() {
-  const dirty = !!editing && Object.keys(editBody()).length > 0;
+  const dirty = !!editing && (!editing.id || Object.keys(editBody()).length > 0);
   $("#tdFocus").textContent = dirty ? "Save & " + FOCUS_LABEL.charAt(0).toLowerCase() + FOCUS_LABEL.slice(1) : FOCUS_LABEL;
 }
 $("#taskForm").addEventListener("input", focusLabel);
@@ -1820,13 +2332,24 @@ $("#taskForm").onsubmit = async (e) => {
   if (e.submitter?.value !== "save" || !editing) return;
   e.preventDefault();
   const autoDay = !$("#tdDate").value && !editing.due && ($("#tdTime").value || $("#tdRepeat").value);
+  const save = $("#tdSave");
+  if (save.getAttribute("aria-disabled") === "true") return;  // a double tap mustn't add it twice
+  save.setAttribute("aria-disabled", "true");
   try {
     const body = await saveEditing();
     $("#taskDialog").close();
+    if (body.created) {
+      await loadList();
+      const hidden = filtering() && !matches(body.created);
+      toast(hidden ? "Added. Your search hides it: tap Show all to see it." : autoDay ? "Added for today" : "Added");
+      flashRows([body.created.id]);
+      return;
+    }
     toast(!Object.keys(body).length ? "Nothing changed" : autoDay ? "Saved for today" : "Saved");
     loadList();
   }
   catch (err) { listError(err, editing?.id); }
+  finally { save.removeAttribute("aria-disabled"); }
 };
 $("#tdDelete").onclick = async () => {
   if (!editing || !confirm(`Delete "${editing.content}"? This can't be undone.`)) return;
@@ -1835,10 +2358,10 @@ $("#tdDelete").onclick = async () => {
 };
 // Print just this task. Unsaved changes are saved first, so what prints is what you see.
 $("#tdFocus").onclick = async () => {
-  const id = editing?.id;
-  if (!id) return;
+  if (!editing) return;
   if (!$("#tdContent").value.trim()) return $("#taskForm").reportValidity();
-  try { await saveEditing(); } catch (err) { return listError(err, id); }
+  try { await saveEditing(); } catch (err) { return listError(err, editing?.id); }
+  const id = editing.id;  // a new task has one now
   $("#taskDialog").close();
   loadList();
   printFrom("/print/focus", { task_id: id }, $("#tdFocus"));
@@ -2637,17 +3160,17 @@ function dropSlug(el, msg) {
 }
 
 // "Make it smaller": the task's tiny steps, right here.
-const STEPS_HINT = $("#tdSteps").placeholder;
+const STEPS_HINT = $("#tdStepNew").placeholder;
 async function makeSmaller(id) {
   if (!listData.tasks.some((t) => t.id === id)) await loadList();
   const t = listData.tasks.find((x) => x.id === id);
   if (!t) return toast(TASK_GONE);
   openTask(t);
-  $("#tdSteps").placeholder = "What's a 2-minute first step?";
-  $("#tdSteps").focus();
+  $("#tdStepNew").placeholder = "What's a 2-minute first step?";
+  $("#tdStepNew").focus();
 }
 $("#taskDialog").addEventListener("close", () => {
-  $("#tdSteps").placeholder = STEPS_HINT;
+  $("#tdStepNew").placeholder = STEPS_HINT;
   if ($("#journal").classList.contains("on")) loadSlugs();
 });
 
@@ -3023,10 +3546,11 @@ const BREAK_SENT = "This sends the task's name and steps to Anthropic's AI. Noth
 let brk = null;  // the sheet that's open: { id, content, from: edit|now|slug, opener, task, steps, replace, hint, ctl, changed }
 
 // The Edit dialog's tiny steps: the one place this sheet reads or changes that dialog.
-function editStepsNow() { return $("#tdSteps").value.split("\n").map((x) => x.trim()).filter(Boolean); }
-function editStepsSet(texts, replace) {
-  $("#tdSteps").value = (replace ? texts : [...editStepsNow(), ...texts]).join("\n");
-  $("#tdSteps").dispatchEvent(new Event("input", { bubbles: true }));
+function editStepsNow() { return stepsNow().map((x) => x.text); }
+function editStepsSet(texts, replace) {  // fills the Edit dialog's step list (FA's editor); saving stays with Save
+  if (replace) setEditSteps(texts);
+  else { addSteps(texts.join("\n")); drawSteps(); }
+  focusLabel();  // "Save & print" notices the change
 }
 
 function openBreak(id, content, from, opener) {
@@ -3091,7 +3615,7 @@ function reviewActs() {
   if (b.task.local) return `<button class="go" data-b="save"${off}>Save ${n ? plural(n, "step") : "steps"}</button>`;
   return `<button class="go" data-b="copy"${off}>Add to My list</button><button class="plain" data-b="print"${off}>Print on a card</button>`;
 }
-function drawSteps() {  // each step's box is as tall as its words, so nothing is cut off
+function drawBreakSteps() {  // each step's box is as tall as its words, so nothing is cut off
   $("#breakBody").innerHTML = reviewHtml();
   $$("#breakBody .bsteps textarea").forEach(fitText);
 }
@@ -3119,7 +3643,7 @@ function drawBreak(state, info = "") {
     body.innerHTML = `<div class="bnote care" role="note"><p>${esc(info)}</p></div>`;
     acts.innerHTML = close("OK", "go");
   } else if (state === "review") {
-    drawSteps();
+    drawBreakSteps();
     acts.innerHTML = reviewActs() + close();
   } else if (state === "saved") {
     const first = (info.steps || []).find((s) => !s.done);
@@ -3208,7 +3732,7 @@ $("#breakDialog").addEventListener("click", (e) => {
   else if (what === "again") askBreak($("#bHint").value.trim());
   else if (what === "add") {
     b.steps.push({ text: "", keep: true });
-    drawSteps(); countBreak();
+    drawBreakSteps(); countBreak();
     $("#breakBody .bsteps li:last-child textarea")?.focus();
   }
   else if (what === "save") saveBreak(button);

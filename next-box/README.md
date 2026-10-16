@@ -358,6 +358,12 @@ Closing the loop:
 | Clipboard → to-do app + ticket | your hotkey |
 | Read back | Mark ✓ done, → tomorrow or ✗ drop, then web app → Read back → photo. Deletes and anything uncertain wait for Confirm/Skip. CLI: `nextbox scan photo.jpg`, then `nextbox confirm <scan-id>` |
 | Notes → tasks | Snap result or a journal page → Add lines to my list → tick → Add |
+| Add one task with a day, tags and steps | My list → + Add task (Brain dump shows what it understood as you type) |
+| Not today | → on the task (or Just one thing → Tomorrow). Undo is in the message |
+| Tiny steps | Edit → Tiny steps; tick them on the row ("steps 1/3") or Just one thing → Step done ✓ |
+| Find a task | My list → Search my list, or tap a tag |
+| Many at once | Pick tasks → ✓ Done, → Tomorrow, Tag… or Delete… |
+| Skip a repeat once | Edit → Skip this time (or on Just one thing) |
 | Find something you wrote | Journal → Search your journal |
 | A copy of your journal | Journal → Download my journal (.zip or PDF); one day: Print my journal page |
 | A task that won't start | Just one thing, Edit or a slug → Break it down → tick the steps → Save |
