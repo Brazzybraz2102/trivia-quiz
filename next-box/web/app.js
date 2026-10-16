@@ -160,6 +160,7 @@ function clearPerson() {
   todayCal = null; viewPick = "";
   conn = null; printOpts = null; update = null; editing = null; suRows = []; suPicked = new Set(); suOpen = null;
   $("#lookOut").innerHTML = ""; $("#lookNotes").checked = false; lookText = ""; lookPrivacy();  // the AI helpers
+  routineForget(); timerForget(); remindForget(); quickRoute = null; shareForget();  // FE: the card, timer, reminders, a share
   markTab("mylist");
   resetSignIn();
 }
@@ -214,6 +215,7 @@ async function boot() {
   loadList();
   loadToday();
   loadGuide();
+  loadRoutine();
   $("#noticeText").textContent = me.data_notice;
   $("#noticeWhen").textContent = me.consented ? `You accepted this on ${when(me.consented_at)}.` : "";
   if (!me.consented || me.terms_ok === false) {  // new, or the notice or Terms changed since they agreed
@@ -224,6 +226,7 @@ async function boot() {
   }
   // A new account: the setup questions, once the notice is agreed (boot runs again after "I agree").
   else if (me.setup_quiz && !quizAsked && !$("#quizDialog").open) { quizAsked = true; openQuiz(); }
+  quickRun();  // an app shortcut or a share that opened Next Box (FE): once nothing else is asking first
 }
 
 $("#noticeOk").onclick = async () => {
@@ -568,7 +571,7 @@ $("#mcSignOut").onclick = () => signOut($("#mcMsg"));
 $("#logout").onclick = () => signOut();
 
 // ---------------------------------------------------------------- tabs
-const loaders = { mylist: () => { loadList(); loadToday(); loadGuide(); }, printed: () => loadHistory(), profile: () => loadProfile(),
+const loaders = { mylist: () => { loadList(); loadToday(); loadGuide(); loadRoutine(); }, printed: () => loadHistory(), profile: () => loadProfile(),
                   print: () => loadPrintTab(),
                   settings: () => { loadLabels(); loadTags(); loadCalendars(); }, admin: () => { if (me.role !== "superadmin") loadAdmin(); loadPrinters(); loadInvites(); },
                   debug: loadDebug, board: () => loadBoard(), usage: () => loadUsage(), journal: () => loadJournal() };
@@ -710,6 +713,7 @@ async function printAct(b) {
   try {
     showPrint(await api(routes[act][0], { method: "POST", json: routes[act][1] }));
     if (act === "todo") loadPrintTab();  // the new task can be picked under One task now
+    if (act === "today") loadRoutine();
   }
   catch (e) { showResultError($("#printResult"), errText(e)); }
   finally { done(); }
@@ -916,7 +920,7 @@ $("#scanGo").onclick = async () => {
       choosePhoto(null);
       $("#scanLabel").value = ""; $("#scanCode").open = false;
     }
-    loadWaiting(true); loadRecent();
+    loadWaiting(true); loadRecent(); loadRoutine();
   } catch (e) { $("#scanResult").innerHTML = `<p class="err">${esc(errText(e))}</p>`; }
   finally { $("#scanGo").disabled = !scanFile; }
 };
@@ -991,6 +995,7 @@ function loadPrefs(prefs) {
     if (el.type === "checkbox") el.checked = !!v; else el.value = v;
   });
   confText(prefs.confidence);
+  remindShowPrefs(prefs);  // "Show a notification too" says what this device allows
   applyAi(prefs.ai_helpers !== false);
   $("#dry").checked = true;
   applyDry();
@@ -1014,7 +1019,7 @@ function prefErr(el, msg) {
 $$("[data-pref]").forEach((el) => el.onchange = async () => {
   const k = el.dataset.pref, typed = el.type === "text" || el.type === "number" || el.type === "time";
   let v = el.type === "checkbox" ? el.checked : el.value;
-  if (el.type === "number") v = parseInt(v, 10);
+  if (el.type === "number" || "int" in el.dataset) v = parseInt(v, 10);  // data-int: a list of numbers
   if (el.type === "range") v = parseFloat(v);
   try {
     const prefs = await api("/settings", { method: "PATCH", json: { [k]: v } });
@@ -1025,6 +1030,8 @@ $$("[data-pref]").forEach((el) => el.onchange = async () => {
     if (k === "time_24h" || k === "gentle_words") { renderList(); loadToday(); }  // times and words on My list follow it
     if (k === "routine_mode") forgetListView();  // My list opens on its new default view (Schedule when on)
     if (["routine_mode", "routine_morning", "routine_evening"].includes(k)) renderList();
+    if (["routine_card", "journal_mode"].includes(k)) routineRender();
+    if (k === "remind_before") remindRender();
     toast("Saved");
   } catch (e) {
     if (typed) prefErr(el, errText(e));
@@ -1616,7 +1623,8 @@ function renderNow() {
   const open = [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])];
   const dueNow = open.filter((x) => x.due && x.due.date.slice(0, 10) <= today());
   const one = listData.one_thing;
-  let t = one && !skipped.has(one.id) ? open.find((x) => x.id === one.id) || null : null;  // the list's copy: a ticked step shows at once
+  // A focus timer that's on keeps its task here; else the list's copy of the one thing (a ticked step shows at once).
+  let t = timerTask(open) || (one && !skipped.has(one.id) ? open.find((x) => x.id === one.id) || null : null);
   if (!t) t = dueNow.find((x) => !skipped.has(x.id)) || null;  // next in ticket order
   const setAside = dueNow.filter((x) => skipped.has(x.id)).length;
   const brandNew = !listData.tasks.length && !(listData.linked || []).length;
@@ -1650,6 +1658,9 @@ function renderNow() {
   $("#nowAgain").hidden = !!t || !setAside;
   $("#nowStart").hidden = !!t || !brandNew;
   $("#nowMore").hidden = !(text.scrollHeight > text.clientHeight + 2);  // a long task: the rest on request
+  timerSync(t);     // the focus timer follows the card's task (FE, below)
+  routineRender();  // and the routine card above it
+  remindRender();   // and the reminders at the top, from the list as it is now
 }
 $("#nowMore").onclick = () => { $("#nowText").classList.remove("clamp"); $("#nowMore").hidden = true; };
 $("#nowAgain").onclick = () => { skipped.clear(); renderNow(); $("#nowDone").focus(); };
@@ -1674,7 +1685,7 @@ async function loadList() {
 // Coming back to the app (a home-screen app resumed next morning, or another tab): fresh list, right day.
 function refreshIfStale() {
   if (!me || document.visibilityState !== "visible" || !$("#mylist").classList.contains("on")) return;
-  if (Date.now() - lastLoad.at > 120000 || today() !== lastLoad.day) { loadList(); loadToday(); loadGuide(); }
+  if (Date.now() - lastLoad.at > 120000 || today() !== lastLoad.day) { loadList(); loadToday(); loadGuide(); loadRoutine(); }
 }
 document.addEventListener("visibilitychange", refreshIfStale);
 window.addEventListener("pageshow", (e) => { if (e.persisted) refreshIfStale(); });
@@ -1873,6 +1884,7 @@ async function printFrom(path, body, button) {
       [r, ...(r.also || [])].map(ticketResult).join("<hr>");
     revealResult(box);  // the top of the result, so the preview loading below doesn't push it under the tab bar
     loadGuide();
+    loadRoutine();  // today's label is made: the routine card steps aside
     if (body.task_ids && [r, ...(r.also || [])].every((x) => x.status === "printed")) {
       picked.clear();  // printed for real: un-tick them, so the next press doesn't print them again
       $$("#listBody .pick").forEach((b) => { b.checked = false; });
@@ -4424,4 +4436,697 @@ setOnline();
 window.addEventListener("unhandledrejection", (e) => {
   const msg = String(e.reason?.message || e.reason || "");
   toast(msg === OFFLINE || msg.includes("fetch") || msg.includes("NetworkError") ? OFFLINE : "Something went wrong. Try again.", { error: true });
+});
+
+
+// ---------------------------------------------------------------- FE: the routine card
+// At the top of My list: "Print today's label" from the plan time (until it's made), "How did today go? Snap
+// your pages" from the look-back time, and "You finished N today ✓" once they're snapped. Worked out here from
+// the last few tickets and read-backs; nothing is sent, and the print button is the same Today's label button
+// as My list's (a preview, or "Send this to the printer?"): it never prints by itself.
+let routineData = null;  // { printed: the last 5 tickets, scans: the last read-back }, null until loaded (or if that failed)
+let routineN = 0;
+let routineMem = null;   // what "Not today" hid, for a device that keeps nothing (a private window)
+async function loadRoutine() {
+  if (!me) return;
+  const n = ++routineN;
+  let got = null;
+  try { const [printed, scans] = await Promise.all([api("/printed?limit=5"), api("/scans?limit=1")]); got = { printed, scans }; }
+  catch {}  // a help, never an error: the card just steps aside
+  if (n !== routineN || !me) return;
+  routineData = got;
+  routineRender();
+}
+const routineKey = () => (me ? `nb.routineHide:${me.username}` : "");
+function routineHidden() {  // the prompts put away today with "Not today" or "Hide"
+  let v = routineMem;
+  try { v = JSON.parse(localStorage.getItem(routineKey()) || "null") || routineMem; } catch {}
+  return v && v.day === today() && Array.isArray(v.states) ? v.states : [];
+}
+function routineSetHidden(states) {
+  routineMem = { day: today(), states };
+  try { states.length ? localStorage.setItem(routineKey(), JSON.stringify(routineMem)) : localStorage.removeItem(routineKey()); } catch {}
+}
+// Which prompt shows now, and its words. The day runs from the plan time; before it the card is quiet.
+function routineView() {
+  const p = me?.prefs || {};
+  if (!me || p.routine_card === false || !routineData) return null;
+  const now = schedNowMin(), day = today();
+  const plan = schedMinutes(p.routine_morning || "08:00"), look = schedMinutes(p.routine_evening || "18:00");
+  const morning = plan < look ? now >= plan && now < look : now >= plan || now < look;  // a look-back before the plan time: a night owl's day
+  const evening = plan < look ? now >= look : now >= look && now < plan;
+  const label = routineData.printed.find((t) => t.kind === "today" && (t.created_at || "").slice(0, 10) === day && !t.failed);
+  // A snap counts once it's of today: after today's label was made, or today in the evening without one.
+  const snap = routineData.scans.find((s) => (s.created_at || "").slice(0, 10) === day && (!label || s.created_at >= label.created_at));
+  const due = [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])].some((t) => t.due && t.due.date.slice(0, 10) <= day);
+  const journal = p.journal_mode !== false;
+  let state = null;
+  if (snap && (label || evening)) state = "finished";
+  else if (!label && morning && lastLoad.at && due) state = "print";
+  else if (evening && !snap && (label || (journal && routineData.scans.length))) state = "snap";
+  if (!state || routineHidden().includes(state)) return null;
+  if (state === "print") return { state, kick: `Plan your day · ${fmtClock(p.routine_morning || "08:00")}`,
+    head: `${now < 12 * 60 ? "Good morning. " : ""}Print today's label`,
+    sub: journal ? "Today's tasks on one label, for the left page of your journal." : "Today's tasks on one label.",
+    acts: `<button class="go" data-routine="print">${$("#dry").checked ? "Preview today's label" : "Print today's label"}</button>
+      <button class="plain" data-routine="hide">Not today</button>` };
+  if (state === "snap") return { state, kick: `Look back · ${fmtClock(p.routine_evening || "18:00")}`,
+    head: "How did today go? Snap your pages",
+    sub: journal ? "Tick your label, write a few notes, then take one photo of both pages." : "Tick your label with a pen, then take a photo of it.",
+    acts: `<button class="go" data-routine="snap">Snap my pages</button><button class="plain" data-routine="hide">Not today</button>` };
+  const n = listData.done_today || 0;
+  return { state, kick: "Look back", head: n ? `You finished ${n} today ✓` : "Pages snapped ✓",
+    sub: snap.journal_id ? "Today's page is in your journal." : "",
+    acts: `${journal ? `<button class="plain" data-go-tab="journal">Open Journal</button>` : ""}<button class="plain" data-routine="hide">Hide</button>` };
+}
+function routineRender() {
+  const card = $("#routineCard"), v = me ? routineView() : null;
+  card.hidden = !v;
+  card.dataset.state = v ? v.state : "";
+  if (!v) { routineRender.html = ""; return; }
+  card.classList.toggle("finished", v.state === "finished");
+  const html = [v.kick, v.head, v.sub, v.acts].join("\n");
+  if (routineRender.html === html) return;  // nothing new: what you're reading or have focused stays put
+  const had = card.contains(document.activeElement) ? document.activeElement.dataset.routine : null;
+  routineRender.html = html;
+  $("#routineKick").textContent = v.kick;
+  $("#routineHead").textContent = v.head;
+  $("#routineSub").textContent = v.sub;
+  $("#routineActs").innerHTML = v.acts;
+  if (had) $(`#routineActs [data-routine="${had}"]`)?.focus();
+}
+$("#routineActs").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-routine]"), state = $("#routineCard").dataset.state;
+  if (!b || !state) return;
+  if (b.dataset.routine === "print") return printFrom("/print/today", { source: "manual" }, b);  // My list's own Today's label: a preview, or "Send this to the printer?"
+  if (b.dataset.routine === "snap") { goto("scan"); setTimeout(() => $("#snapCam").focus(), 200); return; }
+  routineSetHidden([...routineHidden(), state]);
+  routineRender();
+  ($("#nowCard > .row button:not([hidden])") || $("#listTitle")).focus({ preventScroll: true });
+  snack({ print: "OK, no label today.", snap: "OK. See you tomorrow.", finished: "Hidden for today." }[state], () => {
+    routineSetHidden(routineHidden().filter((x) => x !== state));
+    routineRender();
+    $("#routineHead").focus({ preventScroll: true });
+  });
+});
+$("#dry").addEventListener("change", routineRender);  // "Preview today's label" or "Print today's label"
+function routineForget() { routineData = null; routineMem = null; routineRender.html = ""; $("#routineCard").hidden = true; }
+
+
+// ---------------------------------------------------------------- FE: focus timer on Just one thing
+// "Start 5 min" (or the task's own estimate) puts a countdown ring on the card, with Pause and Stop. The time
+// comes from when it started, so switching tabs, locking the phone or reloading doesn't lose it (it's kept on
+// this device for this person: the task's id and times, never its words). At the end: a soft chime if sound is
+// on (it needs the tap that started it), and Keep going / Done ✓ / Not now. No motion with reduced motion.
+let timerState = null;   // { id, total, start, left, paused, ended } in ms
+let timerIv = null, timerTo = null, timerAudio = null, timerSaidMinute = false;
+const TIMER_RING = 2 * Math.PI * 52;  // the ring's length (r = 52 in its 120×120 box)
+const timerKey = () => (me ? `nb.timer:${me.username}` : "");
+function timerSave() {
+  try { const k = timerKey(); if (k) timerState ? localStorage.setItem(k, JSON.stringify(timerState)) : localStorage.removeItem(k); } catch {}
+}
+function timerLoad() {  // once per person: a timer that was running when the page closed carries on
+  if (!me || timerLoad.for === me.username) return;
+  timerLoad.for = me.username;
+  try {
+    const v = JSON.parse(localStorage.getItem(timerKey()) || "null");
+    if (v && typeof v.id === "string" && v.total > 0 && v.total <= 3 * 3600000) timerState = v;
+  } catch {}
+  if (!timerState) return;
+  if (!timerState.paused && !timerState.ended && timerLeft() <= 0) {  // it ran out while Next Box was closed
+    timerState = -timerLeft() > 30 * 60000 ? null : { ...timerState, ended: true, left: 0 };  // long ago: let it go quietly
+    timerSave();
+  }
+  timerRun();
+}
+const timerLeft = () => (!timerState ? 0 : timerState.ended ? 0 : timerState.paused ? timerState.left : timerState.total - (Date.now() - timerState.start));
+const timerFmt = (ms) => { const s = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+const timerEst = (t) => (t && t.minutes >= 1 && t.minutes <= 90 && t.minutes !== 5 ? t.minutes : 0);  // the task's own estimate, as a second choice
+function timerTask(open) {  // the task the timer is for, while it's still on today's list
+  timerLoad();
+  if (!timerState) return null;
+  const t = open.find((x) => x.id === timerState.id);
+  return t && !skipped.has(t.id) && (!t.due || t.due.date.slice(0, 10) <= today()) ? t : null;
+}
+function timerSync(t) {
+  if (!me) return;
+  if (lastLoad.at && timerState && (!t || t.id !== timerState.id)) timerClear();  // done, moved or set aside: the timer goes too
+  timerDraw(t);
+}
+function timerDraw(t) {
+  const on = !!(timerState && t && t.id === timerState.id);
+  $("#timerBox").hidden = !on;
+  $("#timerRow").hidden = on || !t || nowAsk === t.id;
+  $("#nowCard > .row").hidden = on && !!timerState.ended;  // time's up: its three choices are the card's buttons for now
+  if (!on) {
+    const est = timerEst(t);
+    $("#timerGoEst").hidden = !est;
+    if (est) { $("#timerGoEst").textContent = `or ${est} min`; $("#timerGoEst").setAttribute("aria-label", `Start a ${est} minute focus timer, your estimate`); }
+    return;
+  }
+  const s = timerState, step = String(t.id).startsWith("nb:") && (t.steps || []).some((x) => !x.done);
+  $("#timerBox").classList.toggle("paused", !!s.paused);
+  $("#timerBox").classList.toggle("ended", !!s.ended);
+  $("#timerRun").hidden = !!s.ended;
+  $("#timerEnd").hidden = !s.ended;
+  $("#timerPause").textContent = s.paused ? "Resume" : "Pause";
+  $("#timerSay").textContent = s.ended ? "Time's up. How did it go?" : s.paused ? "Paused. Carry on when you're ready." : "Just this one thing for now.";
+  $("#timerMore").textContent = `Keep going (${Math.round(s.total / 60000)} min)`;
+  $("#timerDone").textContent = step ? "Step done ✓" : "Done ✓";
+  timerSoundDraw();
+  timerShow();
+}
+function timerShow() {  // the clock and the ring; every second while it runs
+  if (!timerState || $("#timerBox").hidden) return timerCheck();
+  const left = Math.max(0, timerLeft()), total = timerState.total;
+  $("#timerClock").textContent = timerFmt(left);
+  $("#timerUnder").textContent = timerState.ended ? "done ✓" : `of ${Math.round(total / 60000)} min`;
+  $("#timerArc").style.strokeDasharray = String(TIMER_RING);
+  $("#timerArc").style.strokeDashoffset = String(timerState.ended ? 0 : TIMER_RING * (1 - left / total));  // done: a whole green ring
+  if (!timerState.paused && !timerState.ended && left <= 60000 && total > 60000 && !timerSaidMinute) { timerSaidMinute = true; timerSay("1 minute left."); }
+  timerCheck();
+}
+function timerCheck() { if (timerState && !timerState.paused && !timerState.ended && timerLeft() <= 0) timerFinish(); }
+function timerRun() {  // the second hand while it runs, and one wake-up for the end (that one fires even in the background)
+  clearInterval(timerIv); clearTimeout(timerTo); timerIv = timerTo = null;
+  if (!timerState || timerState.paused || timerState.ended) return;
+  timerIv = setInterval(timerShow, 1000);
+  timerTo = setTimeout(timerCheck, Math.max(0, timerLeft()) + 50);
+}
+function timerSay(msg) { $("#timerLive").textContent = ""; requestAnimationFrame(() => { $("#timerLive").textContent = msg; }); }
+function timerStart(min) {
+  const id = $("#nowCard").dataset.id;
+  if (!id || !(min > 0)) return;
+  timerUnlock();  // this tap is what lets the chime play later
+  timerState = { id, total: min * 60000, start: Date.now(), left: 0, paused: false, ended: false };
+  timerSaidMinute = false;
+  timerSave(); timerRun(); renderNow();
+  timerSay(`Timer started: ${min} minutes. Just start.`);
+  $("#timerPause").focus({ preventScroll: true });
+}
+function timerFinish() {
+  const name = timerName(), wasIn = $("#nowCard").contains(document.activeElement);
+  timerState = { ...timerState, ended: true, left: 0 };
+  timerSave(); timerRun();
+  renderNow();
+  timerChime();
+  timerSay(`Time's up${name ? `: ${name}` : ""}. Keep going, Done, or Not now.`);
+  if (wasIn) $("#timerMore").focus({ preventScroll: true });  // the button you were on has gone: the next choice is here
+  remindNotify("Time's up", name || "Your focus timer", "nb-timer");
+  remindRender();  // on another screen, the note at the top says so
+}
+function timerClear() {
+  timerState = null; timerSaidMinute = false;
+  timerSave(); timerRun();
+  $("#timerBox").hidden = true;
+  remindRender();
+}
+function timerName() {
+  const t = timerState && [...listData.tasks, ...(listData.linked || [])].find((x) => x.id === timerState.id);
+  return t ? shortName(t) : "";
+}
+function timerForget() {  // signing out: nothing keeps running on screen (the saved one stays for that person)
+  timerState = null; timerLoad.for = ""; timerSaidMinute = false;
+  clearInterval(timerIv); clearTimeout(timerTo); timerIv = timerTo = null;
+  $("#timerBox").hidden = true; $("#timerRow").hidden = true; $("#nowCard > .row").hidden = false;
+}
+const timerFocusAfter = () => ($("#timerRow").hidden ? $("#nowCard > .row button:not([hidden])") || $("#listTitle") : $("#timerGo")).focus({ preventScroll: true });
+
+$("#timerGo").onclick = () => timerStart(5);
+$("#timerGoEst").onclick = () => timerStart(timerEst([...listData.tasks, ...(listData.linked || [])].find((x) => x.id === $("#nowCard").dataset.id)));
+$("#timerPause").onclick = () => {
+  if (!timerState || timerState.ended) return;
+  if (timerState.paused) {
+    timerUnlock();
+    timerState = { ...timerState, paused: false, start: Date.now() - (timerState.total - timerState.left) };
+    timerSay(`Going again: ${timerFmt(timerLeft())} left.`);
+  } else {
+    timerState = { ...timerState, paused: true, left: Math.max(0, timerLeft()) };
+    timerSay(`Paused with ${timerFmt(timerState.left)} left.`);
+  }
+  timerSave(); timerRun(); renderNow();
+};
+$("#timerStop").onclick = () => {
+  const was = timerState;
+  if (!was) return;
+  timerClear(); renderNow(); timerFocusAfter();
+  snack("Timer stopped", () => { timerState = was; timerSave(); timerRun(); renderNow(); $("#timerPause").focus({ preventScroll: true }); });
+};
+$("#timerMore").onclick = () => {
+  if (!timerState) return;
+  timerUnlock();
+  timerState = { ...timerState, start: Date.now(), left: 0, paused: false, ended: false };
+  timerSaidMinute = false;
+  timerSave(); timerRun(); renderNow();
+  timerSay(`Another ${Math.round(timerState.total / 60000)} minutes. Keep going.`);
+  $("#timerPause").focus({ preventScroll: true });
+};
+// What the end choices did: in the usual message on My list, or in the note at the top on another screen.
+const timerTell = (msg, undo = null) => ($("#mylist").classList.contains("on") ? snack(msg, undo) : remindNote(msg, undo));
+async function timerDoneNow(b) {  // the card's own Done (or Step done ✓), for the timer's task, with Undo
+  const id = timerState?.id;
+  if (!id || b?.getAttribute("aria-disabled") === "true") return;
+  const all = [...listData.tasks, ...(listData.linked || [])], t = all.find((x) => x.id === id);
+  const i = String(id).startsWith("nb:") ? (t?.steps || []).findIndex((s) => !s.done) : -1;
+  b?.setAttribute("aria-disabled", "true");
+  try {
+    if (i >= 0) {
+      const text = t.steps[i].text;
+      timerClear();
+      if (await tickStep(id, i, true, text)) timerTell("Step done ✓", () => tickStep(id, i, false, text));
+      return;
+    }
+    const r = await api(`/list/${encodeURIComponent(id)}/done`, { method: "POST" });
+    timerClear();
+    const canUndo = r.undo != null && !(t && !String(id).startsWith("nb:") && t.due?.is_recurring);  // as My list's Done
+    timerTell(`Done ✓ ${t ? shortName(t) : ""}`.trim(), canUndo ? () => undoDone(id, r.undo) : null);
+    await loadList();
+  } catch (err) { listError(err, id); }
+  finally { b?.removeAttribute("aria-disabled"); }
+}
+$("#timerDone").onclick = async () => { await timerDoneNow($("#timerDone")); renderNow(); timerFocusAfter(); };
+function timerNotNow() {
+  if (!timerState) return;
+  const min = Math.round(timerState.total / 60000);
+  timerClear();
+  timerTell(me?.prefs?.routine_mode ? "Timer done ✓" : `${plural(min, "minute")} of focus. That counts ✓`);
+}
+$("#timerNotNow").onclick = () => { timerNotNow(); renderNow(); timerFocusAfter(); };
+// The chime: two soft notes, made here (no sound file), and only once a tap has allowed sound.
+const timerSoundOn = () => { try { return localStorage.getItem("nb.timerSound") !== "off"; } catch { return true; } };
+function timerSoundDraw() {
+  const on = timerSoundOn();
+  $("#timerSound").setAttribute("aria-pressed", String(on));
+  $("#timerSound").innerHTML = `<span aria-hidden="true">${on ? "🔔" : "🔕"} </span>Chime at the end`;
+}
+$("#timerSound").onclick = () => {
+  const on = !timerSoundOn();
+  try { localStorage.setItem("nb.timerSound", on ? "on" : "off"); } catch {}
+  if (on) timerUnlock();
+  timerSoundDraw();
+  timerSay(on ? "Chime on." : "Chime off.");
+};
+function timerUnlock() {
+  if (!timerSoundOn()) return;
+  try { timerAudio = timerAudio || new (window.AudioContext || window.webkitAudioContext)(); timerAudio.resume?.(); } catch { timerAudio = null; }
+}
+function timerChime() {
+  const a = timerAudio;
+  if (!a || !timerSoundOn()) return;
+  try {
+    a.resume?.();
+    const t0 = a.currentTime + 0.05;
+    for (const [hz, at] of [[659.25, 0], [880, 0.45]]) {
+      const o = a.createOscillator(), g = a.createGain();
+      o.type = "sine"; o.frequency.value = hz;
+      g.gain.setValueAtTime(0.0001, t0 + at);
+      g.gain.exponentialRampToValueAtTime(0.16, t0 + at + 0.04);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 1.6);
+      o.connect(g).connect(a.destination);
+      o.start(t0 + at); o.stop(t0 + at + 1.7);
+    }
+  } catch {}
+}
+// After a reload a running timer has no sound yet: the next tap anywhere allows it again.
+for (const ev of ["pointerdown", "keydown"]) document.addEventListener(ev, () => { if (timerState && !timerState.ended && !timerAudio) timerUnlock(); }, true);
+
+
+// ---------------------------------------------------------------- FE: reminders before timed tasks
+// While Next Box is open (any screen), a note at the top N minutes before a task with a time today
+// (Settings → Focus: 10 by default, or Off), with Done / Tomorrow / Snooze 10m and ✕. Worked out here from
+// My list as last loaded: no server timer, no push. With "Show a notification too", the browser shows it as
+// well while Next Box is in the background; permission is only asked for when that's turned on.
+const REMIND_LATE = 30;        // minutes after its time that a task's reminder still shows
+const remindSeen = new Set();  // reminders already announced (and notified) on this visit
+let remindNoteNow = null;      // { text, undo }: what the last tap did, with Undo, for a few seconds
+let remindNoteTimer = null, remindMem = null;
+const remindKey = () => (me ? `nb.remind:${me.username}` : "");
+function remindMemo() {  // today's dismissed and snoozed reminders (task ids and times only)
+  let v = remindMem;
+  try { v = JSON.parse(localStorage.getItem(remindKey()) || "null") || remindMem; } catch {}
+  return v && v.day === today() ? v : { day: today(), off: {}, snooze: {} };
+}
+function remindKeep(v) { remindMem = v; try { localStorage.setItem(remindKey(), JSON.stringify(v)); } catch {} }
+function remindDue() {
+  const lead = me?.prefs?.remind_before ?? 10;
+  if (!me || !lead || !lastLoad.at) return [];
+  const now = schedNowMin(), day = today(), memo = remindMemo();
+  return [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])]
+    .filter((t) => t.due && t.due.date.length > 10 && t.due.date.slice(0, 10) === day)
+    .map((t) => ({ t, at: schedMinutes(t.due.date.slice(11, 16)), key: `${t.id}@${t.due.date.slice(0, 16)}` }))
+    .filter((x) => x.at - lead <= now && now < x.at + REMIND_LATE && !memo.off[x.key] && !((memo.snooze[x.key] || 0) > Date.now()))
+    .sort((a, b) => a.at - b.at);
+}
+function remindRender() {
+  const bar = $("#remindBar"), list = $("#remindList");
+  if (!me) return remindForget();
+  const now = schedNowMin(), items = remindDue();
+  let html = items.slice(0, 3).map((x) => {
+    const d = x.at - now, name = esc(shortName(x.t)), clock = esc(fmtClock(x.t.due.date.slice(11, 16)));
+    return `<div class="remind" data-rkey="${esc(x.key)}" data-id="${esc(x.t.id)}"><span aria-hidden="true">🔔</span>
+      <div class="remindtext"><b>${d > 0 ? `${schedIn(d)}:` : "Now:"}</b> ${name} <span class="when">· ${clock}</span></div>
+      <div class="remindacts" role="group" aria-label="Reminder: ${name}">
+        <button class="plain small" data-r="done" aria-label="Done: ${name}">Done ✓</button>
+        <button class="plain small" data-r="tomorrow" aria-label="Move ${name} to tomorrow">Tomorrow</button>
+        <button class="plain small" data-r="snooze" aria-label="Snooze ${name} for 10 minutes">Snooze 10m</button></div>
+      <button class="linkish rclose" data-r="off" aria-label="Dismiss the reminder for ${name}" title="Dismiss">✕</button></div>`;
+  }).join("");
+  if (items.length > 3) html += `<div class="remind"><div class="remindtext">…and ${plural(items.length - 3, "more")} at a set time. <button class="linkish" data-go-tab="mylist">See My list</button></div></div>`;
+  // The focus timer ran out while you're on another screen (or scrolled away from Just one thing).
+  if (timerState?.ended && !remindCardSeen()) {
+    html = `<div class="remind" data-rkey="timer"><span aria-hidden="true">⏱</span><div class="remindtext"><b>Time's up:</b> ${esc(timerName() || "your one thing")}</div>
+      <div class="remindacts" role="group" aria-label="Time's up"><button class="plain small" data-r="timer-more">Keep going</button>
+        <button class="plain small" data-r="timer-done">${esc($("#timerDone").textContent)}</button>
+        <button class="plain small" data-r="timer-notnow">Not now</button></div></div>` + html;
+  }
+  if (remindNoteNow) html = `<div class="remind" data-rkey="note"><span aria-hidden="true">✓</span><div class="remindtext">${esc(remindNoteNow.text)}</div>
+    ${remindNoteNow.undo ? `<div class="remindacts"><button class="plain small" data-r="undo">Undo</button></div>` : ""}</div>` + html;
+  if (list.dataset.html !== html) {  // drawn again only when something changed; focus stays on the same button
+    const f = document.activeElement, spot = list.contains(f) ? [f.closest("[data-rkey]")?.dataset.rkey || "", f.dataset.r || ""] : null;
+    list.dataset.html = html;
+    list.innerHTML = html;
+    if (spot) list.querySelector(`[data-rkey="${CSS.escape(spot[0])}"] [data-r="${CSS.escape(spot[1])}"]`)?.focus({ preventScroll: true });
+  }
+  bar.hidden = !html;
+  // While it's there, whatever you Tab to scrolls clear of it.
+  document.documentElement.style.scrollPaddingTop = html ? `${bar.offsetHeight + 12}px` : "";
+  const fresh = items.filter((x) => !remindSeen.has(x.key));  // said once, and shown by the browser too when Next Box is in the background
+  for (const x of fresh) {
+    const d = x.at - now;
+    remindSeen.add(x.key);
+    remindNotify(x.t.content, `${d > 0 ? `In ${schedIn(d)}` : "Now"} · ${fmtClock(x.t.due.date.slice(11, 16))}`, `nb-${x.key}`);
+  }
+  if (fresh.length) $("#remindSay").textContent = fresh.map((x) => `Reminder: ${x.t.content}, ${x.at > now ? `in ${schedIn(x.at - now)}` : "now"}.`).join(" ");
+}
+function remindCardSeen() {  // Just one thing's timer is on screen: its own buttons are right there
+  if (!$("#mylist").classList.contains("on") || $("#timerBox").hidden) return false;
+  const r = $("#timerBox").getBoundingClientRect(), mid = (r.top + r.bottom) / 2;
+  return mid > 0 && mid < window.innerHeight;
+}
+let remindScrolling = false;
+window.addEventListener("scroll", () => {  // scrolling to or away from the card swaps the note at the top
+  if (!timerState?.ended || remindScrolling) return;
+  remindScrolling = true;
+  requestAnimationFrame(() => { remindScrolling = false; remindRender(); });
+}, { passive: true });
+function remindNote(text, undo) {  // "Done ✓ Call the dentist · Undo" where the reminder was
+  clearTimeout(remindNoteTimer);
+  remindNoteNow = { text, undo };
+  $("#remindSay").textContent = text;
+  remindRender();
+  remindNoteTimer = setTimeout(() => { remindNoteNow = null; remindRender(); }, ["large", "xlarge"].includes(me?.prefs?.text_size) ? 12000 : 8000);
+}
+function remindFocusAfter() {  // the row you were on has gone: the next one, else this screen's heading
+  const next = $("#remindList button");
+  if (next) return next.focus({ preventScroll: true });
+  const h = $$("main section.on h2").find((x) => x.offsetParent);
+  if (h) { if (!h.hasAttribute("tabindex")) h.tabIndex = -1; h.focus({ preventScroll: true }); }
+}
+$("#remindBar").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-r]");
+  if (!b || b.getAttribute("aria-disabled") === "true") return;
+  const act = b.dataset.r, row = b.closest("[data-rkey]"), key = row?.dataset.rkey, id = row?.dataset.id;
+  const t = [...listData.tasks, ...(listData.linked || [])].find((x) => x.id === id);
+  const name = t ? shortName(t) : "";
+  const inBar = $("#remindBar").contains(document.activeElement);
+  if (act.startsWith("timer-")) {
+    if (act === "timer-more") { $("#timerMore").click(); remindNote(`Timer on: ${plural(Math.round((timerState?.total || 0) / 60000), "more minute")}. It's on My list.`); }
+    else if (act === "timer-done") await timerDoneNow(b);
+    else timerNotNow();
+    remindRender();
+    if (inBar) remindFocusAfter();
+    return;
+  }
+  if (act === "undo") {
+    const undo = remindNoteNow?.undo;
+    clearTimeout(remindNoteTimer); remindNoteNow = null; remindRender();
+    if (undo) await undo();
+    if (inBar) remindFocusAfter();
+    return;
+  }
+  if (act === "off" || act === "snooze") {
+    const memo = remindMemo();
+    if (act === "off") { memo.off[key] = true; remindKeep(memo); remindRender(); }
+    else {
+      memo.snooze[key] = Date.now() + 10 * 60000;
+      remindKeep(memo);
+      setTimeout(remindRender, 10 * 60000 + 200);  // back right on time, not at the next 20 s check
+      remindNote(`Snoozed: ${name}. Back in 10 minutes.`, () => { const m = remindMemo(); delete m.snooze[key]; remindKeep(m); remindRender(); });
+    }
+    if (inBar) remindFocusAfter();
+    return;
+  }
+  await hold(b, async () => {
+    try {
+      if (act === "done") {
+        const r = await api(`/list/${encodeURIComponent(id)}/done`, { method: "POST" });
+        const canUndo = r.undo != null && !(t && !String(id).startsWith("nb:") && t.due?.is_recurring);  // as My list's Done
+        remindNote(`Done ✓ ${name}`, canUndo ? () => undoDone(id, r.undo) : null);
+      } else if (act === "tomorrow") {
+        const r = await api(`/list/${encodeURIComponent(id)}/move`, { method: "POST", json: { to: "tomorrow" } });
+        if (r.moved) remindNote(`Moved to tomorrow: ${name}`, () => undoMove(id, r.undo));
+        else toast(`It's on ${dayWords(r.to)} already`);
+      }
+      await loadList();
+    } catch (err) { listError(err, id); }
+  });
+  if (inBar) remindFocusAfter();
+});
+// "Show a notification too": the browser asks for permission only when it's turned on here.
+const remindCanNotify = () => "Notification" in window && window.isSecureContext;
+const REMIND_NOTIFY_NOTE = $("#remindNotifyNote").textContent;
+function remindShowPrefs(p) {
+  const box = $("#remindNotify"), note = $("#remindNotifyNote");
+  box.checked = !!p.remind_notify;
+  box.disabled = !remindCanNotify() && !p.remind_notify;
+  let msg = REMIND_NOTIFY_NOTE, bad = false;
+  if (!remindCanNotify()) msg = "This browser can't show notifications from Next Box here (they need its https address or the installed app). The note at the top still works.";
+  else if (p.remind_notify && Notification.permission === "denied") { msg = "Notifications are blocked for Next Box in this browser's settings. Allow them there, or turn this off."; bad = true; }
+  else if (p.remind_notify && Notification.permission === "default") { msg = "On, but this device hasn't allowed them yet. Turn it off and on again to ask."; bad = true; }
+  note.textContent = msg;
+  note.classList.toggle("err", bad);
+}
+$("#remindNotify").onchange = async () => {
+  const box = $("#remindNotify"), on = box.checked;
+  if (on) {
+    let perm = remindCanNotify() ? Notification.permission : "unavailable";
+    if (perm === "default") { try { perm = await Notification.requestPermission(); } catch { perm = "denied"; } }
+    if (perm !== "granted") {
+      box.checked = false;
+      return toast(perm === "unavailable" ? "This browser can't show notifications here. The note at the top still works."
+        : perm === "denied" ? "Notifications are blocked for Next Box in this browser's settings." : "OK, no notifications. The note at the top still works.", 6000);
+    }
+  }
+  try {
+    me.prefs = await api("/settings", { method: "PATCH", json: { remind_notify: on } });
+    remindShowPrefs(me.prefs);
+    toast(on ? "Saved. You'll get a notification too, on this device." : "Saved");
+  } catch (e) { box.checked = !on; toast(errText(e), { error: true }); }
+};
+async function remindNotify(title, body, tag) {
+  if (!me?.prefs?.remind_notify || !remindCanNotify() || Notification.permission !== "granted" || document.visibilityState === "visible") return;
+  const opts = { body, tag, icon: "icons/icon-192.png" };
+  try { const n = new Notification(title, opts); n.onclick = () => { window.focus(); n.close(); }; }
+  catch { try { (await navigator.serviceWorker?.getRegistration())?.showNotification(title, opts); } catch {} }  // phones: through sw.js
+}
+// Every 20 s: reminders come and go and the routine card follows the clock. A list that's been sitting for a
+// while is fetched again quietly when a timed task is near, so a reminder isn't for something already done.
+function remindTick() {
+  if (!me || $("#appShell").hidden) return;
+  const visible = document.visibilityState === "visible";
+  if (visible && lastLoad.day && today() !== lastLoad.day) { loadList(); loadToday(); loadRoutine(); return; }  // a new day
+  const lead = me.prefs.remind_before ?? 10, now = schedNowMin(), day = today();
+  const near = lead > 0 && [...listData.tasks.filter((t) => !t.done), ...(listData.linked || [])].some((t) => t.due && t.due.date.length > 10
+    && t.due.date.slice(0, 10) === day && Math.abs(schedMinutes(t.due.date.slice(11, 16)) - lead - now) <= 15);
+  const busy = $$("dialog[open]").length || document.activeElement?.matches?.("input, textarea, select");
+  if (visible && near && !busy && Date.now() - lastLoad.at > 5 * 60000) loadList();
+  remindRender();
+  if ($("#mylist").classList.contains("on")) routineRender();
+}
+setInterval(remindTick, 20000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { timerShow(); remindTick(); } });
+document.addEventListener("click", (e) => { if (e.target.closest?.("#topnav button, .bottombar button, #moreMenu button, [data-go-tab]")) setTimeout(remindRender, 0); });
+function remindForget() {
+  remindSeen.clear(); remindNoteNow = null; remindMem = null; clearTimeout(remindNoteTimer);
+  $("#remindList").innerHTML = ""; $("#remindList").dataset.html = ""; $("#remindBar").hidden = true;
+  document.documentElement.style.scrollPaddingTop = "";
+}
+
+
+// ---------------------------------------------------------------- FE: Quick add, app shortcuts, Share to Next Box
+// The + at the top (or n) opens Quick add on any screen: one task or many, one per line, with Brain dump's
+// rules and preview; new tasks go where Brain dump's go. manifest.json's shortcuts open #add, #snap and
+// #print (the Print tab: nothing prints by itself). Sharing text to Next Box opens Quick add filled in;
+// sharing a photo opens Snap with it attached (sw.js keeps it on the phone for that moment).
+let quickOpener = null, quickPrevN = 0, quickPrevTimer = null, quickRoute = null;
+const keysMac = () => /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+function quickOpen(text = null, shared = false) {
+  if (!me || $("#appShell").hidden) return;
+  const d = $("#quickDialog"), box = $("#quickText");
+  if (text != null) box.value = text;
+  $("#quickFrom").hidden = !shared;
+  $("#quickMsg").textContent = ""; $("#quickMsg").className = ""; $("#quickProblems").innerHTML = "";
+  $("#quickKeys").hidden = matchMedia("(pointer: coarse)").matches;  // a phone has the button right there
+  $("#quickKeys kbd").textContent = keysMac() ? "⌘" : "Ctrl";
+  if (!d.open) { quickOpener = document.activeElement; d.showModal(); }
+  box.focus();
+  box.setSelectionRange(box.value.length, box.value.length);
+  quickPreview();
+}
+$("#quickBtn").onclick = () => quickOpen();
+$("#quickClose").onclick = () => $("#quickDialog").close();
+closeOnBackdrop($("#quickDialog"));  // what you typed stays in the box for next time
+$("#quickDialog").addEventListener("close", () => {  // back where you were (or the + when it opened by itself)
+  (quickOpener?.isConnected && quickOpener !== document.body && quickOpener.offsetParent ? quickOpener : $("#quickBtn")).focus({ preventScroll: true });
+  quickOpener = null;
+});
+$("#quickText").addEventListener("input", () => {
+  clearTimeout(quickPrevTimer); quickPrevTimer = setTimeout(quickPreview, 450);
+  $("#quickProblems").innerHTML = ""; $("#quickMsg").textContent = "";
+});
+$("#quickText").addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); $("#quickGo").click(); }
+});
+async function quickPreview() {  // what each line becomes, as Brain dump shows it (nothing is saved)
+  const text = $("#quickText").value, n = ++quickPrevN, shown = 8;
+  if (!text.trim()) { $("#quickLines").innerHTML = ""; return; }
+  let r;
+  try { r = await api("/list/dump?preview=1", { method: "POST", json: { text } }); }
+  catch { if (n === quickPrevN) $("#quickLines").innerHTML = ""; return; }  // a help, never an error
+  if (n !== quickPrevN || !me) return;
+  $("#quickLines").innerHTML = r.lines.slice(0, shown).map((x) => x.problem
+      ? `<li class="bad"><span class="ln">${x.line}</span>${esc(x.problem)}. <span>(“${esc(x.text)}”)</span></li>`
+      : x.ticked ? `<li class="left"><span class="ln">${x.line}</span>${esc(x.content)} <span class="pchip">ticked already: left out</span></li>`
+      : `<li><span class="ln">${x.line}</span><b>${esc(x.content)}</b><div class="pchips">${previewChips(x, r)}</div></li>`).join("")
+    + (r.lines.length > shown ? `<li class="left">…and ${plural(r.lines.length - shown, "more line")}</li>` : "");
+}
+$("#quickGo").onclick = () => hold($("#quickGo"), quickAdd);
+async function quickAdd() {
+  const text = $("#quickText").value, msg = $("#quickMsg");
+  msg.className = ""; $("#quickProblems").innerHTML = "";
+  if (!text.trim()) { msg.textContent = "Type something first."; return $("#quickText").focus(); }
+  try {
+    const r = await api("/list/dump", { method: "POST", json: { text } });
+    const toApp = r.to && r.to !== "My list";
+    const rest = r.skipped_text ? r.skipped_text.split("\n").filter((l) => l.trim()).length : 0;
+    const said = [`Added ${r.added.length}${toApp ? ` to ${r.to}` : r.added.length ? `: ${dumpSummary(r.added)}` : ""}.`,
+      rest ? `${plural(rest, "more line")} still in the box: 200 at a time.` : "",
+      (r.left_out || []).length ? `Left out ${plural(r.left_out.length, "line")} ticked already.` : "",
+      ...(r.notes || []), r.error || ""].filter(Boolean).join(" ");
+    $("#quickText").value = r.skipped_text || "";
+    $("#quickFrom").hidden = true;
+    quickPreview();
+    if (rest || r.error) { msg.className = r.error ? "err" : ""; msg.textContent = said; }
+    else { $("#quickDialog").close(); toast(said); }
+    await loadList();
+    if (!toApp && $("#mylist").classList.contains("on")) flashRows(r.added.map((t) => t.id));
+  } catch (e) {
+    const problems = e.body?.problems || [];
+    msg.className = "err";
+    msg.textContent = problems.length ? `Nothing was added yet. Fix ${problems.length === 1 ? "this line" : "these lines"}, then add again:` : errText(e);
+    $("#quickProblems").innerHTML = problems.map((p) => `<li><b>Line ${p.line}:</b> ${esc(p.problem)} <span class="muted">(“${esc(p.text)}”)</span></li>`).join("");
+  }
+}
+// #add, #snap, #print (and a share's &text= or &shared=): read once, then taken off the address so a reload
+// doesn't open it again. It waits for sign-in, the data notice and the setup questions.
+function quickRouteRead() {
+  const m = location.hash.match(/^#(add|snap|print)(?:&(text|shared)=([^&]*))?$/);
+  if (!m) return;
+  let v = "";
+  try { v = decodeURIComponent(m[3] || ""); } catch {}
+  quickRoute = { to: m[1], text: m[2] === "text" ? v.slice(0, 2000) : "", shared: m[2] === "shared" ? v : "" };
+  history.replaceState(null, "", location.pathname + location.search);
+}
+function quickRun() {
+  if (!quickRoute || !me || $("#appShell").hidden || $$("dialog[open]").length) return;
+  const r = quickRoute;
+  quickRoute = null;
+  if (r.to === "add") return quickOpen(r.text || null, !!r.text);
+  if (r.to === "print") { goto("print"); setTimeout(() => $("[data-act=today]").focus(), 200); return; }  // never prints by itself
+  goto("scan");
+  if (r.shared) shareTakePhoto(r.shared);
+  else setTimeout(() => $("#snapCam").focus(), 200);
+}
+quickRouteRead();
+window.addEventListener("hashchange", () => { quickRouteRead(); quickRun(); });
+$("#quizDialog").addEventListener("close", () => setTimeout(quickRun, 0));
+// A photo shared to Next Box: sw.js kept it in this device's cache for a moment. It goes into Snap (it isn't
+// read until you tap Read back) and leaves the cache. Older than an hour, or not there: pick it again.
+const sharePhotoUrl = () => new URL("shared-photo", location.origin + location.pathname.replace(/[^/]*$/, "")).href;
+async function shareTakePhoto(how) {
+  let file = null;
+  if (how !== "missed" && window.caches) {
+    try {
+      const cache = await caches.open("nb-share"), res = await cache.match(sharePhotoUrl());
+      if (res) {
+        await cache.delete(sharePhotoUrl());
+        if (Date.now() - (+res.headers.get("X-At") || 0) < 3600000) {
+          let name = "photo.jpg";
+          try { name = decodeURIComponent(res.headers.get("X-Name") || name); } catch {}
+          const blob = await res.blob();
+          file = new File([blob], name, { type: blob.type || "image/jpeg" });
+        }
+      }
+    } catch {}
+  }
+  setTimeout(() => {  // said under the buttons (and to screen readers), where a message at the bottom can't cover them
+    if (file) choosePhoto(file);
+    $("#scanResult").innerHTML = file ? `<p class="muted">Your shared photo is here. Tap Read back when you're ready.</p>`
+      : `<p class="muted">Your photo didn't come through. Take it again, or choose it from your photos.</p>`;
+    const b = file ? $("#scanGo") : $("#snapLib");
+    b.scrollIntoView({ block: "nearest", behavior: smooth() });
+    b.focus({ preventScroll: true });
+  }, 200);
+}
+function shareForget() { try { window.caches?.delete("nb-share").catch(() => {}); } catch {} }
+// The service worker only answers shares and notification taps (see sw.js). It needs https, or this computer.
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  const shareWorker = () => navigator.serviceWorker.register("sw.js").catch(() => {});
+  if (document.readyState === "complete") shareWorker(); else window.addEventListener("load", shareWorker);
+}
+
+
+// ---------------------------------------------------------------- FE: keyboard shortcuts
+// n or + Quick add · / search My list · g then l, p, s or j to switch screens · ? the list of them.
+// Letters do nothing while you type in a box or while a sheet is open (Esc closes a sheet).
+const KEYS_TABS = { l: "mylist", p: "print", s: "scan", j: "journal" };
+let keysG = 0;
+const keysTyping = (el) => !!el?.closest?.("textarea, select, [contenteditable]:not([contenteditable=false])")
+  || (el?.tagName === "INPUT" && !["checkbox", "radio", "button", "submit", "reset", "range", "color", "file"].includes(el.type));
+document.addEventListener("keydown", (e) => {
+  if (!me || $("#appShell").hidden || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.repeat) return;
+  if (keysTyping(e.target) || $$("dialog[open]").length) { keysG = 0; return; }
+  const k = e.key;
+  if (keysG) {
+    const tab = Date.now() - keysG < 1500 && KEYS_TABS[k.toLowerCase()];
+    keysG = 0;
+    if (tab) { e.preventDefault(); keysGo(tab); }
+    return;
+  }
+  if (k === "g" || k === "G") { keysG = Date.now(); return; }
+  if (k === "n" || k === "N" || k === "+") { e.preventDefault(); quickOpen(); }
+  else if (k === "/") { e.preventDefault(); keysSearch(); }
+  else if (k === "?") { e.preventDefault(); keysOpen(); }
+});
+function keysGo(tab) {
+  goto(tab);
+  setTimeout(() => {  // keyboard and screen readers carry on from the screen's first heading
+    const h = $$(`#${tab} h2`).find((x) => x.offsetParent);
+    if (h) { if (!h.hasAttribute("tabindex")) h.tabIndex = -1; h.focus({ preventScroll: true }); }
+  }, 160);
+}
+function keysSearch() {
+  if (!$("#mylist").classList.contains("on")) goto("mylist");
+  if (myListView() === "schedule") { viewPick = "list"; renderList(); }  // search shows its results in List (this visit only)
+  setTimeout(() => { const s = $("#listSearch"); s.scrollIntoView({ block: "center", behavior: smooth() }); s.focus({ preventScroll: true }); s.select(); }, 160);
+}
+function keysOpen() {
+  $$("#keysDialog .modkey").forEach((k) => { k.textContent = keysMac() ? "⌘" : "Ctrl"; });
+  $("#keysDialog").showModal();
+}
+$("#keysShow").onclick = keysOpen;
+$("#keysClose").onclick = () => $("#keysDialog").close();
+closeOnBackdrop($("#keysDialog"));
+$("#jText").addEventListener("keydown", (e) => {  // Ctrl+Enter (⌘+Enter) saves a journal note, as it adds a Brain dump
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); $("#jSave").click(); }
 });

@@ -637,3 +637,40 @@ ClickUp and Trello are listed under Settings → Linked app → Other apps as "n
   updated every 30 s only while it's on screen; a calendar that fails is named, with Try again. Today's calendar card
   steps aside while Schedule shows the events. Nothing is printed or sent by it.
 
+## 30. FE: routine card, focus timer, reminders, Quick add and shortcuts
+All of it is worked out in the browser while Next Box is open: no server timer, no push, no automatic print.
+- **Routine card** (top of My list; `routine_card`, default on, Settings → Focus), from `GET /printed?limit=5`, `GET
+  /scans?limit=1` and FC's `routine_morning`/`routine_evening`. Quiet before the plan time. From it, while there's no
+  `today` ticket today (a preview counts, a failed print doesn't) and something is due: "Good morning. Print today's label",
+  whose button is My list's Today's label (a preview, or "Send this to the printer?"), never a print by itself. From the
+  look-back time with no snap since today's label: "How did today go? Snap your pages" → Snap. After that snap (or any snap
+  today in the evening): "You finished N today ✓" (`done_today`), "Pages snapped ✓" when N is 0. Each has Not today /
+  Hide, for today on this device (with Undo). The words match Schedule's "Plan your day" and "Look back" rows.
+- **Focus timer** on Just one thing: "⏱ Start 5 min", plus "or N min" when the task has its own estimate (1–90). A
+  countdown ring with Pause/Resume, Stop (Undo) and a chime switch; the card keeps that task while it runs, and the timer
+  goes when the task is done, moved or set aside. The time comes from when it started and is kept on this device per
+  person (`nb.timer:<user>`: the task id and times, never its words), so switching tabs, locking the phone or reloading
+  doesn't lose it; one that ran out over 30 minutes ago is dropped. At the end: two soft notes made with Web Audio (only
+  after a tap allowed sound, and only with the chime on), a whole green ring and Keep going / Done ✓ (Step done ✓ with an
+  open step) / Not now ("5 minutes of focus. That counts ✓"). No ring motion with reduced motion; screen readers hear the
+  start, pause, 1 minute left and the end. On another screen, or scrolled away, the note at the top says "Time's up".
+- **Reminders** (`remind_before`: minutes, default 10, 0 = Off): a note at the top of every screen from N minutes before a
+  task with a time today until 30 minutes after, with Done ✓, Tomorrow, Snooze 10m and ✕ (snoozed and dismissed ones are
+  kept on this device for the day, ids only). Done and Tomorrow use the usual endpoints and show Undo in the note. Made
+  from My list as last loaded, fetched again quietly when a timed task is near and the list is 5+ minutes old. **Show a
+  notification too** (`remind_notify`, default off) asks the browser for permission only when it's switched on; they show
+  only while Next Box is open in the background (https or the installed app; phones through the service worker).
+- **Quick add**: the + in the header (or `n`) on every screen: Brain dump's rules and preview (`POST /list/dump?preview=1`),
+  added with `POST /list/dump` (so `new_tasks_to` applies), Ctrl/⌘+Enter adds. Closing keeps what was typed.
+- **App shortcuts and Share to Next Box** (`manifest.json`): Add a task (`/app/#add`), Snap a page (`#snap`), Print today
+  (`#print`: the Print tab with Print today focused; nothing prints). `share_target` posts title, text, url and photo to
+  `/app/share`. `web/sw.js`, the app's only service worker, answers that on the device: a photo waits in Cache Storage for
+  a moment and opens Snap attached (read only after Read back); text opens Quick add filled in (`#add&text=`, each part
+  once: `server.share_text`). It caches nothing else, has no push, and otherwise only brings Next Box forward when a
+  notification is tapped. Without it, the server's `POST /app/share` (no sign-in, nothing kept or logged) does the same
+  for text and sends a photo to Snap to pick again, without reading it. These addresses wait for sign-in, the data notice
+  and the setup questions, then leave the address bar.
+- **Keyboard shortcuts** (desktop): `n` or `+` Quick add, `/` search My list (Schedule switches to List for this visit),
+  `g` then `l`/`p`/`s`/`j` My list, Print, Snap, Journal, `?` the list (also Settings → Help), Esc closes. Ignored while
+  typing in a box or with a sheet open. Ctrl/⌘+Enter also saves a journal note.
+

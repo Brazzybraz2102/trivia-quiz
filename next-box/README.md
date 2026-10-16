@@ -372,6 +372,12 @@ Closing the loop:
 | Your day in time order | My list → Schedule: calendar events, timed tasks, a Now line and "Next: … in 20 min" |
 | Easier reading | Settings → General → Easy-to-read text (screen and printed labels) |
 | No surprises | Settings → Focus → Same words every time (opens My list on Schedule) |
+| Remember the routine | The card at the top of My list: Print today's label in the morning, Snap your pages in the evening (Settings → Focus → Routine card, and the times) |
+| Get going on a task | Just one thing → ⏱ Start 5 min: a countdown with Pause and Stop, a soft chime, then Keep going / Done ✓ / Not now |
+| Don't miss a timed task | A note at the top 10 minutes before, with Done, Tomorrow and Snooze (Settings → Focus → Remind me before timed tasks; a notification too if you like) |
+| Add something from any screen | The + at the top (or press n) |
+| From the phone's home screen | Long-press the Next Box icon: Add a task, Snap a page, Print today. Share a photo or text to Next Box from any app |
+| Keyboard | Press ? for the list: n add, / search, g then l, p, s or j to switch screens |
 | History | web app → Printed, or `nextbox printed` |
 | Sign out | web app → Account → Sign out |
 

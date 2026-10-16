@@ -12,5 +12,24 @@
     {"src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
     {"src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
     {"src": "icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
-  ]
+  ],
+  "shortcuts": [
+    {"name": "Add a task", "short_name": "Add", "description": "Quick add: one task, or many, one per line.",
+     "url": "/app/#add", "icons": [{"src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png"}]},
+    {"name": "Snap a page", "short_name": "Snap", "description": "Take a photo of your label and notes.",
+     "url": "/app/#snap", "icons": [{"src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png"}]},
+    {"name": "Print today", "short_name": "Print", "description": "Opens Print. Nothing prints until you tap Print today.",
+     "url": "/app/#print", "icons": [{"src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png"}]}
+  ],
+  "share_target": {
+    "action": "/app/share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [{"name": "photo", "accept": ["image/*", ".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]}]
+    }
+  }
 }

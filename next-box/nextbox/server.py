@@ -2831,6 +2831,31 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         detail = getattr(exc, "detail", None) or "Not Found"
         return JSONResponse({"detail": detail}, status_code=404)
 
+    @app.post("/app/share", include_in_schema=False)
+    async def share_in(request: Request):
+        """Share to Next Box (manifest.json share_target). On the phone the app's service worker answers
+        this itself and hands a photo straight to Snap; this is what happens without it. Text opens Quick
+        add filled in (it's carried in the address's #, which never comes back here); a photo can't be
+        handed over from here, so Snap asks for it again. Nothing is kept or logged, and it needs no
+        sign-in because it only says where to go."""
+        try:
+            size = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            size = 0
+        photo, text = size > MAX_BODY_BYTES, ""
+        if not photo:
+            try:
+                form = await request.form()
+            except Exception:
+                form = None
+            if form is not None:
+                photo = any(not isinstance(v, str) and (getattr(v, "filename", "") or getattr(v, "size", 0))
+                            for _, v in form.multi_items())
+                text = share_text(*(form.get(k) for k in ("title", "text", "url")))
+                await form.close()
+        target = "/app/#snap&shared=missed" if photo else "/app/#add" + (f"&text={quote(text, safe='')}" if text else "")
+        return RedirectResponse(target, status_code=303)
+
     if Path(WEB_DIR).is_dir():
         @app.get("/app/", include_in_schema=False)
         @app.get("/app/index.html", include_in_schema=False)
@@ -2978,7 +3003,7 @@ class _BodyLimit:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
-        big = scope.get("path") == "/scan"
+        big = scope.get("path") in ("/scan", "/app/share")  # a shared photo is answered without reading it
         limit = MAX_UPLOAD_BYTES if big else MAX_BODY_BYTES
         msg = "photo too large" if big else "That's more than Next Box takes in one go."
         length = dict(scope.get("headers") or []).get(b"content-length", b"")
@@ -2996,6 +3021,23 @@ class _BodyLimit:
                     raise HTTPException(413, msg)  # FastAPI turns this into the usual JSON answer
             return message
         return await self.app(scope, counted, send)
+
+
+SHARE_TEXT_MAX = 2000  # characters of shared text that go on to Quick add
+
+
+def share_text(title=None, text=None, url=None) -> str:
+    """What someone shared, as Quick add lines: the title, text and link once each (a phone often puts
+    the link in the text too). A shared list keeps its lines and leaves the title off, so the note's
+    name doesn't become a task. Web app sw.js does the same on the phone."""
+    parts = [p.strip() for p in (title, text, url) if isinstance(p, str) and p.strip()]
+    low = [p.lower() for p in parts]  # "Dentist" is in "Call the dentist" too (lower(), as sw.js's toLowerCase)
+    keep = [p for i, p in enumerate(parts)
+            if low[i] not in low[:i] and not any(j != i and low[i] != q and low[i] in q for j, q in enumerate(low))]
+    lines = isinstance(text, str) and "\n" in text.strip()
+    if lines and isinstance(title, str) and title.strip() in keep and title.strip() != text.strip():
+        keep.remove(title.strip())
+    return ("\n" if lines else " ").join(keep)[:SHARE_TEXT_MAX]
 
 
 def _version() -> str:
