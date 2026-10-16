@@ -451,7 +451,9 @@ devices (sign out the others), settings, help, feedback, refresh, **download my 
 journal pages, wins and devices as data.json; `?format=zip` adds the ticket images (`tickets/*.png`) and
 journal photos (`journal/*.jpg`), 5 an hour; both are sent `no-store`; never passwords, hashes or tokens;
 the app first asks `GET /auth/export/check`, which doesn't count, so a reset hold or the hourly limit is a
-message in the app), sign out, and **delete my account**
+message in the app; it says "Getting your .zip ready…", ignores another tap for 8 s so a double tap is one
+download, and starts the file through a download link, so a download that fails never replaces the app),
+sign out, and **delete my account**
 (`POST /auth/delete-account`: password + typed username; removes the account, tasks, tags,
 tickets, scans and activity; feedback stays, unlinked; the invite it joined with stays used but no longer
 names it; the protected admin and the last superadmin
@@ -464,7 +466,11 @@ reads the published pyproject.toml at most every 6 hours).
 signed-in devices, what the admin can see, download my data, delete my account. **Settings** has a
 jump bar (General, Tags, Focus, Calendars, Linked app, Label colors, Printing, Read-back, Help); General holds
 theme, text size (`text_size`), the screen it opens to (`start_tab`), 24-hour times and where new
-tasks go. `/app/` is served with `app.js?v=<version>-<build>` and every `/app` response says
+tasks go. Each setting saves as it changes (`PATCH /settings`; a typed box as it's left), one save at a time
+in the order made; only the newest answer redraws Settings, and never the box being typed in. A typed value
+that didn't save stays, with why in red next to it; if Next Box couldn't be reached, leaving the box again
+tries again. When the setup questions (§29) change a setting, its red message goes.
+`/app/` is served with `app.js?v=<version>-<build>` and every `/app` response says
 `Cache-Control: no-cache`, so phones and Cloudflare never keep showing an old version.
 
 ## 24. Standard app pages and navigation
@@ -627,8 +633,11 @@ ClickUp and Trello are listed under Settings → Linked app → Other apps as "n
   tags; it can be folded away (remembered on the device). A failed preview just hides.
 - **Bulk actions**: with one or more tasks picked, the print bar adds ✓ Done, → Tomorrow, Tag… and Delete….
   They go one task at a time through the single-task endpoints, so linked tasks act in their own app; the bar
-  shows progress and a failure names the task. Done and → Tomorrow each get one Undo for the whole batch. Tag…
-  adds or takes off a tag on the picked My list tasks. Delete… lists the tasks and asks "Delete N tasks? This
+  shows progress and a failure names the task and why, whether or not others changed ("Moved 1 to tomorrow ·
+  “Pick up prescription” didn't change: That task was already removed.", "and 2 more" when more didn't).
+  Done and → Tomorrow each get one Undo for the whole batch; it says how many went back ("Back where they
+  were (1 of 2)") and names one that didn't, and why. Tag… adds or takes off a tag on the picked My list
+  tasks (with only linked tasks picked, its sheet is "Tags are for My list tasks"). Delete… lists the tasks and asks "Delete N tasks? This
   can't be undone." (Cancel has focus), then sends `DELETE /list/{id}?confirm=true` per task.
 - **Slugs on My list**: `GET /list` also returns `slides` ({task id: moves} for open tasks moved `slug_after`+
   times; "Not a slug" ones left out) and `slug_after`. Those rows show "slid 3×", as the label and Journal do.
