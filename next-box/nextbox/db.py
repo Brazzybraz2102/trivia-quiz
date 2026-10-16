@@ -42,6 +42,9 @@ users = Table(
     Column("calendars", JSON, nullable=True),       # [{id, provider, config, secret (sealed), account, ...}]
     Column("consent", JSON, nullable=True),
     Column("support_until", BigInteger, nullable=True),  # time-limited support access granted by the person
+    Column("last_seen", BigInteger, nullable=True),      # last time a signed-in device was used (hourly)
+    Column("reset_by", String(32), nullable=True),       # the admin who last set a one-time password...
+    Column("reset_at", BigInteger, nullable=True),       # ...and when (the person is told)
 )
 
 sessions = Table(
@@ -109,6 +112,7 @@ events = Table(
     Column("detail", JSON, nullable=True),
     Column("error", Text, nullable=True),
     Column("trace", Text, nullable=True),
+    Column("target", String(64), nullable=True),  # audit: whose account an admin action was about
 )
 
 server_settings = Table(

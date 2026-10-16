@@ -37,7 +37,8 @@ def _show(result: dict) -> None:
     print(f"png: {result.get('png')}")
 
 
-def _user(accounts: Accounts, action: str, username: str | None, role: str | None = None) -> int:
+def _user(accounts: Accounts, action: str, username: str | None, role: str | None = None,
+          data_dir=None) -> int:
     """The desktop is the recovery path: it works even if every web admin is locked out."""
     if action == "list":
         users = accounts.all_users()
@@ -68,8 +69,13 @@ def _user(accounts: Accounts, action: str, username: str | None, role: str | Non
             print(f"Home Assistant and `nextbox today` now print {username}'s tasks")
             return 0
         if action == "remove":
-            accounts.remove_user(username)
-            print(f"removed {username}; their sessions are signed out")
+            from .events import Events
+            from .feedback import Feedback
+            from .upkeep import purge_user
+            root = data_dir if data_dir is not None else load_settings().data_dir
+            # Everything they had goes too, so a new account with the same name starts empty.
+            purge_user(accounts, Store(root), Events(root), Feedback(root), username)
+            print(f"removed {username} and everything Next Box kept for them; their sessions are signed out")
             return 0
         if action in {"role", "enable", "disable"}:
             if action == "role":
@@ -307,7 +313,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(out, indent=2))
             return 0 if out["printer_reachable"] else 1
         if args.cmd == "user":
-            return _user(Accounts(settings.data_dir), args.action, args.username, args.role)
+            return _user(Accounts(settings.data_dir), args.action, args.username, args.role,
+                         data_dir=settings.data_dir)
         if args.cmd == "serve":
             import uvicorn
 

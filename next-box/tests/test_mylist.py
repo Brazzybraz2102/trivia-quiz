@@ -121,7 +121,7 @@ def test_list_endpoints(app):
     assert kim.get("/list").json()["tasks"] == []
     tid = added[0]["id"]
     assert sam.patch(f"/list/{tid}", json={"steps": ["open the bill"]}).json()["steps"][0]["text"] == "open the bill"
-    assert kim.patch(f"/list/{tid}", json={"content": "x"}).status_code == 502
+    assert kim.patch(f"/list/{tid}", json={"content": "x"}).status_code == 404  # not hers: looks like "gone"
     # Deleting needs an explicit yes.
     assert sam.delete(f"/list/{tid}").status_code == 400
     assert sam.delete(f"/list/{tid}?confirm=true").status_code == 200
@@ -144,7 +144,7 @@ def test_stickers_strips_and_focus_print(app):
     f = sam.post("/print/focus", json={}).json()
     assert f["kind"] == "focus" and f["manifest"][0]["content"] == "Pay bill"
     assert sam.get(f"/printed/{r['id']}/png").status_code == 200
-    assert sam.post("/print/stickers", json={"task_ids": ["nb:999"]}).status_code == 502
+    assert sam.post("/print/stickers", json={"task_ids": ["nb:999"]}).status_code == 404
     sam2 = login("kim", "kim password")
     assert sam2.post("/print/stickers", json={}).status_code == 400  # nothing to print yet
 

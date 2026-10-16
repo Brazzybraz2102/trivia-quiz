@@ -60,6 +60,7 @@ async function boot() {
   $("#announce").hidden = !me.announcement;
   $("#announce").textContent = me.announcement || "";
   $("#paused").hidden = !me.printing_paused;
+  showAccountNotes();
   $$("[data-min]").forEach((el) => el.hidden = RANK[me.role] < RANK[el.dataset.min]);
   // Superadmins manage people in the Users tab; household admins keep the simple list here.
   for (const id of ["#peopleCard", "#addCard"]) $(id).hidden = me.role === "superadmin";
@@ -490,7 +491,7 @@ const KIND = { bug: "Something broke", confusing: "Confusing", idea: "Idea", pra
 const STATUS = { new: "new", seen: "seen", planned: "planned", fixed: "fixed", wontfix: "won't fix", hidden: "hidden" };
 
 function feedbackCard(f, controls = true) {
-  const admin = controls && me && RANK[me.role] >= RANK.admin;
+  const admin = controls && me && me.role === "superadmin";  // moderation is staff-only: the board spans households
   const q = (label, v) => v ? `<div class="q">${label}</div><div>${esc(v)}</div>` : "";
   return `<div class="card fbitem" data-fid="${esc(f.id)}">
     <div class="top" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
@@ -549,6 +550,9 @@ $("#boardList").addEventListener("change", async (e) => {
 });
 
 // ---------------------------------------------------------------- admin
+// Phones stay signed in for weeks, so "last active" (using the app) says more than the last sign-in.
+const lastActive = (u) => Math.max(u.last_seen || 0, u.last_login || 0) || null;
+
 function canManage(u) {
   if (u.username === me.username) return false;
   return me.role === "superadmin" || RANK[u.role] < RANK[me.role];
@@ -563,7 +567,7 @@ async function loadAdmin() {
         u.disabled && `<span class="badge bad">off</span>`, u.beta && `<span class="badge">beta</span>`,
         u.debug && `<span class="badge bad">debug</span>`, u.must_change && `<span class="badge">temp password</span>`].filter(Boolean).join(" ");
       return `<div class="user"><div class="top"><b>${esc(u.username)}</b>${badges}</div>
-        <div class="muted">${u.app ? esc(u.app) : "no to-do app yet"} · last sign-in ${when(u.last_login)} · ${u.sessions} device(s) · ${u.prints} prints · ${u.errors_7d} errors this week</div>
+        <div class="muted">${u.app ? esc(u.app) : "no to-do app yet"} · last active ${when(lastActive(u))} · ${u.sessions} device(s) · ${u.prints} prints · ${u.errors_7d} errors this week</div>
         <div class="row">
           <button class="plain small" data-u="${esc(u.username)}" data-a="activity">Activity</button>
           ${m ? `<button class="plain small" data-u="${esc(u.username)}" data-a="reset">Reset password</button>
@@ -698,6 +702,22 @@ async function loadEvents() {
 }
 $("#evGo").onclick = loadEvents;
 
+// ---------------------------------------------------------------- notes about your own account
+// Debug mode and an admin's password reset are never silent: the person sees them.
+function showAccountNotes() {
+  $("#debugOn").hidden = !me.debug;
+  const r = me.password_reset;
+  let seen = "";
+  try { seen = localStorage.getItem("nb_reset_seen") || ""; } catch {}
+  $("#resetNote").hidden = !r || seen === String(r.at);
+  if (r) $("#resetText").textContent = `Your password was reset by ${r.by || "an admin"} on ${new Date(r.at * 1000).toLocaleDateString()}. ` +
+    "If you didn't expect that, choose a new one in Profile.";
+}
+$("#resetOk").onclick = () => {
+  try { localStorage.setItem("nb_reset_seen", String(me?.password_reset?.at || "")); } catch {}
+  $("#resetNote").hidden = true;
+};
+
 boot();
 
 
@@ -793,10 +813,20 @@ $("#listBody").addEventListener("click", async (e) => {
   const id = row.dataset.id;
   if (e.target.matches("[data-done]")) { await markDone(id); }
   else if (e.target.matches("[data-reopen]")) {
-    try { await api(`/list/${encodeURIComponent(id)}/reopen`, { method: "POST" }); loadList(); } catch (err) { toast(err.message); }
+    try { await api(`/list/${encodeURIComponent(id)}/reopen`, { method: "POST" }); loadList(); } catch (err) { listError(err, id); }
   }
   else if (e.target.matches("[data-edit]")) openTask(listData.tasks.find((t) => t.id === id));
 });
+
+// A task ticked or deleted on another device: say so, and show the list as it is now.
+const TASK_GONE = "That task was already removed.";
+function listError(err, id) {
+  toast(err.message);
+  if (err.message !== TASK_GONE) return;
+  if (id) picked.delete(id);
+  if ($("#taskDialog").open) $("#taskDialog").close();
+  loadList();
+}
 
 async function markDone(id) {
   try {
@@ -804,7 +834,7 @@ async function markDone(id) {
     picked.delete(id);
     toast(["Done ✓", "Nice. ✓", "That counts. ✓", "One less thing ✓"][Math.floor(Math.random() * 4)]);
     loadList();
-  } catch (err) { toast(err.message); }
+  } catch (err) { listError(err, id); }
 }
 
 $("#nowDone").onclick = () => $("#nowCard").dataset.id && markDone($("#nowCard").dataset.id);
@@ -821,10 +851,16 @@ async function printFrom(path, body, button) {
     box.hidden = false;
     const one = (t) => `<p><b>${t.status === "printed" ? "Printed" : "Preview"}</b> #${esc(t.id)} · ${t.manifest.length} task${t.manifest.length === 1 ? "" : "s"}
       ${t.printer ? ` · ${esc(t.printer.name)}` : ""}</p>${t.note ? `<p class="muted">${esc(t.note)}</p>` : ""}${paperButton(t.id)}<img src="${png(t.id)}" alt="label preview">`;
-    box.innerHTML = [r, ...(r.also || [])].map(one).join("<hr>");
+    const gone = (r.missing || []).length;
+    box.innerHTML = (gone ? `<p class="muted">${gone === 1 ? "1 task was" : `${gone} tasks were`} already removed, so ${gone === 1 ? "it isn't" : "they aren't"} on it.</p>` : "") +
+      [r, ...(r.also || [])].map(one).join("<hr>");
     box.scrollIntoView({ behavior: "smooth", block: "nearest" });
     loadGuide();
-  } catch (e) { box.hidden = false; box.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    if (gone) { for (const id of r.missing) picked.delete(id); loadList(); }
+  } catch (e) {
+    box.hidden = false; box.innerHTML = `<span class="err">${esc(e.message)}</span>`;
+    if (/already removed/.test(e.message)) { picked.clear(); loadList(); }
+  }
   finally { button.disabled = false; }
 }
 $("#printStickers").onclick = () => printFrom("/print/stickers", picked.size ? { task_ids: [...picked] } : {}, $("#printStickers"));
@@ -878,12 +914,12 @@ $("#taskForm").onsubmit = async (e) => {
     steps: $("#tdSteps").value.split("\n").map((x) => x.trim()).filter(Boolean).map((text) => ({ text, done: !!old.get(text) })),
   };
   try { await api(`/list/${encodeURIComponent(editing.id)}`, { method: "PATCH", json: body }); $("#taskDialog").close(); toast("Saved"); loadList(); }
-  catch (err) { toast(err.message); }
+  catch (err) { listError(err, editing?.id); }
 };
 $("#tdDelete").onclick = async () => {
   if (!editing || !confirm(`Delete "${editing.content}"? This can't be undone.`)) return;
   try { await api(`/list/${encodeURIComponent(editing.id)}?confirm=true`, { method: "DELETE" }); $("#taskDialog").close(); toast("Deleted"); loadList(); }
-  catch (err) { toast(err.message); }
+  catch (err) { listError(err, editing?.id); }
 };
 $("#tdFocus").onclick = () => { const id = editing?.id; $("#taskDialog").close(); if (id) printFrom("/print/focus", { task_id: id }, $("#nowPrint")); };
 
@@ -955,7 +991,7 @@ async function loadSuperList() {
       <input type="checkbox" aria-label="Select ${esc(u.username)}" ${suPicked.has(u.username) ? "checked" : ""}>
       <div class="who"><div class="top"><b>${esc(u.username)}</b>${badges}</div>
         <div class="muted">${esc(u.email || "no email")} · ${esc(u.household)}</div>
-        <div class="muted">last sign-in ${when(u.last_login)} · ${u.sessions} device(s) · ${u.open_tasks} open tasks · ${u.prints_30d} prints (30d) · ${esc(u.app || "no linked app")}</div></div>
+        <div class="muted">last active ${when(lastActive(u))} · ${u.sessions} device(s) · ${u.open_tasks} open tasks · ${u.prints_30d} prints (30d) · ${esc(u.app || "no linked app")}</div></div>
       <button class="plain small" data-manage>Manage</button></div>`;
   }).join("") || `<p class="muted">Nobody matches.</p>`;
   $("#suAll").checked = suRows.length > 0 && suPicked.size === suRows.length;
@@ -1026,7 +1062,7 @@ async function openUser(name) {
   try { u = await api(`/super/users/${encodeURIComponent(name)}`); } catch (e) { return toast(e.message); }
   suOpen = u;
   $("#udName").textContent = u.username;
-  $("#udSub").textContent = `joined ${when(u.created)} · last sign-in ${when(u.last_login)}${u.consented ? "" : " · hasn't accepted the data notice"}`;
+  $("#udSub").textContent = `joined ${when(u.created)} · last active ${when(lastActive(u))} · last sign-in ${when(u.last_login)}${u.consented ? "" : " · hasn't accepted the data notice"}`;
   $("#udEmail").value = u.email || "";
   $("#udRole").value = u.role;
   $("#udHome").innerHTML = suHomes.map((h) => `<option value="${esc(h.id)}">${esc(h.name)}</option>`).join("");
@@ -1034,10 +1070,13 @@ async function openUser(name) {
   $("#udOff").checked = u.disabled; $("#udBeta").checked = u.beta; $("#udDebug").checked = u.debug; $("#udTemp").checked = u.must_change;
   const self = u.username === me.username, locked = self || u.protected;
   $("#udOff").disabled = locked; $("#udRole").disabled = locked;
-  if (u.protected) $("#udSub").textContent += " · protected admin: always a superadmin, can't be turned off or deleted";
+  // Only the Next Box computer changes the protected admin (the server refuses the rest too).
+  const guarded = u.protected && !self;
+  for (const id of ["#udReset", "#udSignout", "#udHome", "#udTemp", "#udEmail", "#udPrefs"]) $(id).disabled = guarded;
+  if (u.protected) $("#udSub").textContent += " · protected admin: always a superadmin. Only the Next Box computer can change it";
   $("#udMsg").textContent = ""; $("#udTempOut").innerHTML = ""; $("#udConfirm").value = ""; $("#udDelete").disabled = true;
   $("#udBundle").href = `/super/users/${encodeURIComponent(u.username)}/bundle`;
-  $("#udUnlink").disabled = !u.connection.connected || !!u.connection.legacy;
+  $("#udUnlink").disabled = guarded || !u.connection.connected || !!u.connection.legacy;
   $("#udInfo").innerHTML = `
     <div class="kv"><dt>To-do app</dt><dd>${u.connection.connected ? `${esc(u.connection.name)}${u.connection.account ? " · " + esc(u.connection.account) : ""}` : "only their built-in list"}</dd>
     <dt>Open tasks</dt><dd>${u.open_tasks}</dd><dt>Prints (30d)</dt><dd>${u.prints_30d}</dd><dt>Errors (7d)</dt><dd>${u.errors_7d}</dd>

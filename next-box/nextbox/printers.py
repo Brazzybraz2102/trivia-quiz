@@ -6,15 +6,17 @@ A Brother QL with a black+red roll can also print the overdue tags in red ink.
 """
 from __future__ import annotations
 
+import ipaddress
 import re
 import secrets
+import socket
 from dataclasses import asdict, fields
 
 from sqlalchemy import and_, delete, func, insert, select, update
 
 from . import db
 from .config import Settings
-from .printer import COLORS, DRIVERS, PrinterConfig, legacy_config
+from .printer import COLORS, DRIVERS, PrinterConfig, _host_port, legacy_config
 
 # Why a ticket is being printed. People map each reason to a label color in Settings.
 REASONS = {
@@ -35,12 +37,68 @@ class PrinterError(ValueError):
     pass
 
 
+PRINTER_PORTS = (9100, 515, 631)  # raw printing, LPD, IPP: all a household outside Home may use
+_HOSTNAME = re.compile(r"(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*")
+_BAD_ADDRESS = ("address: an IP or host (optionally :port), a printer device like /dev/usb/lp0, "
+                "usb://0x04f9:0x20a7 for Brother USB, or the CUPS printer name")
+
+
+def _check_host_port(address: str) -> tuple[str, int]:
+    """192.168.1.50 or printer.lan, optionally :port. Not '...', '-' or port 99999."""
+    host, port = _host_port(address)
+    try:
+        ipaddress.IPv4Address(host)
+    except ValueError:
+        if not (_HOSTNAME.fullmatch(host) and re.search(r"[A-Za-z]", host)):
+            raise PrinterError(f"'{host or address}' isn't a printer address. It looks like 192.168.1.50 "
+                               "or printer.lan") from None
+    if not 1 <= port <= 65535:
+        raise PrinterError("the port is a number from 1 to 65535 (most label printers use 9100)")
+    return host, port
+
+
+def _own_addresses() -> set[str]:
+    """This computer's own addresses, so a printer address can't point back at Next Box."""
+    out: set[str] = set()
+    try:
+        out |= {info[4][0] for info in socket.getaddrinfo(socket.gethostname(), None)}
+    except (OSError, UnicodeError):
+        pass
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))  # a documentation address: connecting a UDP socket sends nothing
+            out.add(s.getsockname()[0])
+    except OSError:
+        pass
+    return out
+
+
+def _check_reachable_by_others(host: str, port: int) -> None:
+    """Households other than Home (and not staff) may only point Next Box at a network printer:
+    not at this computer, its local services, or odd ports."""
+    if port not in PRINTER_PORTS:
+        raise PrinterError("use the printer's own port: 9100 (most label printers), 515 or 631")
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError):
+        raise PrinterError(f"can't find {host}. Check the printer's address") from None
+    own = _own_addresses()
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.version == 6 and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        if ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast or str(ip) in own:
+            raise PrinterError("that address isn't a printer Next Box can use")
+
+
 def _clean(data: dict) -> dict:
     allowed = {f.name for f in fields(PrinterConfig)}
     return {k: v for k, v in data.items() if k in allowed}
 
 
-def validate(data: dict) -> PrinterConfig:
+def validate(data: dict, restricted: bool = False) -> PrinterConfig:
+    """`restricted`: the household isn't Home and the person isn't staff, so only a network
+    printer on a printer port is allowed (see _check_reachable_by_others)."""
     data = _clean(data)
     driver = data.get("driver")
     if driver not in DRIVERS:
@@ -53,12 +111,20 @@ def validate(data: dict) -> PrinterConfig:
         "network": r"[A-Za-z0-9.-]{1,100}(:\d{1,5})?",                              # 192.168.1.50[:9100]
         "device": r"/dev/(usb/lp\d+|lp\d+|ttyUSB\d+|ttyACM\d+|rfcomm\d+)",         # /dev/usb/lp0
         "usb": r"usb://0x[0-9a-fA-F]{4}:0x[0-9a-fA-F]{4}(/[\w.-]+)?",                # usb://0x04f9:0x20a7
-        "cups": r"[A-Za-z0-9_.-]{1,100}",                                           # CUPS queue name
+        "cups": r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}",                                # CUPS queue name
     }
     allowed = ["cups"] if driver == "cups" else ["network", "device"] + (["usb"] if driver == "brother_ql" else [])
-    if not address or not any(re.fullmatch(forms[f], address) for f in allowed):
-        raise PrinterError("address: an IP or host (optionally :port), a printer device like /dev/usb/lp0, "
-                           "usb://0x04f9:0x20a7 for Brother USB, or the CUPS printer name")
+    if restricted:
+        if "network" not in allowed:
+            raise PrinterError("this household can add network printers (an IP address) only")
+        allowed = ["network"]
+    form = next((f for f in allowed if address and re.fullmatch(forms[f], address)), None)
+    if form is None:
+        raise PrinterError("an IP address like 192.168.1.50 (optionally :9100)" if restricted else _BAD_ADDRESS)
+    if form == "network":
+        host, port = _check_host_port(address)
+        if restricted:
+            _check_reachable_by_others(host, port)
     color = data.get("stock_color", "white")
     if color not in COLORS:
         raise PrinterError(f"label color must be one of {', '.join(COLORS)}")
@@ -120,17 +186,17 @@ class Printers:
     def get(self, pid: str, household: str = "home") -> PrinterConfig | None:
         return next((p for p in self.all(household) if p.id == pid), None)
 
-    def add(self, data: dict, household: str = "home") -> PrinterConfig:
+    def add(self, data: dict, household: str = "home", restricted: bool = False) -> PrinterConfig:
         self.all(household)  # make sure a legacy .env printer is saved first
-        cfg = validate({**data, "id": None})
+        cfg = validate({**data, "id": None}, restricted=restricted)
         self._insert(cfg, household)
         return cfg
 
-    def update(self, pid: str, data: dict, household: str = "home") -> PrinterConfig:
+    def update(self, pid: str, data: dict, household: str = "home", restricted: bool = False) -> PrinterConfig:
         current = self.get(pid, household)
         if current is None:
             raise KeyError(pid)
-        cfg = validate({**asdict(current), **data, "id": pid})
+        cfg = validate({**asdict(current), **data, "id": pid}, restricted=restricted)
         with self.db.begin() as conn:
             conn.execute(update(db.printers).where(and_(db.printers.c.id == pid,
                                                         db.printers.c.household_id == household)).values(config=asdict(cfg)))

@@ -15,7 +15,7 @@ import secrets
 import threading
 import time
 
-from sqlalchemy import and_, delete, func, insert, select, update
+from sqlalchemy import and_, delete, func, insert, or_, select, update
 
 from . import db
 
@@ -31,7 +31,7 @@ _SCRYPT = {"n": 2**14, "r": 8, "p": 1, "dklen": 32}
 # Per-user preferences: name -> (default, validator). Unknown keys are rejected.
 PREFS = {
     "always_dry_run": (False, lambda v: isinstance(v, bool)),
-    "max_rows": (5, lambda v: isinstance(v, int) and 1 <= v <= 20),   # a short list gets started
+    "max_rows": (5, lambda v: type(v) is int and 1 <= v <= 20),   # a short list gets started (not true/false)
     "gentle_words": (True, lambda v: isinstance(v, bool)),   # "waiting 3d", not "overdue 3d"
     "show_wins": (True, lambda v: isinstance(v, bool)),      # "Yesterday: 4 done" on the daily ticket
     "show_next_step": (True, lambda v: isinstance(v, bool)), # a task's first unticked tiny step under it
@@ -41,7 +41,7 @@ PREFS = {
     "setup_hidden": (False, lambda v: isinstance(v, bool)),  # the Get started guide is put away
     "paper_size": ("letter", lambda v: v in ("letter", "a4", "a5", "half_letter")),  # for Print on paper
     "journal_mode": (True, lambda v: isinstance(v, bool)),   # daily label for a journal page; keep every read-back photo
-    "slug_after": (3, lambda v: isinstance(v, int) and 2 <= v <= 10),  # moves before a task counts as a slug
+    "slug_after": (3, lambda v: type(v) is int and 2 <= v <= 10),  # moves before a task counts as a slug
     "display_name": ("", lambda v: isinstance(v, str) and len(v.strip()) <= 40),
     "text_size": ("normal", lambda v: v in ("normal", "large", "xlarge")),
     "start_tab": ("mylist", lambda v: v in ("mylist", "print", "journal")),
@@ -184,7 +184,10 @@ class Accounts:
     def invites(self, household_id: str | None = None) -> list[dict]:
         q = select(db.invites).order_by(db.invites.c.created.desc())
         if household_id is not None:
-            q = q.where(db.invites.c.household_id == household_id)
+            # A household's admins see its own join codes, never staff codes that start a new household
+            # (those are stored under the staff member's household, and name people from elsewhere).
+            q = q.where(db.invites.c.household_id == household_id,
+                        or_(db.invites.c.own_household.is_(None), db.invites.c.own_household.is_(False)))
         with self.db.connect() as conn:
             rows = conn.execute(q).mappings().all()
         now = time.time()
@@ -367,7 +370,8 @@ class Accounts:
             demoting = fields.get("role", "superadmin") != "superadmin" or fields.get("disabled")
             if demoting and username == self.protected():
                 raise AuthError(f"{username} is the protected admin account; it always stays a superadmin")
-            if row["role"] == "superadmin" and demoting and self._active_superadmins(conn) <= 1:
+            # A superadmin who's already turned off doesn't count toward the active ones it would leave.
+            if row["role"] == "superadmin" and not row["disabled"] and demoting and self._active_superadmins(conn) <= 1:
                 raise AuthError("can't demote or disable the last superadmin")
             conn.execute(update(db.users).where(db.users.c.username == username).values(**fields))
         if fields.get("disabled"):
@@ -436,7 +440,7 @@ class Accounts:
                 raise AuthError(f"no user {username}")
             if username == self.protected():
                 raise AuthError(f"{username} is the protected admin account and can't be removed")
-            if row["role"] == "superadmin" and self._active_superadmins(conn) <= 1:
+            if row["role"] == "superadmin" and not row["disabled"] and self._active_superadmins(conn) <= 1:
                 raise AuthError("can't remove the last superadmin")
             conn.execute(delete(db.users).where(db.users.c.username == username))
         self.revoke_user_sessions(username)
@@ -464,6 +468,12 @@ class Accounts:
     def touch_login(self, username: str) -> None:
         with self.db.begin() as conn:
             conn.execute(update(db.users).where(db.users.c.username == username).values(last_login=int(time.time())))
+
+    def mark_reset(self, username: str, by: str) -> None:
+        """An admin set a one-time password: remembered so the person is told who did it, and when."""
+        with self.db.begin() as conn:
+            conn.execute(update(db.users).where(db.users.c.username == username.strip().lower()).values(
+                reset_by=by, reset_at=int(time.time())))
 
     # --- support access (product privacy) --------------------------------------
     def grant_support(self, username: str, hours: int) -> int | None:
@@ -525,6 +535,11 @@ class Accounts:
             with self.db.begin() as conn:
                 conn.execute(update(db.sessions).where(db.sessions.c.token_hash == h).values(
                     expires=int(now) + SESSION_DAYS * 86400))
+        if not user["last_seen"] or now - user["last_seen"] > 3600:
+            # "Last active": phones stay signed in for weeks, so sign-ins alone undercount. Hourly at most.
+            with self.db.begin() as conn:
+                conn.execute(update(db.users).where(db.users.c.username == s["username"]).values(
+                    last_seen=int(now)))
         return s["username"]
 
     def sessions_for(self, username: str, current: str | None = None) -> list[dict]:

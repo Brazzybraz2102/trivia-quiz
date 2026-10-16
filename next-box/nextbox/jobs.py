@@ -303,11 +303,26 @@ def _sticker_rows(ctx: Context, tasks: list[dict]) -> tuple[list[Sticker], list[
     return stickers, manifest
 
 
-def _pick(ctx: Context, task_ids: list[str] | None, query: str | None) -> list[dict]:
+def _pick(ctx: Context, task_ids: list[str] | None, query: str | None,
+          missing: list[str] | None = None) -> list[dict]:
+    """The chosen tasks. Ids already removed (on another device, say) go in `missing` instead of
+    failing the whole batch; when every one is gone, that's TaskNotFound."""
     if task_ids:
         if len(task_ids) > MAX_STICKERS:
             raise ValueError(f"{MAX_STICKERS} at a time, so the printer isn't tied up")
-        return [ctx.tasks.get_task(str(t)) for t in dict.fromkeys(task_ids)]
+        from .providers.base import TaskNotFound
+        found, gone = [], []
+        for t in dict.fromkeys(task_ids):
+            try:
+                found.append(ctx.tasks.get_task(str(t)))
+            except TaskNotFound:
+                gone.append(str(t))
+        if gone and (missing is None or not found):
+            raise TaskNotFound("That task was already removed." if len(gone) == 1
+                               else "Those tasks were already removed.")
+        if missing is not None:
+            missing += gone
+        return found
     today = ctx.today()
     tasks = ctx.tasks.filter_tasks(query) if query else ctx.tasks.today()
     return sorted(tasks, key=lambda t: _sort_key(t, today))[:MAX_STICKERS]
@@ -317,7 +332,8 @@ def print_stickers(ctx: Context, task_ids: list[str] | None = None, query: str |
                    dry_run: bool | None = None, source: str = "manual") -> dict:
     """One sticker per task, cut apart. Stickers go to the printer loaded with their tag's color
     (one ticket per color); on plain labels the tag's pattern shows the color."""
-    tasks = _pick(ctx, task_ids, query)
+    missing: list[str] = []
+    tasks = _pick(ctx, task_ids, query, missing)
     if not tasks:
         raise ValueError("No tasks to print. Pick some on My list, or add a few first.")
     stickers, manifest = _sticker_rows(ctx, tasks)
@@ -338,21 +354,24 @@ def print_stickers(ctx: Context, task_ids: list[str] | None = None, query: str |
         title = f"{len(part)} sticker{'s' * (len(part) != 1)}"
         results.append(_finish(ctx, reason="task", kind="stickers", title=title, draw=draw, label_id=label_id,
                                manifest=rows, source=source, dry_run=dry_run, color=color))
-    return {**results[0], "also": results[1:]} if len(results) > 1 else results[0]
+    out = {**results[0], "also": results[1:]} if len(results) > 1 else results[0]
+    return {**out, "missing": missing} if missing else out
 
 
 def print_strips(ctx: Context, task_ids: list[str] | None = None, query: str | None = None,
                  dry_run: bool | None = None, source: str = "manual") -> dict:
     """One label of tear-off strips: tear along the dashes and stick each task where it happens."""
-    tasks = _pick(ctx, task_ids, query)
+    missing: list[str] = []
+    tasks = _pick(ctx, task_ids, query, missing)
     stickers, manifest = _sticker_rows(ctx, tasks)
     today = ctx.today()
     label_id = ctx.store.new_id(today)
 
     def draw(accent: bool) -> Image.Image:
         return render_strips("Tear-off", today.strftime("%a %b %-d"), stickers, label_id)
-    return _finish(ctx, reason="strips", kind="strips", title="Tear-off strips", draw=draw, label_id=label_id,
-                   manifest=manifest, source=source, dry_run=dry_run)
+    out = _finish(ctx, reason="strips", kind="strips", title="Tear-off strips", draw=draw, label_id=label_id,
+                  manifest=manifest, source=source, dry_run=dry_run)
+    return {**out, "missing": missing} if missing else out
 
 
 def one_thing(ctx: Context) -> dict | None:

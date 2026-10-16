@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import time
 
-from sqlalchemy import and_, delete, insert, select
+from sqlalchemy import and_, delete, insert, or_, select
 
 from . import db
 
@@ -25,6 +25,8 @@ def _row(r) -> dict:
             ev[k] = r[k]
     if r["household_id"]:
         ev["household_id"] = r["household_id"]
+    if r["target"]:
+        ev["target"] = r["target"]
     return ev
 
 
@@ -34,13 +36,17 @@ class Events:
 
     def log(self, user: str, action: str, *, ok: bool = True, kind: str = "activity",
             detail: dict | None = None, error: str = "", trace: str = "",
-            household: str | None = None) -> dict:
-        """kind: activity | audit (admin actions) | error | auth."""
+            household: str | None = None, target: str | None = None) -> dict:
+        """kind: activity | audit (admin actions) | error | auth. `target`: whose account an
+        admin action was about, so a person's history shows what was done to it too."""
         ev = {"ts": round(time.time(), 3), "user": user, "kind": kind, "action": action, "ok": ok}
         with self.db.begin() as conn:
             conn.execute(insert(db.events).values(
                 ts=ev["ts"], user=user[:64], household_id=household, kind=kind, action=action[:64], ok=ok,
-                detail=detail or None, error=error[:500] or None, trace=trace[-6000:] or None))
+                detail=detail or None, error=error[:500] or None, trace=trace[-6000:] or None,
+                target=str(target)[:64] if target else None))
+        if target:
+            ev["target"] = str(target)[:64]
         if detail:
             ev["detail"] = detail
         if error:
@@ -55,10 +61,16 @@ class Events:
         return [_row(r) for r in rows]
 
     def query(self, *, user: str | None = None, kind: str | None = None, ok: bool | None = None,
-              limit: int = 200, household: str | None = None, since: float | None = None) -> list[dict]:
+              limit: int = 200, household: str | None = None, since: float | None = None,
+              target: str | None = None, involving: str | None = None) -> list[dict]:
+        """`user`: who did it. `target`: whose account it was done to. `involving`: either."""
         conds = []
         if user:
             conds.append(db.events.c.user == user)
+        if target:
+            conds.append(db.events.c.target == target)
+        if involving:
+            conds.append(or_(db.events.c.user == involving, db.events.c.target == involving))
         if kind:
             conds.append(db.events.c.kind == kind)
         if ok is not None:

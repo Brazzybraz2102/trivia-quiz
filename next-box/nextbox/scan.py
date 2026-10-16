@@ -24,7 +24,8 @@ class RowMark(BaseModel):
     row: int = Field(description="Task row number, counting from 1 at the top")
     mark: Mark
     confidence: float = Field(description="0.0-1.0: how sure you are about this row's mark")
-    note: str = Field(default="", description="Anything odd, e.g. 'mark is between rows 3 and 4'")
+    note: str = Field(default="", description="The kind of odd mark, in at most 5 words, e.g. 'circled' or "
+                                              "'up arrow'. Never copy handwritten words")
 
 
 class ReadBack(BaseModel):
@@ -47,7 +48,8 @@ The person marked rows by hand:
 - a cross (✗ or X) or a line struck through the task means "drop"
 - an empty box means "none"
 - anything else (an up arrow, a circle, a note) is not one of these: use the closest mark with
-  confidence below 0.5 and describe what you saw in the note
+  confidence below 0.5 and name the kind of mark in the note, in at most 5 words (e.g. "circled",
+  "up arrow"); never copy handwritten words into the note
 
 Report every numbered row you can see, with the mark and your confidence.
 Be conservative: if a mark is ambiguous, smudged, or could belong to a neighbouring row, lower the confidence.
@@ -61,6 +63,7 @@ lists, write [unclear] for a word you can't read, and don't add anything. If the
 {manifest_hint}"""
 
 
+NOTE_CHARS = 40          # a row's note names the kind of mark, never a transcription (admins see it)
 MAX_EDGE = 2048          # plenty for handwriting; keeps uploads small and cost down
 MAX_PIXELS = 50_000_000  # refuse decompression bombs
 
@@ -173,6 +176,8 @@ def scan_photo(ctx: Context, vision: VisionFn, image: bytes, media_type: str,
         "errors": [],
     }
     notes = (result.notes or "").strip()
+    for r in record["vision"].get("rows", []):
+        r["note"] = (r.get("note") or "")[:NOTE_CHARS]
     if not label:
         page = _keep_page(ctx, image, notes, scan_id, None, ctx.today().isoformat())
         if page:
@@ -182,7 +187,7 @@ def scan_photo(ctx: Context, vision: VisionFn, image: bytes, media_type: str,
         else:
             record["errors"].append("Couldn't match the photo to a printed label. Pass label_id explicitly.")
         ctx.store.save_scan(record)
-        return {**record, "notes": notes} if page else record
+        return record  # the notes are only in the journal page (record["journal_id"])
 
     by_row = {m["row"]: m for m in label["manifest"]}
     seen: set[int] = set()
@@ -197,7 +202,8 @@ def scan_photo(ctx: Context, vision: VisionFn, image: bytes, media_type: str,
         seen.add(rm.row)
         if rm.mark == "none":
             continue
-        entry = {**item, "mark": rm.mark, "confidence": round(rm.confidence, 2), "note": rm.note}
+        entry = {**item, "mark": rm.mark, "confidence": round(rm.confidence, 2),
+                 "note": (rm.note or "")[:NOTE_CHARS]}
         # Drops always wait for a person, whatever the settings say.
         if rm.mark == "drop" or rm.confidence < threshold or not auto_apply:
             record["needs_confirmation"].append({**entry, "status": "pending"})
@@ -212,7 +218,7 @@ def scan_photo(ctx: Context, vision: VisionFn, image: bytes, media_type: str,
     if page:
         record["journal_id"] = page["id"]
     ctx.store.save_scan(record)  # the scan record is visible to the superadmin, so no notes in it
-    return {**record, "notes": notes} if page else record
+    return record  # the notes are only in the journal page (record["journal_id"])
 
 
 def _keep_page(ctx: Context, image: bytes, notes: str, scan_id: str, label_id: str | None, day: str) -> dict | None:

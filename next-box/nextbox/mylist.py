@@ -15,7 +15,7 @@ from sqlalchemy import and_, delete, func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from . import db
-from .providers.base import ProviderError, TaskProvider
+from .providers.base import NotConnected, ProviderError, TaskNotFound, TaskProvider
 
 PREFIX = "nb:"  # ids of built-in tasks; linked apps' ids are used as they are
 REPEATS = ("daily", "weekdays", "weekly", "monthly")
@@ -23,6 +23,17 @@ TAG_COLORS = ("red", "orange", "yellow", "green", "blue", "pink", "purple", "whi
 DEFAULT_TAGS = [("urgent", "red"), ("errand", "yellow"), ("call", "blue"), ("home", "green"),
                 ("work", "purple")]
 MAX_STEPS = 12
+GONE = "That task was already removed."  # the web app reloads the list when it sees this
+
+
+def _iso_day(value: str) -> str:
+    """YYYY-MM-DD only (Python also reads 20261016 and 2026-W42-5, which then sort wrongly)."""
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise ValueError("date looks like 2026-10-16")
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        raise ValueError("date looks like 2026-10-16") from None
 
 
 def is_local(task_id: str) -> bool:
@@ -190,9 +201,10 @@ class LocalTasks(TaskProvider):
                 "repeat": r["repeat"], "source": "nextbox", "done": r["done_at"] is not None}
 
     def _num(self, task_id: str) -> int:
-        if not is_local(task_id) or not task_id[len(PREFIX):].isdigit():
-            raise ProviderError("That task isn't on your list.")
-        return int(task_id[len(PREFIX):])
+        digits = str(task_id)[len(PREFIX):]
+        if not is_local(task_id) or not digits.isdigit() or len(digits) > 15:
+            raise TaskNotFound(GONE)
+        return int(digits)
 
     def _mine(self, num: int):
         return and_(db.tasks.c.id == num, db.tasks.c.owner == self.owner)
@@ -236,7 +248,7 @@ class LocalTasks(TaskProvider):
         with self.db.connect() as conn:
             r = conn.execute(select(db.tasks).where(self._mine(self._num(task_id)))).mappings().first()
         if not r:
-            raise ProviderError("That task isn't on your list any more.")
+            raise TaskNotFound(GONE)
         return self._task(r)
 
     def add_task(self, content: str, description: str = "", **fields) -> dict:
@@ -248,7 +260,7 @@ class LocalTasks(TaskProvider):
             count = conn.execute(select(func.count()).select_from(db.tasks).where(
                 db.tasks.c.owner == self.owner, db.tasks.c.done_at.is_(None))).scalar()
             if count >= 2000:
-                raise ProviderError("Your list has 2,000 open tasks. Finish or drop some first.")
+                raise ValueError("Your list has 2,000 open tasks. Finish or drop some first.")
             new_id = conn.execute(insert(db.tasks).values(
                 owner=self.owner, household_id=self.household, created=int(time.time()), **values)
             ).inserted_primary_key[0]
@@ -313,7 +325,7 @@ class LocalTasks(TaskProvider):
         if "due_date" in f:
             d = f["due_date"] or None
             if d is not None:
-                date.fromisoformat(d)
+                d = _iso_day(d)
             out["due_date"] = d
             if d is None:
                 out["due_time"] = None
@@ -334,6 +346,8 @@ class LocalTasks(TaskProvider):
             steps = []
             for s in (f["steps"] or [])[:MAX_STEPS]:
                 s = {"text": s, "done": False} if isinstance(s, str) else s
+                if not isinstance(s, dict):
+                    raise ValueError("each step is a short line of text")
                 text = str(s.get("text", "")).strip()[:200]
                 if text:
                     steps.append({"text": text, "done": bool(s.get("done"))})
@@ -360,8 +374,10 @@ class Merged(TaskProvider):
     def _route(self, task_id: str) -> TaskProvider:
         if is_local(task_id):
             return self.local
+        if not str(task_id or "").strip():
+            raise TaskNotFound(GONE)
         if self.linked is None:
-            raise ProviderError("That task is in a linked app that isn't connected any more.")
+            raise NotConnected("That task is in a linked app that isn't connected any more.")
         return self.linked
 
     def _linked_key(self) -> str:

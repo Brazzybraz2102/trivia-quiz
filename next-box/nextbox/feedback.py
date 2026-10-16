@@ -35,8 +35,33 @@ _HANDLE = re.compile(r"(?<!\w)@\w{2,}")
 _TOKEN = re.compile(r"\b[A-Za-z0-9_\-]{24,}\b")
 
 
+# Names that are also everyday words. "The print button will not work" must survive users called
+# "print" and "will", so these are only removed when they're written like a name: Capitalised, or
+# right after a greeting ("thanks will").
+COMMON_WORDS = frozenset("""
+    will print may mark bill max grace joy art the and for you not but all can her him his she was one
+    our out day get has how new now old see two way who boy did its let put say too use dad mom mum
+    boss home work list task note page button phone app box next test admin user family kitchen
+    office rose lily dawn hope faith june april august sue pat rob ray sky summer autumn storm frank
+    gene jack don guy chip sunny bob dot rich hunter baker chase drew earl faye ivy jade jean jewel
+    kit lane major miles nick penny reed rocky rusty sandy skip stone tom wade warren wolf woody
+    friend friends team house me my this that with from thanks hi hey hello dear
+""".split())
+_NAME_CUE = r"(?:hi|hey|hello|dear|thanks|thank you|from|with)\s+"
+
+
+def _scrub_name(text: str, name: str) -> str:
+    word = re.escape(name)
+    if name.lower() not in COMMON_WORDS:
+        return re.sub(rf"(?<![\w.]){word}(?![\w])", "[someone]", text, flags=re.I)
+    capitalised = re.escape(name[:1].upper()) + f"(?i:{re.escape(name[1:])})"
+    return re.sub(rf"(?<![\w.])(?:(?i:(?P<cue>{_NAME_CUE})){f'(?i:{word})'}|{capitalised})(?![\w])",
+                  lambda m: (m.group("cue") or "") + "[someone]", text)
+
+
 def scrub(text: str, names: Iterable[str] = ()) -> str:
-    """Remove things that identify someone: contact details, links, addresses, account names."""
+    """Remove things that identify someone: contact details, links, addresses, account and
+    display names (see COMMON_WORDS for names that are also everyday words)."""
     text = (text or "").strip()[:MAX_TEXT]
     text = _EMAIL.sub("[email]", text)
     text = _URL.sub("[link]", text)
@@ -44,9 +69,9 @@ def scrub(text: str, names: Iterable[str] = ()) -> str:
     text = _PHONE.sub("[phone]", text)
     text = _HANDLE.sub("[someone]", text)
     text = _TOKEN.sub("[removed]", text)
-    for name in sorted(set(names), key=len, reverse=True):
+    for name in sorted({n.strip() for n in names if n}, key=len, reverse=True):
         if len(name) >= 2:
-            text = re.sub(rf"(?<![\w.]){re.escape(name)}(?![\w])", "[someone]", text, flags=re.I)
+            text = _scrub_name(text, name)
     return text
 
 
