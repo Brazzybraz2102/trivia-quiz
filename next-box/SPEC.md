@@ -68,7 +68,7 @@ The API also takes `"dry_run": true` on every print endpoint.
 
 ## 5. Endpoints
 `GET /health` · `GET /status` · `GET /tasks?query=` · `POST /print/{today,list,task,text}` ·
-`GET /printed` · `GET /printed/{id}/png` · `POST /scan` (multipart `photo`, optional `label_id`) ·
+`GET /printed?limit=&offset=&since=` (`since`: local `YYYY-MM-DDTHH:MM[:SS]`) · `GET /printed/{id}/png` · `POST /scan` (multipart `photo`, optional `label_id`) ·
 `GET /scans` · `GET /scan/{id}` · `POST /scan/{id}/confirm {decisions:{row:"confirm"|"skip"}}` ·
 `/app` (web app) · `/docs` (OpenAPI).
 
@@ -668,36 +668,49 @@ ClickUp and Trello are listed under Settings → Linked app → Other apps as "n
 
 ## 30. FE: routine card, focus timer, reminders, Quick add and shortcuts
 All of it is worked out in the browser while Next Box is open: no server timer, no push, no automatic print.
-- **Routine card** (top of My list; `routine_card`, default on, Settings → Focus), from `GET /printed?limit=5`, `GET
-  /scans?limit=1` and FC's `routine_morning`/`routine_evening`. Quiet before the plan time. From it, while there's no
-  `today` ticket today (a preview counts, a failed print doesn't) and something is due: "Good morning. Print today's label",
+- **Routine card** (top of My list; `routine_card`, default on, Settings → Focus), from `GET /printed?since=<the routine
+  day's start>&limit=100` (all of that day's tickets, so stickers or one-task prints don't hide today's label), `GET
+  /scans?limit=1` and FC's `routine_morning`/`routine_evening`. The routine day starts halfway between the look-back time
+  and the next plan time (1:00 with 8:00 and 18:00), so a night owl's day (plan 20:00, look back 6:00) is one day across
+  midnight; from its start until the plan time the card is quiet. From the plan time, while there's no `today` ticket this
+  routine day (a preview counts, a failed print doesn't) and something is due: "Good morning. Print today's label",
   whose button is My list's Today's label (a preview, or "Send this to the printer?"), never a print by itself. From the
   look-back time with no snap since today's label: "How did today go? Snap your pages" → Snap. After that snap (or any snap
-  today in the evening): "You finished N today ✓" (`done_today`), "Pages snapped ✓" when N is 0. Each has Not today /
-  Hide, for today on this device (with Undo). The words match Schedule's "Plan your day" and "Look back" rows.
+  this routine day in the evening): "You finished N today ✓" (`done_today`), "Pages snapped ✓" when N is 0. Each has Not
+  today / Hide (a ✕ on phones), for this routine day on this device (with Undo). The words match Schedule's "Plan your
+  day" and "Look back" rows. On phones the card is just its line and buttons, so Just one thing starts on the first screen.
 - **Focus timer** on Just one thing: "⏱ Start 5 min", plus "or N min" when the task has its own estimate (1–90). A
   countdown ring with Pause/Resume, Stop (Undo) and a chime switch; the card keeps that task while it runs, and the timer
   goes when the task is done, moved or set aside. The time comes from when it started and is kept on this device per
   person (`nb.timer:<user>`: the task id and times, never its words), so switching tabs, locking the phone or reloading
-  doesn't lose it; one that ran out over 30 minutes ago is dropped. At the end: two soft notes made with Web Audio (only
+  doesn't lose it. One that ran out over 30 minutes ago (with Next Box closed or open, answered or not) is let go
+  quietly, and so is one paused on an earlier day. At the end: two soft notes made with Web Audio (only
   after a tap allowed sound, and only with the chime on), a whole green ring and Keep going / Done ✓ (Step done ✓ with an
   open step) / Not now ("5 minutes of focus. That counts ✓"). No ring motion with reduced motion; screen readers hear the
-  start, pause, 1 minute left and the end. On another screen, or scrolled away, the note at the top says "Time's up".
+  start, pause, 1 minute left and the end, on any screen. On another screen (or, where the note sticks to the top,
+  scrolled away from the card) the note at the top says "Time's up".
 - **Reminders** (`remind_before`: minutes, default 10, 0 = Off): a note at the top of every screen from N minutes before a
-  task with a time today until 30 minutes after, with Done ✓, Tomorrow, Snooze 10m and ✕ (snoozed and dismissed ones are
-  kept on this device for the day, ids only). Done and Tomorrow use the usual endpoints and show Undo in the note. Made
-  from My list as last loaded, fetched again quietly when a timed task is near and the list is 5+ minutes old. **Show a
-  notification too** (`remind_notify`, default off) asks the browser for permission only when it's switched on; they show
-  only while Next Box is open in the background (https or the installed app; phones through the service worker).
+  task with a time until 30 minutes after, by the clock (a task at 0:15 is reminded from 23:xx the night before), with
+  Done ✓, Tomorrow, Snooze 10m and ✕ (snoozed and dismissed ones are kept on this device until the day after the task's
+  time, ids only; a snoozed one is said and notified again when it comes back). Done and Tomorrow use the usual
+  endpoints and show Undo in the note (Undo puts you back on that reminder). On My list, Just one thing's own task isn't
+  repeated in the note while the card is on screen (it's still announced and notified). On phones the note scrolls away
+  with the page; on a computer it sticks to the top, with Settings' Jump to row and the bulk bars under it. Made from My
+  list as last loaded, fetched again quietly when a timed task is near and the list is 5+ minutes old (in the background
+  too). **Show a notification too** (`remind_notify`, default off) asks the browser for permission only when it's switched
+  on; they show only while Next Box is open in the background (https or the installed app; phones through the service
+  worker), never from a list over 5 minutes old (that waits for the fresh one), and signing out closes them.
 - **Quick add**: the + in the header (or `n`) on every screen: Brain dump's rules and preview (`POST /list/dump?preview=1`),
   added with `POST /list/dump` (so `new_tasks_to` applies), Ctrl/⌘+Enter adds. Closing keeps what was typed.
 - **App shortcuts and Share to Next Box** (`manifest.json`): Add a task (`/app/#add`), Snap a page (`#snap`), Print today
   (`#print`: the Print tab with Print today focused; nothing prints). `share_target` posts title, text, url and photo to
   `/app/share`. `web/sw.js`, the app's only service worker, answers that on the device: a photo waits in Cache Storage for
   a moment and opens Snap attached (read only after Read back); text opens Quick add filled in (`#add&text=`, each part
-  once: `server.share_text`). It caches nothing else, has no push, and otherwise only brings Next Box forward when a
-  notification is tapped. Without it, the server's `POST /app/share` (no sign-in, nothing kept or logged) does the same
-  for text and sends a photo to Snap to pick again, without reading it. These addresses wait for sign-in, the data notice
+  once: `server.share_text`). A photo that's never picked up goes when someone signs in without one waiting, on sign-out,
+  and after an hour when the worker starts again. It caches nothing else, has no push, and otherwise only brings Next Box
+  forward when a notification is tapped. Without it, the server's `POST /app/share` (no sign-in, nothing kept or logged)
+  does the same for text and sends a photo to Snap to pick again: it reads at most 256 KB like every other request, and a
+  bigger body (a photo) is answered with Snap without being read. These addresses wait for sign-in, the data notice
   and the setup questions, then leave the address bar.
 - **Keyboard shortcuts** (desktop): `n` or `+` Quick add, `/` search My list (Schedule switches to List for this visit),
   `g` then `l`/`p`/`s`/`j` My list, Print, Snap, Journal, `?` the list (also Settings → Help), Esc closes. Ignored while

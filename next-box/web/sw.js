@@ -10,7 +10,17 @@ const SHARE_CACHE = "nb-share";
 const SHARE_TEXT_MAX = 2000;
 
 self.addEventListener("install", () => self.skipWaiting());
-self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener("activate", (e) => e.waitUntil(Promise.all([self.clients.claim(), shareTidy()])));
+
+// A shared photo that was never picked up doesn't stay on the device: after an hour it's let go (the app
+// also lets it go once someone signs in without one waiting, and on sign-out).
+async function shareTidy() {
+  try {
+    if (!(await caches.has(SHARE_CACHE))) return;
+    const res = await (await caches.open(SHARE_CACHE)).match(new URL("shared-photo", SCOPE).href);
+    if (!res || Date.now() - (+res.headers.get("X-At") || 0) > 3600000) await caches.delete(SHARE_CACHE);
+  } catch {}
+}
 
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "POST" || new URL(e.request.url).pathname !== SHARE) return;
