@@ -337,6 +337,10 @@ journal (§25), wins (§25) and task_slides (§25). `nextbox db diagram` draws t
 - `nextbox db demo` builds a separate practice database (`<data dir>/practice/nextbox.db`) full
   of fake households, people, tickets and events.
 - `nextbox db sql "..."` is read-only on the real database. Writes need `--practice --write`.
+  Without `--write` it runs one statement at a time (SQLite refuses a second one; on PostgreSQL the query
+  is sent with the extended protocol, in a psycopg pipeline, so `SELECT 1; COMMIT; UPDATE ...` is refused
+  before any of it runs, whatever psycopg's `prepare_threshold` is: None for PgBouncer turns preparing off.
+  Without pipelines (libpq before 14) it's a prepared statement, and with preparing off too nothing runs).
 - Output always hides password hashes, salts, session hashes and to-do app secrets.
 - `nextbox db backup` makes an online copy in `<data dir>/backups/` (600).
 
@@ -345,7 +349,13 @@ journal (§25), wins (§25) and task_slides (§25). `nextbox db diagram` draws t
 `nb:12`; linked apps' ids are used as they are. `Merged` sends each action (done, move, delete) to
 the list the task came from. New tasks go to My list unless the `new_tasks_to` pref says `linked`.
 Repeating tasks (daily, weekdays, weekly, monthly) jump to the next date after today when done, so
-they never pile up as overdue.
+they never pile up as overdue. The app's Done sends the day the screen showed (`POST /list/{id}/done
+{due}`): a repeat that has moved on since (Done on another device) isn't done again, so it never skips
+its next day or counts a second win. Without `due` (the CLI, Home Assistant) Done finishes the current day.
+A Done that changes nothing (done, skipped or moved on another device since that screen loaded) replies
+`{undo: null, stale: true}`: the app says "That changed on another device. Here's your list now." and
+draws the list again, never "Done ✓", and bulk Done counts only the ones it finished ("Done 1 ✓ · 1 changed
+on another device").
 
 **Brain dump**: one task per line. Understands `#tag`, `!` / `!1` `!2` `!3`, `today` `tomorrow`
 `fri` `2026-10-09`, `3pm` `15:30`, `~15m` `~1h`, `every day|weekday|week|month`.
@@ -453,8 +463,9 @@ journal photos (`journal/*.jpg`), 5 an hour; both are sent `no-store`; never pas
 the app first asks `GET /auth/export/check`, which doesn't count, so a reset hold or the hourly limit is a
 message in the app), sign out, and **delete my account**
 (`POST /auth/delete-account`: password + typed username; removes the account, tasks, tags,
-tickets, scans and activity; feedback stays, unlinked; the invite it joined with stays used but no longer
-names it; the protected admin and the last superadmin
+tickets, scans and activity; feedback stays, unlinked; the invite it joined with stays used, and the
+invites it made stay, but none of them names it (`(deleted account)`; a one-time startup fix does the
+same for accounts an older version deleted); the protected admin and the last superadmin
 can't). The login page has show-password and "Forgot your password?" (an admin gives a one-time
 password). Superadmins see a banner when a newer version is published (`GET /super/update-check`,
 reads the published pyproject.toml at most every 6 hours).
@@ -605,6 +616,7 @@ ClickUp and Trello are listed under Settings → Linked app → Other apps as "n
   Saturday or today at the weekend, Next week = Monday, No date). `POST /list/{id}/move {to: "tomorrow" |
   "today" | YYYY-MM-DD | null, undo}`: My list keeps the task's time (a weekday repeat skips the weekend);
   linked tasks go through the app's `set_due_date` (a repeating CalDAV task is refused with the §11 explanation;
+  a CalDAV DUE keeps its time as the app shows it, in local time, and its own zone, e.g. UTC;
   a linked task's date can't be taken off here). A move to a later day counts as a slide (`Slides.bump`), as
   read-back's → does; scheduling a someday task doesn't. The reply's `undo` (the same call with `undo: true`)
   puts the day back and takes the slide back. Every move shows Undo; Done keeps its Undo.

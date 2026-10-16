@@ -207,8 +207,13 @@ class CalDAVTasks(TaskProvider):
                                 "or move it in your to-do app.")
         new = dt.date.fromisoformat(date_iso)
         old = c.get("due").dt if c.get("due") else None
-        if isinstance(old, dt.datetime):
-            new = dt.datetime.combine(new, old.timetz())  # keep the time of day
+        if isinstance(old, dt.datetime) and old.tzinfo:
+            # Keep the time of day as it's shown (local, as _local reads it) on the local day picked, and
+            # the DUE in its own zone: 22:00 here stored as 02:00Z the next day moves to 22:00 tomorrow.
+            wall = dt.datetime.combine(new, old.astimezone().time())
+            new = wall.astimezone().astimezone(old.tzinfo)
+        elif isinstance(old, dt.datetime):
+            new = dt.datetime.combine(new, old.time())  # floating: keep the time of day
         todo.set_due(new, move_dtstart=True)
         todo.save()
 
