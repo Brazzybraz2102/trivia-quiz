@@ -28,15 +28,35 @@ from .config import Settings
 PORT = 9100
 COLORS = ("white", "red", "orange", "yellow", "green", "blue", "pink", "purple", "clear", "other")
 
+# Brother QL / PT models and label sizes (the brother_ql ids). Only the QL-800 series prints red.
+BROTHER_MODELS = ("QL-500", "QL-550", "QL-560", "QL-570", "QL-580N", "QL-600", "QL-650TD", "QL-700", "QL-710W",
+                  "QL-720NW", "QL-800", "QL-810W", "QL-820NWB", "QL-1050", "QL-1060N", "QL-1100", "QL-1110NWB",
+                  "QL-1115NWB", "PT-E550W", "PT-P700", "PT-P750W", "PT-P900W", "PT-P950NW")
+WIDE_MODELS = ("QL-1050", "QL-1060N", "QL-1100", "QL-1110NWB", "QL-1115NWB")  # the only ones for 102 mm labels
+# id, what it says on the box, printable width in dots
+BROTHER_LABELS = (
+    ("62", "62 mm continuous (DK-22205)", 696), ("29", "29 mm continuous", 306), ("38", "38 mm continuous", 413),
+    ("50", "50 mm continuous", 554), ("54", "54 mm continuous", 590), ("12", "12 mm continuous", 106),
+    ("102", "102 mm continuous (QL-1000 series)", 1164),
+    ("62x29", "62 × 29 mm labels", 696), ("62x100", "62 × 100 mm labels", 696), ("29x90", "29 × 90 mm labels", 306),
+    ("29x42", "29 × 42 mm labels", 306), ("17x54", "17 × 54 mm labels", 165), ("17x87", "17 × 87 mm labels", 165),
+    ("23x23", "23 × 23 mm labels", 202), ("39x90", "38 × 90 mm labels", 413), ("39x48", "39 × 48 mm labels", 425),
+    ("52x29", "52 × 29 mm labels", 578), ("102x51", "102 × 51 mm labels (QL-1000 series)", 1164),
+    ("102x152", "102 × 152 mm labels (QL-1000 series)", 1164), ("d24", "24 mm round labels", 236),
+    ("d58", "58 mm round labels", 618), ("pt12", "12 mm P-touch tape", 70), ("pt18", "18 mm P-touch tape", 112),
+    ("pt24", "24 mm P-touch tape", 128), ("pt36", "36 mm P-touch tape", 454),
+)
+
 DRIVERS = {
     "brother_ql": {"name": "Brother QL / PT label printer", "address": "192.168.1.50 or usb://0x04f9:0x20a7",
-                   "width": 696, "dpi": 300},
+                   "width": 696, "dpi": 300, "models": list(BROTHER_MODELS),
+                   "labels": [{"id": i, "name": n, "width": w} for i, n, w in BROTHER_LABELS]},
     "escpos": {"name": "ESC/POS receipt printer (Epson, Star, 58/80 mm)", "address": "192.168.1.60 or /dev/usb/lp0",
                "width": 576, "dpi": 203},
     "zpl": {"name": "ZPL label printer (Zebra and compatibles)", "address": "192.168.1.70", "width": 812, "dpi": 203},
     "tspl": {"name": "TSPL label printer (TSC, Munbyn, iDPRT, Xprinter)", "address": "192.168.1.80 or /dev/usb/lp0",
              "width": 812, "dpi": 203},
-    "cups": {"name": "Any printer installed on this computer (CUPS)", "address": "printer name from `lpstat -p`",
+    "cups": {"name": "Any printer installed on this computer (CUPS)", "address": "printer name from lpstat -p",
              "width": 696, "dpi": 300},
 }
 

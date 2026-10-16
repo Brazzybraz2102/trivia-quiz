@@ -19,7 +19,8 @@ import sys
 import threading
 import time
 import traceback
-from datetime import date, timedelta
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
@@ -1378,8 +1379,15 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     @app.get("/printing-options")
     def printing_options(caller: Caller = Depends(person)):
         admin = rank(caller.role) >= rank("admin")
-        return {"printers": [p.public(admin) for p in registry.all(caller.household)], "colors": COLORS,
-                "reasons": REASONS, "drivers": DRIVERS}
+        ps = [p.public(admin) for p in registry.all(caller.household)]
+        if admin:  # so Remove can say how many people use it as their usual printer
+            usual: dict[str, int] = {}
+            for u in accounts.all_users(caller.household):
+                pid = (u.get("prefs") or {}).get("default_printer")
+                usual[pid] = usual.get(pid, 0) + 1
+            for p in ps:
+                p["usual_for"] = usual.get(p["id"], 0)
+        return {"printers": ps, "colors": COLORS, "reasons": REASONS, "drivers": DRIVERS}
 
     def _restricted(caller: Caller) -> bool:
         """Households other than Home (the server owner's), unless it's staff: network printers on
@@ -1395,17 +1403,33 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         except PrinterError:
             return False  # saved before addresses were checked: never knocked on
 
-    _status_cache: dict[str, tuple[float, dict]] = {}
+    _probe_cache: dict[tuple, tuple[float, bool]] = {}  # (household, id, driver, address) -> (when, answered)
+
+    def _probe(caller: Caller, ps: list) -> tuple[dict[str, bool], int]:
+        """Knock on every printer at once (1 s each), at most once a minute per printer and address,
+        so offline printers don't hold a page up. Returns ({id: answered}, how many were knocked on)."""
+        now, out, todo = time.time(), {}, []
+        for p in ps:
+            hit = _probe_cache.get((caller.household, p.id, p.driver, p.address))
+            if hit and hit[0] > now - 60:
+                out[p.id] = hit[1]
+            elif not _usable(caller, p):
+                out[p.id] = False  # saved before addresses were checked: never knocked on
+            else:
+                todo.append(p)
+        if todo:
+            with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+                answers = list(pool.map(lambda p: printer.is_reachable(p, timeout=1.0), todo))
+            for p, ok in zip(todo, answers):
+                _probe_cache[(caller.household, p.id, p.driver, p.address)] = (now, ok)
+                out[p.id] = ok
+        return {p.id: out[p.id] for p in ps}, len(todo)
 
     @app.get("/admin/printers/status")
     def printers_status(caller: Caller = Depends(admin_only)):
-        hit = _status_cache.get(caller.household)
-        if hit and hit[0] > time.time() - 60:  # at most one round of knocking a minute
-            return hit[1]
-        mine = registry.all(caller.household)
-        result = {p.id: _usable(caller, p) and printer.is_reachable(p) for p in mine}
-        _status_cache[caller.household] = (time.time(), result)
-        audit(caller, "printer_check", printers=len(mine))
+        result, knocked = _probe(caller, registry.all(caller.household))
+        if knocked:
+            audit(caller, "printer_check", printers=knocked)
         return result
 
     @app.post("/admin/printers")
@@ -1414,7 +1438,6 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             cfg = registry.add(body.model_dump(exclude_none=True), caller.household, restricted=_restricted(caller))
         except PrinterError as exc:
             raise HTTPException(400, str(exc)) from exc
-        _status_cache.pop(caller.household, None)
         audit(caller, "add_printer", printer=cfg.id, name=cfg.name, driver=cfg.driver)
         return cfg.public(True)
 
@@ -1427,14 +1450,12 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(404) from None
         except PrinterError as exc:
             raise HTTPException(400, str(exc)) from exc
-        _status_cache.pop(caller.household, None)
         audit(caller, "edit_printer", printer=pid, changed=sorted(changes))
         return cfg.public(True)
 
     @app.delete("/admin/printers/{pid}")
     def delete_printer(pid: str, caller: Caller = Depends(admin_only)):
         registry.remove(pid, caller.household)
-        _status_cache.pop(caller.household, None)
         audit(caller, "remove_printer", printer=pid)
         return {"ok": True}
 
@@ -1685,10 +1706,20 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         mine = {i["code"]: i for i in accounts.invites(scope(caller))}
         if code.strip().upper() not in mine:
             raise HTTPException(404, "no such invite")
-        accounts.revoke_invite(code)
+        if not accounts.revoke_invite(code):
+            used = mine[code.strip().upper()]["status"] == "used"
+            raise HTTPException(409, "that invite was already used" if used else "that invite has expired")
         audit(caller, "revoke_invite", code=code.strip().upper(),
               household_id=mine[code.strip().upper()]["household_id"])
         return {"ok": True}
+
+    @app.post("/admin/invites/clear")
+    def clear_invites(caller: Caller = Depends(admin_only)):
+        """Tidy the list: forget the used and expired codes this admin can see. Open ones stay."""
+        done = [i["code"] for i in accounts.invites(scope(caller)) if i["status"] != "open"]
+        n = accounts.clear_done_invites(done)
+        audit(caller, "clear_invites", removed=n)
+        return {"removed": n}
 
     # Feedback moderation is staff-only: the board is shared by every household.
     @app.get("/admin/feedback")
@@ -1753,6 +1784,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         """A superadmin can't lock themselves out from this panel."""
         if username == caller.name and (changes.get("disabled") or changes.get("role") not in (None, "superadmin")):
             raise HTTPException(400, "you can't turn off or demote your own account here")
+        if username == caller.name and changes.get("must_change"):  # it would sign you out mid-session
+            raise HTTPException(400, "change your own password in Profile → Password")
 
     @app.get("/super/overview")
     def super_overview(caller: Caller = Depends(super_only)):
@@ -1791,17 +1824,28 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def super_users_csv(caller: Caller = Depends(super_only)):
         import csv
         import io
-        cols = ["username", "email", "role", "household", "disabled", "beta", "debug", "must_change", "created",
-                "last_login", "sessions", "app", "open_tasks", "prints_30d", "errors_7d", "consented"]
+        cols = ["username", "email", "role", "household", "household_id", "protected", "disabled", "beta", "debug",
+                "must_change", "consented", "created", "last_login", "last_active", "sessions", "app", "open_tasks",
+                "prints_30d", "errors_7d"]
+
+        def cell(k, v):
+            if isinstance(v, bool):
+                return "yes" if v else "no"
+            if k in ("created", "last_login", "last_active"):  # dates a spreadsheet can read
+                return datetime.fromtimestamp(v).strftime("%Y-%m-%d %H:%M") if v else ""
+            # Spreadsheet apps run cells that start with = + - @ as formulas: neutralize them.
+            return "'" + v if isinstance(v, str) and v[:1] in "=+-@" else v
         buf = io.StringIO()
+        buf.write("\ufeff")  # so Excel reads names and emails with accents as UTF-8
         w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         for r in _user_rows():
-            # Spreadsheet apps run cells that start with = + - @ as formulas: neutralize them.
-            w.writerow({k: ("'" + v if isinstance(v, str) and v[:1] in "=+-@" else v) for k, v in r.items()})
+            r = {**r, "last_active": max(r["last_login"] or 0, r["last_seen"] or 0) or None}
+            w.writerow({k: cell(k, v) for k, v in r.items()})
         audit(caller, "export_users")
-        return Response(buf.getvalue(), media_type="text/csv",
-                        headers={"Content-Disposition": "attachment; filename=nextbox-users.csv"})
+        name = f"nextbox-users-{date.today().isoformat()}.csv"
+        return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f"attachment; filename={name}"})
 
     @app.get("/super/users/{username}")
     def super_user_detail(username: str, caller: Caller = Depends(super_only)):
@@ -1909,34 +1953,68 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.post("/super/households")
     def super_new_household(body: HouseholdBody, caller: Caller = Depends(super_only)):
-        if not body.name.strip():
-            raise HTTPException(400, "give the household a name")
-        hid = accounts.create_household(body.name)
+        try:
+            name = accounts.check_household_name(body.name)
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        hid = accounts.create_household(name)
         audit(caller, "create_household", household_id=hid)
         return accounts.household(hid)
+
+    @app.patch("/super/households/{hid}")
+    def super_rename_household(hid: str, body: HouseholdBody, caller: Caller = Depends(super_only)):
+        try:
+            home = accounts.rename_household(hid, body.name)
+        except KeyError:
+            raise HTTPException(404, "no such household") from None
+        except AuthError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        audit(caller, "rename_household", household_id=hid)
+        return home
+
+    @app.delete("/super/households/{hid}")
+    def super_delete_household(hid: str, caller: Caller = Depends(super_only)):
+        """Only an empty one: people are moved or deleted first, one by one, from Manage."""
+        try:
+            accounts.remove_empty_household(hid)
+        except KeyError:
+            raise HTTPException(404, "no such household") from None
+        except AuthError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        registry.delete_for_household(hid)
+        audit(caller, "delete_household", household_id=hid)
+        return {"ok": True}
 
     @app.get("/super/usage")
     def usage(days: int = 30, caller: Caller = Depends(super_only)):
         days = max(1, min(days, 365))
-        since = date.fromtimestamp(time.time() - days * 86400).isoformat()
+        first = date.fromtimestamp(time.time()) - timedelta(days=days - 1)  # today and the days before it
+        since = first.isoformat()
         tickets = [r for r in ctx.store.list_printed(100_000) if r["created_at"][:10] >= since]
         scans_ = [r for r in ctx.store.list_scans(100_000) if r["created_at"][:10] >= since]
-        acts = [e for e in events.query(limit=5000) if e["kind"] in ("activity", "auth") and e["ok"]
-                and date.fromtimestamp(e["ts"]).isoformat() >= since]
+        start_ts = datetime.combine(first, datetime.min.time()).timestamp()
+        acts = [e for kind in ("activity", "auth")  # only the period's events, so a busy server isn't cut short
+                for e in events.query(kind=kind, ok=True, since=start_ts, limit=200_000)]
+        weekly = days > 31  # longer periods: one bar a week, keyed by its Monday
+
+        def bucket(day: str) -> str:
+            if not weekly:
+                return day
+            d = date.fromisoformat(day)
+            return (d - timedelta(days=d.weekday())).isoformat()
         series: dict[str, dict] = {}
-        for i in range(min(days, 30)):
-            d = date.fromtimestamp(time.time() - i * 86400).isoformat()
-            series[d] = {"date": d, "tickets": 0, "scans": 0, "people": set()}
+        for i in range(days):
+            k = bucket((first + timedelta(days=i)).isoformat())
+            series.setdefault(k, {"date": k, "tickets": 0, "scans": 0, "people": set()})
         for r in tickets:
-            if r["created_at"][:10] in series:
-                series[r["created_at"][:10]]["tickets"] += 1
+            if (k := bucket(r["created_at"][:10])) in series:
+                series[k]["tickets"] += 1
         for r in scans_:
-            if r["created_at"][:10] in series:
-                series[r["created_at"][:10]]["scans"] += 1
+            if (k := bucket(r["created_at"][:10])) in series:
+                series[k]["scans"] += 1
         for e in acts:
-            d = date.fromtimestamp(e["ts"]).isoformat()
-            if d in series:
-                series[d]["people"].add(e["user"])
+            if (k := bucket(date.fromtimestamp(e["ts"]).isoformat())) in series:
+                series[k]["people"].add(e["user"])
         people = []
         for u in accounts.all_users():
             name = u["username"]
@@ -1953,6 +2031,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 "username": name, "role": u["role"], "beta": u["beta"],
                 "app": connections.status(name).get("name"),
                 "consented_at": (u.get("consent") or {}).get("at"),
+                "consented": (u.get("consent") or {}).get("version") == DATA_NOTICE_VERSION,  # the current notice
                 "last_active": max([u.get("last_login") or 0, u.get("last_seen") or 0]
                                    + [int(e["ts"]) for e in my_acts]) or None,
                 "tickets": len(mine), "printed": sum(1 for r in mine if not r["dry_run"]),
@@ -1963,7 +2042,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 "top_actions": sorted(features.items(), key=lambda kv: -kv[1])[:6],
                 "prefs": u["prefs"],
             })
-        return {"days": days, "totals": {"people": len(people), "active": len({e["user"] for e in acts}),
+        return {"days": days, "bucket": "week" if weekly else "day",
+                "totals": {"people": len(people), "active": len({e["user"] for e in acts}),
                                          "tickets": len(tickets), "printed": sum(1 for r in tickets if not r["dry_run"]),
                                          "scans": len(scans_)},
                 "series": [{**v, "people": len(v["people"])} for v in sorted(series.values(), key=lambda v: v["date"])],
@@ -1984,7 +2064,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         start = time.time()
         try:
             info = rctx(caller).tasks.check()
-            todoist.update(ok=True, app=connections.status(caller.name).get("name", "shared"),
+            linked = connections.status(caller.name)
+            todoist.update(ok=True, app=linked.get("name"), linked=bool(linked.get("connected")),
                            projects=len(info.get("lists", [])))
         except Exception as exc:
             todoist["error"] = str(exc)[:300]
@@ -1995,17 +2076,25 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             apps[name] = apps.get(name, 0) + 1
         start = time.time()
         printers_now = registry.all(caller.household)
-        reachable = any(printer.is_reachable(p) for p in printers_now) if printers_now else False
+        answered, _ = _probe(caller, printers_now)
+        reachable = any(answered.values())
         usage = shutil.disk_usage(data_dir)
         size = sum(p.stat().st_size for p in data_dir.rglob("*") if p.is_file())
-        auto = json.loads((data_dir / "auto.json").read_text()) if (data_dir / "auto.json").exists() else {}
+        # Home Assistant's once-a-day print: the last day it was claimed, for real and as a preview.
+        claimed = ctx.store.auto_state()
+        auto = {"enabled": bool(server_settings.get().get("auto_print_enabled", True)),
+                **{k: max((day for key, day in claimed.items() if key.endswith(":" + k)), default=None)
+                   for k in ("real", "dry")}}
         return {
             "version": _version(), "python": sys.version.split()[0], "platform": platform.platform(),
             "uptime_s": int(time.time() - STARTED),
             "config": ctx.settings.redacted(),
             "printer": {"reachable": reachable, "ms": int((time.time() - start) * 1000),
                         "ip": ", ".join(f"{p.name} ({p.stock_color})" for p in printers_now) or None,
-                        "label": ctx.settings.label},
+                        "label": ctx.settings.label,
+                        "printers": [{"name": p.name, "driver": p.driver, "stock_color": p.stock_color,
+                                      "label": p.label if p.driver == "brother_ql" else None,
+                                      "reachable": answered[p.id]} for p in printers_now]},
             "todoist": todoist,
             "apps": apps,
             "vision": {"model": ctx.settings.vision_model, "key_set": bool(ctx.settings.anthropic_api_key)},

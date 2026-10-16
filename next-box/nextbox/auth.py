@@ -159,6 +159,37 @@ class Accounts:
             row = conn.execute(select(db.households).where(db.households.c.id == household_id)).mappings().first()
         return dict(row) if row else None
 
+    def check_household_name(self, name: str, except_id: str | None = None) -> str:
+        """A name staff can tell apart: 1-40 characters, not already used (ignoring case)."""
+        name = " ".join((name or "").split())
+        if not name:
+            raise AuthError("give the household a name")
+        if len(name) > 40:
+            raise AuthError("keep the household name to 40 characters")
+        if any(h["name"].lower() == name.lower() and h["id"] != except_id for h in self.households()):
+            raise AuthError("a household with that name exists")
+        return name
+
+    def rename_household(self, household_id: str, name: str) -> dict:
+        name = self.check_household_name(name, except_id=household_id)
+        with self.db.begin() as conn:
+            if not conn.execute(update(db.households).where(db.households.c.id == household_id)
+                                .values(name=name)).rowcount:
+                raise KeyError(household_id)
+        return self.household(household_id)
+
+    def remove_empty_household(self, household_id: str) -> None:
+        """Delete a household nobody is in, with its invites. (Its printers are the caller's to remove.)"""
+        if household_id == DEFAULT_HOUSEHOLD:
+            raise AuthError("Home is this Next Box's own household, so it stays")
+        with self.db.begin() as conn:
+            if not conn.execute(select(db.households.c.id).where(db.households.c.id == household_id)).first():
+                raise KeyError(household_id)
+            if conn.execute(select(db.users.c.username).where(db.users.c.household_id == household_id)).first():
+                raise AuthError("move or remove everyone in it first")
+            conn.execute(delete(db.invites).where(db.invites.c.household_id == household_id))
+            conn.execute(delete(db.households).where(db.households.c.id == household_id))
+
     def household_of(self, username: str) -> str | None:
         u = self.get(username)
         return u["household_id"] if u else None
@@ -203,10 +234,22 @@ class Accounts:
         return [{**dict(r), "beta": bool(r["beta"]), "own_household": bool(r["own_household"]),
                  "status": "used" if r["used_by"] else "expired" if r["expires"] < now else "open"} for r in rows]
 
-    def revoke_invite(self, code: str) -> None:
+    def revoke_invite(self, code: str) -> int:
+        """Cancel an open code. Returns 0 when it was already used or has expired (nothing to cancel)."""
         with self.db.begin() as conn:
-            conn.execute(delete(db.invites).where(and_(db.invites.c.code == norm_code(code),
-                                                       db.invites.c.used_by.is_(None))))
+            return conn.execute(delete(db.invites).where(and_(db.invites.c.code == norm_code(code),
+                                                              db.invites.c.used_by.is_(None),
+                                                              db.invites.c.expires >= int(time.time())))).rowcount
+
+    def clear_done_invites(self, codes: list[str]) -> int:
+        """Forget these codes if they were used or have expired (open ones stay). Returns how many."""
+        if not codes:
+            return 0
+        with self.db.begin() as conn:
+            return conn.execute(delete(db.invites).where(and_(
+                db.invites.c.code.in_(codes),
+                or_(db.invites.c.used_by.is_not(None), db.invites.c.expires < int(time.time())))
+            )).rowcount
 
     def _redeem(self, conn, code: str, username: str) -> dict:
         code = norm_code(code)
