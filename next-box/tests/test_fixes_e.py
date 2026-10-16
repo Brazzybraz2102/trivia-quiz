@@ -178,7 +178,7 @@ def test_half_sent_stickers_keep_their_manifest(real_printer, monkeypatch):
 
 
 def test_offline_printer_is_a_200_through_the_api(ctx, monkeypatch):
-    ctx.settings.printer_ip = "192.168.1.50"
+    ctx.settings.printer_ip = "192.168.1.40"
     ctx.settings.dry_run = False
     ctx, login = site(ctx)
     monkeypatch.setattr(printer, "_send_raster", lambda img, target: (_ for _ in ()).throw(OSError("refused")))

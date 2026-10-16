@@ -613,7 +613,10 @@ function applyDry() {
     : me?.prefs?.always_dry_run ? ({ paper: "You print on paper: make a preview, then tap Print on paper.",
                                     none: "No printer yet, so everything is a preview." }[me.prefs.print_with]
                                   || "Always preview only is on in Settings.")
-    : statusNow?.dry_run_forced ? "This Next Box makes previews only for now."
+    : statusNow?.dry_run_forced ? (me?.role !== "superadmin" ? "This Next Box makes previews only for now."
+      // The owner can change it: say how.
+      : statusNow.printer ? "Previews only: NEXTBOX_DRY_RUN=1 is in .env. Delete that line and run: systemctl --user restart nextbox"
+      : "Previews only: NEXTBOX_DRY_RUN=1 is in .env. Add a printer in Admin → Printers (or set PRINTER_IP), then delete that line and run: systemctl --user restart nextbox")
     : statusNow && !statusNow.printer ? "No label printer yet: print previews on paper."
     : "";
   if (why) $("#dry").checked = true;
@@ -905,6 +908,13 @@ $("#snapLib").onclick = () => $("#photo").click();
 $("#photoCam").onchange = (e) => choosePhoto(e.target.files[0]);
 $("#photo").onchange = (e) => choosePhoto(e.target.files[0]);
 $("#scanRetake").onclick = () => { choosePhoto(null); $("#snapCam").focus(); };
+// Snap reads photos with Claude. Without an AI key, say so here instead of offering a photo that can't be read.
+function applySnapReady() {
+  const ready = me?.scan_ready !== false;
+  $("#snapCam").disabled = $("#snapLib").disabled = !ready;
+  $("#snapNoKey").hidden = ready;
+  $("#snapNoKey").textContent = `Snap needs an AI key to read photos. ${me?.role === "superadmin" ? NO_KEY_OWNER : "Ask your Next Box owner to add one."}`;
+}
 
 $("#scanGo").onclick = async () => {
   if (!scanFile) return;
@@ -997,6 +1007,7 @@ function loadPrefs(prefs) {
   confText(prefs.confidence);
   remindShowPrefs(prefs);  // "Show a notification too" says what this device allows
   applyAi(prefs.ai_helpers !== false);
+  applySnapReady();
   $("#dry").checked = true;
   applyDry();
   setAppNames();
@@ -3173,7 +3184,7 @@ function quizSummary(c) {
   if ("journal_mode" in c) {
     out.push(c.journal_mode
       ? [`Journal, ${PAPER_NAMES[c.paper_size] || "letter"} size: your daily label gets a “Today's win” line, and every page you snap is kept in Journal.`, "Settings → Focus and Printing"]
-      : ["No journal: the daily label has no journal lines, and a snap is kept in Journal only when it has notes.", "Settings → Focus"]);
+      : ["No journal: the daily label has no journal lines, and a snap is kept in Journal only when it has handwriting (notes or a win).", "Settings → Focus"]);
   }
   if ("max_rows" in c) out.push([`${c.max_rows} tasks on your daily label. The rest are listed small at the bottom.`, "Settings → Focus"]);
   if ("gentle_words" in c) out.push([c.gentle_words ? "Gentle words: “waiting 3d”, never “overdue”." : "Gentle words: off.", "Settings → Focus"]);
@@ -3494,7 +3505,7 @@ async function loadSlugs() {
     $("#slugList").innerHTML = r.slugs.map((s) => `<div class="slug" data-task="${esc(s.id)}" data-content="${esc(s.content)}">
         <div><b>${esc(s.content)}</b><div class="muted">${s.moves ? `moved ${s.moves}×` : ""}${s.moves && s.waiting_days ? " · " : ""}${s.waiting_days ? `waiting ${s.waiting_days}d` : ""}</div></div>
         <div class="row" style="margin:0">${s.id.startsWith("nb:") ? `<button class="plain small" data-slug-steps>Make it smaller</button>` : ""}
-          <button class="plain small" data-slug-break data-ai${aiOn() ? "" : " hidden"}>Break it down</button>
+          <button class="plain small" data-slug-break data-ai${aiOn() && me?.ai_ready ? "" : " hidden"}>Break it down</button>
           <button class="plain small" data-slug-go>Let it go</button><button class="linkish small" data-slug-not>Not a slug</button>
           <button class="plain small" data-slug-focus>Print just this</button></div></div>`).join("");
     $$("#slugList [data-slug-focus]").forEach((b) => b.onclick = async () => {
@@ -3908,10 +3919,15 @@ closeOnBackdrop($("#jxDialog"));
 // they save it to their journal. Settings → Focus → AI helpers hides both.
 const aiOn = () => me?.prefs?.ai_helpers !== false;
 function applyAi(on = aiOn()) {
-  $$("[data-ai]").forEach((el) => { el.hidden = !on; });
   const ready = !!me?.ai_ready;
+  // Without an AI key there's no Break it down button to dead-end on. Look back stays, to say what's missing.
+  $$("[data-ai]").forEach((el) => { el.hidden = !on || (!ready && el.id !== "lookCard"); });
+  $("#lookNoKey").textContent = noKeyText();
   $("#lookNoKey").hidden = ready; $("#lookAsk").hidden = !ready;
 }  // loadPrefs calls it, so it follows the setting once it's saved (or put back if saving failed)
+// No AI key: the owner (a superadmin) is told how to add one, everyone else who to ask (as the server says).
+const NO_KEY_OWNER = "Add ANTHROPIC_API_KEY to .env (console.anthropic.com → API keys), then run: systemctl --user restart nextbox";
+const noKeyText = () => (me?.role === "superadmin" ? NO_KEY_OWNER : "Ask your Next Box owner to add an AI key.");
 
 const BREAK_SENT = "This sends the task's name and steps to Anthropic's AI. Nothing is kept unless you save the steps.";
 let brk = null;  // the sheet that's open: { id, content, from: edit|now|slug, opener, task, steps, replace, hint, ctl, changed }
@@ -4002,7 +4018,7 @@ function drawBreak(state, info = "") {
   breakMsg();
   const close = (label = "Close", cls = "plain") => `<button class="${cls}" data-b="close">${label}</button>`;
   if (state === "nokey") {
-    body.innerHTML = `<p>Break it down uses an AI helper to suggest tiny first steps.</p><p class="muted">Ask your Next Box owner to add an AI key.</p>`;
+    body.innerHTML = `<p>Break it down uses an AI helper to suggest tiny first steps.</p><p class="muted">${esc(noKeyText())}</p>`;
     acts.innerHTML = close("OK", "go");
   } else if (state === "loading") {
     body.innerHTML = `<p role="status"><span class="spin" aria-hidden="true"></span>Thinking of tiny first steps…</p><p class="muted">${BREAK_SENT}</p>`;
@@ -4340,6 +4356,9 @@ function applyLook() {
   const size = me.prefs.text_size || "normal";
   if (size === "normal") delete document.documentElement.dataset.text; else document.documentElement.dataset.text = size;
   document.documentElement.toggleAttribute("data-reading", !!me.prefs.reading_mode);  // Easy-to-read text
+  // The Help, Privacy, Terms and About pages (pages.js) read these too, like the Theme.
+  try { if (me.prefs.reading_mode) localStorage.setItem("nb.reading", "1"); else localStorage.removeItem("nb.reading"); } catch {}
+  try { if (size === "normal") localStorage.removeItem("nb.textSize"); else localStorage.setItem("nb.textSize", size); } catch {}
 }
 function loadProfile() {
   if (!me) return;

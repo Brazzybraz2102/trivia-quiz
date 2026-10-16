@@ -22,6 +22,9 @@ from typing import Protocol
 from pydantic import BaseModel, Field
 
 NO_KEY = "Ask your Next Box owner to add an AI key."
+# What the owner (a superadmin) sees instead: how to add the key. Snap uses both too.
+NO_KEY_OWNER = ("This needs an AI key. Add ANTHROPIC_API_KEY to .env (console.anthropic.com → API keys), "
+                "then run: systemctl --user restart nextbox")
 TURNED_OFF = "AI helpers are turned off. Turn them on in Settings → Focus."
 TOO_MANY = "That's a lot of AI help this hour. Try again in a bit."
 CANT_HELP = "Couldn't help with that one. Try again, or write the first step yourself."

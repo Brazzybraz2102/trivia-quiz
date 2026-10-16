@@ -4,6 +4,7 @@ Never prints secrets: it only says whether each one is set.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import socket
 import subprocess
@@ -11,8 +12,8 @@ import urllib.request
 
 from . import printer
 from .auth import Accounts
-from .config import Settings
-from .printers import Printers
+from .config import Settings, app_version
+from .printers import EXAMPLE_PRINTER_IP, Printers
 
 OK, BAD, NOTE = "✓", "✗", "•"
 
@@ -61,6 +62,7 @@ def run_doctor(settings: Settings, accounts: Accounts) -> int:
         if fix:
             print(f"    → {fix}")
 
+    say(NOTE, f"Next Box {app_version()}")
     from . import db as _db
     from .dbtools import describe_location, is_postgres
     url = _db.url_for(settings.data_dir)
@@ -75,7 +77,17 @@ def run_doctor(settings: Settings, accounts: Accounts) -> int:
         return 1
     say(OK if settings.server_key else BAD, "NEXTBOX_KEY is set" if settings.server_key else "NEXTBOX_KEY is missing",
         "" if settings.server_key else "run scripts/install.sh again; it makes one for you")
-    users = accounts.list_users() if accounts.has_users() else []
+    if settings.anthropic_api_key:
+        say(OK, "ANTHROPIC_API_KEY is set")
+    else:
+        say(BAD, "ANTHROPIC_API_KEY is missing: Snap (marks and handwriting) and the AI helpers won't work",
+            "put it in .env (console.anthropic.com → API keys), then: systemctl --user restart nextbox")
+    from .scan import heic_supported
+    if not heic_supported():
+        say(NOTE, "iPhone HEIC photos can't be opened (people are asked to send a JPEG)",
+            "to open them: .venv/bin/pip install -c constraints.txt -e '.[heic]', "
+            "then: systemctl --user restart nextbox")
+    users =accounts.list_users() if accounts.has_users() else []
     say(OK if users else BAD, f"{len(users)} sign-in account(s)" if users else "no sign-in accounts yet",
         "" if users else ".venv/bin/nextbox user add <your name>")
 
@@ -109,12 +121,27 @@ def run_doctor(settings: Settings, accounts: Accounts) -> int:
             say(OK, f"Sign in with {name} is on (sign-in comes back to {st['redirect_uri']})")
         else:
             say(NOTE, f"Sign in with {name} is off (needs {', '.join(st['missing'])} in .env)")
+    if oauth.public_url() and not os.environ.get("NEXTBOX_HOSTING", "").strip():
+        say(NOTE, "NEXTBOX_PUBLIC_URL is set but NEXTBOX_HOSTING isn't, so the Privacy and About pages "
+                  "may not name the service that carries traffic",
+            "using a Cloudflare Tunnel? Add NEXTBOX_HOSTING=Cloudflare to .env, then: systemctl --user restart nextbox")
     printers = Printers(settings.data_dir, settings).all()
     if settings.dry_run:
         say(NOTE, "preview only (NEXTBOX_DRY_RUN=1): nothing is sent to a printer")
-    if not printers:
+    # The example address isn't a hardware fault: nobody has typed the printer's address yet.
+    if settings.printer_ip == EXAMPLE_PRINTER_IP:
+        say(BAD, "PRINTER_IP is still the example address",
+            "put your printer's IP in .env (hold its info button to print it) or add it in Admin → Printers, "
+            "delete NEXTBOX_DRY_RUN=1, then: systemctl --user restart nextbox. "
+            "No label printer? Delete the PRINTER_IP line instead")
+    elif not printers:
         say(NOTE, "no printer added yet: add one in the web app under Admin → Printers")
     for p in printers:
+        if p.address == EXAMPLE_PRINTER_IP:  # knocking on it would only time out
+            if settings.printer_ip != EXAMPLE_PRINTER_IP:
+                say(BAD, f"printer {p.name} still has the example address ({p.address})",
+                    "change it to your printer's address, or remove it, in Admin → Printers")
+            continue
         up = printer.is_reachable(p)
         say(OK if up else BAD, f"printer {p.name} ({p.address}) {'answers' if up else 'does not answer'}",
             "" if up else "turn it on, check it's on the same Wi-Fi, and check the address "

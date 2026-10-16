@@ -3,13 +3,17 @@
 # Safe to re-run. Never prints secrets.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "$0")/.." && pwd)"
+# The real folder (pwd -P), also when run through the ~/.local/share/nextbox/app link below:
+# otherwise that link would be pointed at itself.
+HERE="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$HERE"
 
 python3 -m venv .venv
 .venv/bin/pip install -q --upgrade pip setuptools
 # constraints.txt pins every package to the versions this release was tested with.
-.venv/bin/pip install -q -c constraints.txt -e '.[dev,postgres]'
+# heic: iPhone HEIC photos on Snap.
+.venv/bin/pip install -q -c constraints.txt -e '.[dev,postgres,heic]'
+echo "Checking everything works (about 3 minutes)..."
 .venv/bin/python -m pytest -q
 
 # Labels draw emoji, Chinese/Japanese and Hindi with these fonts. Without them those characters are

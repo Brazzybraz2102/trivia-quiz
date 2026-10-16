@@ -37,6 +37,11 @@ class PrinterError(ValueError):
     pass
 
 
+# The PRINTER_IP in .env.example. Still there means no printer was set up yet (install.sh makes it
+# preview only), so it's never added as a printer.
+EXAMPLE_PRINTER_IP = "192.168.1.50"
+
+
 PRINTER_PORTS = (9100, 515, 631)  # raw printing, LPD, IPP: all a household outside Home may use
 _HOSTNAME = re.compile(r"(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*")
 _BAD_ADDRESS = ("address: an IP or host (optionally :port), a printer device like /dev/usb/lp0, "
@@ -175,12 +180,22 @@ class Printers:
         with self.db.connect() as conn:
             rows = [r[0] for r in conn.execute(select(db.printers.c.config).where(
                 db.printers.c.household_id == household).order_by(db.printers.c.position, db.printers.c.id))]
-        if not rows and household == "home" and self.settings.printer_ip and not self._seeded():
+        env_ip = self.settings.printer_ip if self.settings.printer_ip != EXAMPLE_PRINTER_IP else ""
+        if not rows and household == "home" and env_ip and not self._seeded():
             # First run after upgrading: the .env printer becomes the household's first printer
             # (once; if it's removed later it stays removed).
             legacy = legacy_config(self.settings)
             self._insert(legacy, household)
             return [legacy]
+        if (household == "home" and env_ip and len(rows) == 1 and rows[0].get("id") == "default"
+                and rows[0].get("address") == EXAMPLE_PRINTER_IP):
+            # Seeded from the example address by an older version, and PRINTER_IP has been set since:
+            # that printer gets the real address (once: then it's no longer the example).
+            rows = [{**rows[0], "address": env_ip}]
+            with self.db.begin() as conn:
+                conn.execute(update(db.printers).where(and_(db.printers.c.id == "default",
+                                                            db.printers.c.household_id == household))
+                             .values(config=rows[0]))
         return [PrinterConfig(**_clean(r)) for r in rows]
 
     def _seeded(self) -> bool:

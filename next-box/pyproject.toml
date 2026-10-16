@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nextbox"
 version = "0.14.0"
-description = "Todoist to Brother QL-1110NWB label printer, with photo read-back"
+description = "Your to-do list on label printers and paper, with photo read-back and a private journal"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.110",
@@ -25,6 +25,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8", "radicale>=3.8"]
 postgres = ["psycopg[binary]>=3.2"]
+heic = ["pillow-heif>=0.18"]  # iPhone HEIC photos on Snap
 
 [project.scripts]
 nextbox = "nextbox.cli:main"

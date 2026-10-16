@@ -11,9 +11,10 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from . import coach as coaching
 from . import jobs, printer, scan
 from .auth import Accounts, AuthError, default_prefs
-from .config import load_settings
+from .config import app_version, load_settings
 from .connections import Connections
 from .jobs import Context
 from .mylist import LocalTasks, Tags, parse_dump
@@ -188,6 +189,7 @@ def _db(data_dir, args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="nextbox", description="Your to-do list on a Brother QL label printer")
+    ap.add_argument("--version", action="version", version=f"Next Box {app_version()}")
     ap.add_argument("--dry-run", action="store_true", help="render the PNG only; never touch the printer")
     ap.add_argument("--user", help="whose to-do app and tickets (default: the owner, i.e. first superadmin)")
     ap.add_argument("--json", action="store_true", help="print raw JSON results")
@@ -341,6 +343,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"#{r['id']}  {r['created_at']}  {r['kind']:<5} {r['source']:<6} {r['title'][:40]}{flag}")
             return 0
         if args.cmd == "scan":
+            if not settings.anthropic_api_key:  # reading a photo needs it: say so instead of failing
+                print(coaching.NO_KEY_OWNER, file=sys.stderr)
+                return 1
             data, media = scan.prepare_photo(args.photo.read_bytes())
             rec = scan.scan_photo(ctx, scan.claude_vision(settings), data, media,
                                   (args.label or "").lstrip("#") or None)

@@ -46,6 +46,21 @@ class Settings:
         }
 
 
+def app_version() -> str:
+    """This copy's version, for `nextbox --version` and doctor. pyproject.toml first: the installed
+    metadata can lag behind an update."""
+    try:
+        import tomllib
+        with open(PROJECT_DIR / "pyproject.toml", "rb") as fh:
+            return tomllib.load(fh)["project"]["version"]
+    except Exception:
+        try:
+            from importlib.metadata import version
+            return version("nextbox")
+        except Exception:
+            return "dev"
+
+
 def load_settings(env_file: Path | None = None) -> Settings:
     env_file = env_file or Path(os.environ.get("NEXTBOX_ENV_FILE", PROJECT_DIR / ".env"))
     load_dotenv(env_file, override=False)

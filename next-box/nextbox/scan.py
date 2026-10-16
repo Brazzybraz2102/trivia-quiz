@@ -87,8 +87,8 @@ NOTE_CHARS = 40          # a row's note names the kind of mark, never a transcri
 MAX_EDGE = 2048          # plenty for handwriting; keeps uploads small and cost down
 MAX_PIXELS = 50_000_000  # refuse decompression bombs
 HEIC_TYPES = {"image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"}
-HEIC_HELP = ("That's an iPhone HEIC photo, which this Next Box can't open yet. In Settings → Camera → Formats "
-             "choose Most Compatible, or share the photo as a JPEG.")
+HEIC_HELP = ("That's a HEIC photo, which this Next Box can't open yet. On an iPhone, open the Settings app → "
+             "Camera → Formats → Most Compatible, or share the photo as a JPEG.")
 
 
 class PhotoError(ValueError):
@@ -100,7 +100,8 @@ class CantUndo(ValueError):
 
 
 def heic_supported() -> bool:
-    """iPhone photos (HEIC) open when the optional pillow-heif package is installed."""
+    """iPhone photos (HEIC) open when the optional pillow-heif package is installed (the `heic` extra,
+    which scripts/install.sh installs)."""
     try:
         from pillow_heif import register_heif_opener
     except ImportError:
