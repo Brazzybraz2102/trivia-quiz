@@ -296,9 +296,15 @@ def main(argv: list[str] | None = None) -> int:
             print("Create your account first: nextbox user add <name>")
             return 1
         items = parse_dump("\n".join(args.text), date.today())
+        bad = [i for i in items if i.get("problem")]
+        for item in bad:  # all or nothing, like Brain dump
+            print(f"line {item['line']}: {item['problem']}", file=sys.stderr)
+        if bad:
+            print("Nothing was added.", file=sys.stderr)
+            return 1
         mine = LocalTasks(accounts.db, who, accounts.household_of(who) or "home")
-        for item in items:
-            print(f"added {mine.create(item)['id']}: {item['content']}")
+        for task in mine.create_many([i for i in items if not i.get("ticked")]):
+            print(f"added {task['id']}: {task['content']}")
         return 0
     if args.cmd == "connect":
         return _connect(conns, args.username.lower(), args.provider)

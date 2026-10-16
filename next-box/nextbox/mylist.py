@@ -41,30 +41,39 @@ def is_local(task_id: str) -> bool:
 
 
 def tag_name(raw: str) -> str:
-    name = re.sub(r"[^a-z0-9_-]", "", raw.strip().lstrip("#@").lower().replace(" ", "-"))[:24]
+    """Lowercase letters (any language), numbers, - and _, at most 24: #Café → café."""
+    name = re.sub(r"[^\w-]", "", raw.strip().lstrip("#@").lower().replace(" ", "-"))[:24]
     if not name:
         raise ValueError("a tag needs a name (letters, numbers, - or _)")
     return name
 
 
-def next_due(repeat: str, due: date, today: date) -> date:
-    """The next occurrence after today, so a repeating task never piles up as overdue."""
+def _roll_to_weekday(d: date) -> date:
+    """A weekday task never starts on a Saturday or Sunday: it moves to Monday."""
+    return d + timedelta(days=(7 - d.weekday()) % 7) if d.weekday() >= 5 else d
+
+
+def next_due(repeat: str, due: date, today: date, anchor_day: int | None = None) -> date:
+    """The next occurrence after the current one and after today, so ticking a repeat early moves
+    it on, and one that was missed never piles up as overdue. `anchor_day`: the day of the month
+    a monthly repeat belongs on (the 31st stays the 31st after a short month)."""
     if repeat == "daily":
-        return today + timedelta(days=1)
+        return max(due, today) + timedelta(days=1)
     if repeat == "weekdays":
-        d = today + timedelta(days=1)
+        d = max(due, today) + timedelta(days=1)
         while d.weekday() >= 5:
             d += timedelta(days=1)
         return d
-    step_days = 7 if repeat == "weekly" else None
+    day = anchor_day or due.day
     d = due
-    while d <= today:
-        if step_days:
-            d += timedelta(days=step_days)
-        else:  # monthly, keeping the day of month where the month allows it
+    while True:
+        if repeat == "weekly":
+            d += timedelta(days=7)
+        else:  # monthly, on its day where the month has it, else the month's last day
             y, m = (d.year + 1, 1) if d.month == 12 else (d.year, d.month + 1)
-            d = date(y, m, min(due.day, calendar.monthrange(y, m)[1]))
-    return d
+            d = date(y, m, min(day, calendar.monthrange(y, m)[1]))
+        if d > today:
+            return d
 
 
 # --- brain dump ------------------------------------------------------------------------------
@@ -73,61 +82,224 @@ _WEEKDAYS = {name: i for i, names in enumerate(
      ("fri", "friday"), ("sat", "saturday"), ("sun", "sunday")]) for name in names}
 
 
+_DAYWORDS = "|".join(sorted(_WEEKDAYS, key=len, reverse=True))
+_SHORT_DAYS = {"mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun"}
+_MARK = "\x00"                     # where a shortcut was taken out of the line
+_START = r"(?<![^\s(\x00])"        # a shortcut starts the line, or follows a space, "(" or another shortcut
+_END = r"(?=[\s,.;:!?)\x00]|$)"    # ...and ends the line, or comes before a space or punctuation
+_AMPM = r"(?:\s*(am|pm|a\.m\.|p\.m\.)|(?<=:\d\d)(a|p)|(p))"  # 3pm 3 pm 3:30p 3p (3a reads as a flat number)
+_RANGE_SEP = r"\s*(?:-|–|to)\s*"
+MAX_DUMP_LINES = 200
+
+
+def _clock(hour: str, minute: str | None, ampm: str | None) -> tuple[int, int] | None:
+    h, m, ap = int(hour), int(minute or 0), (ampm or "").lower()[:1]
+    if ap:
+        if not 1 <= h <= 12:
+            return None  # 13pm, 0am
+        h = h % 12 + (12 if ap == "p" else 0)
+    return (h, m) if h < 24 and m < 60 else None
+
+
+def _at_end(after: str) -> bool:
+    return re.fullmatch(r"[\s,.;:!?)\x00]*", after) is not None
+
+
+def _next_to_shortcut(before: str, after: str) -> bool:
+    return bool(re.search(r"\x00\s*$", before) or re.match(r"\s*\x00", after))
+
+
+def _in_a_list(before: str, after: str) -> bool:
+    """"sat and sun", "mon or tue", "move it from monday to friday": days named in the words,
+    not the task's due date."""
+    return bool(re.search(r"(?:\b(?:and|or|from|to|until|till|since|after|before)|&|/)\s*$", before, re.I)
+                or re.match(r"\s*(?:and\b|or\b|&|/)", after, re.I))
+
+
+def strip_markers(line: str) -> tuple[str, bool]:
+    """A pasted list's markers off the front ("- ", "* ", "1. ", "[ ]", "- [ ] ", "[x] "), and
+    whether it was ticked already ([x])."""
+    text, ticked = line, False
+    while m := re.match(r"\s*(?:[-*•+](?=\s)|\d{1,3}[.)](?=\s)|\[([ xX✓]?)\])\s*", text):
+        ticked = ticked or bool((m[1] or "").strip())
+        text = text[m.end():]
+    return text.strip(), ticked
+
+
 def parse_line(line: str, today: date) -> dict | None:
-    """One line of a brain dump → task fields. Understands:
-    #tag  !/!1 (urgent) !2 !3  today tomorrow mon..sun 2026-10-09  3pm 15:30  ~15m ~1h
-    every day|weekday|week|month."""
-    text = re.sub(r"^\s*(?:[-*•]|\d+[.)]|\[ ?\])\s*", "", line).strip()
+    """One line of a brain dump → task fields. Understands (SPEC §17):
+    #tag  ! !! !1..!4  today tonight tomorrow  fri / friday (on fri, next fri)  2026-10-09
+    3pm 3:30p 15:30 9am-10am  ~15m ~1h ~1.5h ~2 hours ~1h30m
+    every day|weekday|week|month|monday  daily weekly monthly weekdays.
+    Words that only look like dates stay words ("Buy sun hat", "Fix the chair I sat on"): a short
+    day name, today, tonight and daily/weekly/monthly count only at the end of the line, after
+    on/by/due/next/this, or next to a time or another shortcut. One date per line (the last).
+    A date or time that can't be real ("2026-02-30", "13pm") stays in the words and
+    out["problem"] says why, so a brain dump can stop before adding anything."""
+    text, ticked = strip_markers(line)
+    typed = text
     if not text:
         return None
     out: dict = {"tags": [], "priority": 1}
+    problems: list[str] = []
 
     def take(pattern: str, fn) -> None:
+        """Take each match out of the text, unless fn says False (leave it as words)."""
         nonlocal text
         def repl(m):
-            fn(m)
-            return " "
+            return m[0] if fn(m) is False else f" {_MARK} "
         text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
 
-    take(r"(?<!\S)every\s+(day|weekday|week|month)\b", lambda m: out.update(
-        repeat={"day": "daily", "weekday": "weekdays", "week": "weekly", "month": "monthly"}[m[1].lower()]))
-    take(r"(?<!\S)#([\w-]{1,24})", lambda m: out["tags"].append(tag_name(m[1])))
-    take(r"(?<!\S)!([1-3])?(?!\S)", lambda m: out.update(priority={None: 4, "1": 4, "2": 3, "3": 2}[m[1]]))
-    take(r"(?<!\S)~(\d{1,3})\s*(m|min|h|hr)\b", lambda m: out.update(
-        minutes=int(m[1]) * (60 if m[2].lower().startswith("h") else 1)))
-    take(r"(?<!\S)(\d{4}-\d{2}-\d{2})(?!\S)", lambda m: out.update(due_date=m[1]))
-    take(r"(?<!\S)(today|tonight|tomorrow|tmrw)(?!\S)", lambda m: out.update(
-        due_date=(today + timedelta(days=0 if m[1].lower() in ("today", "tonight") else 1)).isoformat()))
+    def tag(m):
+        raw = m[1]
+        if not raw[0].isalpha() or not re.fullmatch(r"[\w-]+", raw):
+            return False  # #123, #c++: words, not tags
+        if len(raw) > 24:
+            problems.append(f"#{raw[:30]} is too long for a tag (24 letters at most)")
+            return False
+        out["tags"].append(tag_name(raw))
+    take(_START + r"#([^\s#]+?)(?=[,.;:!?)]*(?:\s|$))", tag)
+    take(_START + r"!(?:!{1,2}|([1-4]))?" + _END,
+         lambda m: out.update(priority={None: 4, "1": 4, "2": 3, "3": 2, "4": 1}[m[1]]))
 
-    def weekday(m):
-        ahead = (_WEEKDAYS[m[1].lower()] - today.weekday()) % 7 or 7
-        out["due_date"] = (today + timedelta(days=ahead)).isoformat()
-    take(r"(?<!\S)(?:on\s+)?(" + "|".join(sorted(_WEEKDAYS, key=len, reverse=True)) + r")(?!\S)", weekday)
+    def duration(m):
+        if m[1]:  # ~1h30m
+            mins = int(m[1]) * 60 + int(m[2])
+        else:
+            n = float(m[3].replace(",", "."))
+            mins = round(n * 60) if m[4].lower().startswith("h") else round(n)
+        if mins < 1:
+            return False
+        out["minutes"] = min(mins, 24 * 60)
+    take(_START + r"~\s?(?:(\d{1,2})\s*h(?:rs?|ours?)?\s*(\d{1,2})(?:\s*m(?:ins?|inutes?)?)?"
+         r"|(\d{1,4}(?:[.,]\d{1,2})?)\s*(m|mins?|minutes?|h|hrs?|hours?))\.?" + _END, duration)
+
+    def every(m):
+        word = m[1].lower().replace(" ", "")
+        if word in _WEEKDAYS:  # every monday: weekly, starting on the next monday (today if it's monday)
+            out.update(repeat="weekly", due_date=(today + timedelta(
+                days=(_WEEKDAYS[word] - today.weekday()) % 7)).isoformat())
+        else:
+            out["repeat"] = {"day": "daily", "weekday": "weekdays", "workday": "weekdays",
+                             "week": "weekly", "month": "monthly"}[word]
+    take(_START + r"every\s+(day|week\s?day|workday|week|month|" + _DAYWORDS + r")" + _END, every)
+
+    def clock_range(m):
+        end = _clock(m[5], m[6], m[7] or m[8] or m[9])
+        start_ap = m[3] or m[4] or None
+        if end is None or not (start_ap or m[7] or m[8] or m[9] or (m[2] and m[6])):
+            return False  # "2-3 apples": no am/pm and no colons, so not times
+        start = _clock(m[1], m[2], start_ap or m[7] or m[8] or m[9])
+        if start and not start_ap and (m[7] or m[8] or m[9]) and start > end:  # 11-1pm: 11am to 1pm
+            start = _clock(m[1], m[2], "am" if (m[7] or m[8] or m[9]).lower().startswith("p") else "pm")
+        if start is None:
+            problems.append(f"{m[0].strip()} isn't a real time")
+            return False
+        out["due_time"] = f"{start[0]:02d}:{start[1]:02d}"
+        length = (end[0] * 60 + end[1]) - (start[0] * 60 + start[1])
+        if length > 0 and "minutes" not in out:
+            out["minutes"] = length
+    take(_START + r"(?:(?:at|from)\s+)?(\d{1,2})(?::([0-5]\d))?(?:\s*(am|pm|a\.m\.|p\.m\.)|(a|p))?"
+         + _RANGE_SEP + r"(\d{1,2})(?::([0-5]\d))?" + _AMPM + "?" + _END, clock_range)
 
     def clock(m):
-        hour, minute, ampm = int(m[1]), int(m[2] or 0), (m[3] or "").lower()
-        if ampm == "pm" and hour < 12:
-            hour += 12
-        if ampm == "am" and hour == 12:
-            hour = 0
-        if hour < 24 and minute < 60:
-            out["due_time"] = f"{hour:02d}:{minute:02d}"
-    take(r"(?<!\S)(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?!\S)", clock)
-    take(r"(?<!\S)(?:at\s+)?([01]?\d|2[0-3]):(\d{2})()(?!\S)", clock)
-    if out.get("repeat") and not out.get("due_date"):
+        ampm = (m[3] or m[4] or m[5]) if len(m.groups()) > 2 else None
+        hhmm = _clock(m[1], m[2], ampm)
+        if hhmm is None:
+            problems.append(f"{m[0].strip()} isn't a real time")
+            return False
+        out["due_time"] = f"{hhmm[0]:02d}:{hhmm[1]:02d}"
+    take(_START + r"(?:at\s+|@\s?)?(\d{1,2})(?::([0-5]\d))?" + _AMPM + _END, clock)
+    take(_START + r"(?:at\s+|@\s?)?([01]?\d|2[0-3]):([0-5]\d)" + _END, clock)
+
+    def bare_repeat(m):
+        if "repeat" in out or not (_at_end(m.string[m.end():]) or _next_to_shortcut(m.string[:m.start()], m.string[m.end():])):
+            return False  # "Write the weekly report": a word
+        out["repeat"] = {"daily": "daily", "weekdays": "weekdays", "weekly": "weekly", "monthly": "monthly"}[m[1].lower()]
+
+    def pick_date() -> None:
+        """The last date word that's really a date: everything else stays in the words."""
+        nonlocal text
+        if "due_date" in out:
+            return
+        chosen = None
+        for m in re.finditer(_START + r"(?:(on|by|due|next|this)\s+)?(\d{4}-\d{2}-\d{2}|today|tonight|tomorrow|tmrw|"
+                             + _DAYWORDS + r")" + _END, text, re.IGNORECASE):
+            word, before, after = m[2].lower(), text[:m.start()], text[m.end():]
+            if word[:1].isdigit():
+                try:
+                    date.fromisoformat(word)
+                except ValueError:
+                    problems.append(f"{word} isn't a real date")
+                    continue
+            elif word in _SHORT_DAYS or word in ("today", "tonight"):
+                # often plain words ("Buy sun hat", "Tell Sam today was great"), so only taken at
+                # the end, after on/by/due/next/this, next to a time, or (today) starting the line
+                if not (m[1] or _at_end(after) or _next_to_shortcut(before, after)
+                        or (word in ("today", "tonight") and not before.strip())):
+                    continue
+            if not word[:1].isdigit() and not m[1] and _in_a_list(before, after):
+                continue
+            chosen = m
+        if chosen is None:
+            return
+        word, prefix = chosen[2].lower(), (chosen[1] or "").lower()
+        if word[:1].isdigit():
+            due = date.fromisoformat(word)
+        elif word in ("today", "tonight", "tomorrow", "tmrw"):
+            due = today + timedelta(days=0 if word in ("today", "tonight") else 1)
+        else:
+            ahead = (_WEEKDAYS[word] - today.weekday()) % 7 or 7  # a thursday's "thu" means next week
+            if prefix == "next" and ahead < 7:
+                ahead += 7  # "next fri" on a thursday: the friday of next week
+            due = today + timedelta(days=ahead)
+        out["due_date"] = due.isoformat()
+        start = chosen.start(2) if prefix in ("next", "this") and word not in _WEEKDAYS else chosen.start()
+        text = text[:start] + f" {_MARK} " + text[chosen.end():]  # "Do this today" keeps its "this"
+
+    for _ in range(2):  # a date can make "daily" next to a shortcut, and the other way round
+        take(_START + r"(daily|weekdays|weekly|monthly)" + _END, bare_repeat)
+        pick_date()
+    if (out.get("repeat") or out.get("due_time")) and not out.get("due_date"):
         out["due_date"] = today.isoformat()
-    if out.get("due_time") and not out.get("due_date"):
-        out["due_date"] = today.isoformat()
-    text = re.sub(r"\s{2,}", " ", text).strip(" ,;")
+    if out.get("repeat") == "weekdays":
+        out["due_date"] = _roll_to_weekday(date.fromisoformat(out["due_date"])).isoformat()
+    took = _MARK in text
+    text = re.sub(r"\(\s*\)", " ", text.replace(_MARK, " "))  # "(3pm)"
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)               # "Call mom , 3pm" → "Call mom,"
+    text = re.sub(r"\s{2,}", " ", text).strip(" ,;:" + ("." if took else ""))
     if not text:
         return None
     out["content"] = text[:500]
+    if len(text) > 500:  # nothing typed is lost: the whole line goes in the task's notes
+        out["description"] = typed[:4000]
     out["tags"] = list(dict.fromkeys(out["tags"]))
+    if "urgent" in out["tags"]:  # the urgent tag and ! mean the same thing
+        out["priority"] = max(out["priority"], 3)
+    if ticked:
+        out["ticked"] = True
+    if problems:
+        out["problem"] = "; ".join(dict.fromkeys(problems))
     return out
 
 
+def split_dump(text: str, limit: int = MAX_DUMP_LINES) -> tuple[str, str]:
+    """The first `limit` lines with something on them, and the rest (kept for next time, never lost)."""
+    lines, seen = text.splitlines(), 0
+    for i, line in enumerate(lines):
+        if line.strip():
+            seen += 1
+            if seen > limit:
+                return "\n".join(lines[:i]), "\n".join(lines[i:])
+    return text, ""
+
+
 def parse_dump(text: str, today: date) -> list[dict]:
-    return [t for t in (parse_line(line, today) for line in text.splitlines()[:200]) if t]
+    """Each line with a task on it → its fields, plus "line" (its number) and "text" (the words as
+    typed, without a list marker). Only the first MAX_DUMP_LINES lines: split_dump says what's left."""
+    head, _ = split_dump(text)
+    return [{**t, "line": n, "text": strip_markers(line)[0][:500]}
+            for n, line in enumerate(head.splitlines(), 1) if (t := parse_line(line, today))]
 
 
 # --- tags ------------------------------------------------------------------------------------
@@ -188,10 +360,40 @@ class Tags:
             raise TagExists(f"You already have #{name} ({mine['color']}). Change its color in the list above.")
         return self.set(name, color)
 
-    def remove(self, name: str) -> None:
+    def add_new(self, conn, names: list[str]) -> None:
+        """Inside someone else's transaction: these tags, white, unless they're there already."""
+        have = {r[0] for r in conn.execute(select(db.tags.c.name).where(db.tags.c.owner == self.owner))}
+        for name in dict.fromkeys(tag_name(n) for n in names):
+            if name not in have:
+                conn.execute(insert(db.tags).values(owner=self.owner, name=name, color="white", position=len(have)))
+                have.add(name)
+
+    def usage(self) -> dict[str, int]:
+        """How many open tasks carry each tag name."""
+        counts: dict[str, int] = {}
+        with self.db.connect() as conn:
+            for (names,) in conn.execute(select(db.tasks.c.tags).where(
+                    db.tasks.c.owner == self.owner, db.tasks.c.done_at.is_(None))):
+                for n in set(names or []):
+                    counts[n] = counts.get(n, 0) + 1
+        return counts
+
+    def remove(self, name: str, strip: bool = False) -> int:
+        """Remove the tag. strip: take it off this person's tasks too, in the same go (otherwise
+        they keep it as a plain, colorless word). Returns how many tasks changed."""
         self.all()
+        name = tag_name(name)
+        changed = 0
         with self.db.begin() as conn:
-            conn.execute(delete(db.tags).where(and_(db.tags.c.owner == self.owner, db.tags.c.name == tag_name(name))))
+            conn.execute(delete(db.tags).where(and_(db.tags.c.owner == self.owner, db.tags.c.name == name)))
+            if strip:
+                for tid, names in conn.execute(select(db.tasks.c.id, db.tasks.c.tags).where(
+                        db.tasks.c.owner == self.owner)).all():
+                    if name in (names or []):
+                        conn.execute(update(db.tasks).where(db.tasks.c.id == tid)
+                                     .values(tags=[n for n in names if n != name]))
+                        changed += 1
+        return changed
 
     def delete_for_user(self) -> None:
         with self.db.begin() as conn:
@@ -218,7 +420,8 @@ class LocalTasks(TaskProvider):
         return {"id": f"{PREFIX}{r['id']}", "content": r["content"], "description": r["description"] or "",
                 "priority": r["priority"], "due": due, "labels": list(r["tags"] or []),
                 "steps": list(r["steps"] or []), "minutes": r["minutes"],
-                "repeat": r["repeat"], "source": "nextbox", "done": r["done_at"] is not None}
+                "repeat": r["repeat"], "source": "nextbox", "done": r["done_at"] is not None,
+                "done_at": r["done_at"]}
 
     def _num(self, task_id: str) -> int:
         digits = str(task_id)[len(PREFIX):]
@@ -275,25 +478,60 @@ class LocalTasks(TaskProvider):
         return self.create({"content": content, "description": description, **fields})
 
     def create(self, fields: dict) -> dict:
-        values = self._validate({"priority": 1, "tags": [], "steps": [], **fields}, creating=True)
+        return self.create_many([fields])[0]
+
+    def create_many(self, items: list[dict], new_tags: list[str] = ()) -> list[dict]:
+        """All of them or none: every one is checked first, then the new tags (white) and the
+        tasks go in together, so a bad line or a full list never leaves half a brain dump behind."""
+        rows = [self._settle(self._validate({"priority": 1, "tags": [], "steps": [], **f}, creating=True))
+                for f in items]
+        now = int(time.time())
         with self.db.begin() as conn:
             count = conn.execute(select(func.count()).select_from(db.tasks).where(
                 db.tasks.c.owner == self.owner, db.tasks.c.done_at.is_(None))).scalar()
-            if count >= 2000:
-                raise ValueError("Your list has 2,000 open tasks. Finish or drop some first.")
-            new_id = conn.execute(insert(db.tasks).values(
-                owner=self.owner, household_id=self.household, created=int(time.time()), **values)
-            ).inserted_primary_key[0]
-        return self.get_task(f"{PREFIX}{new_id}")
+            if count + len(rows) > 2000:
+                raise ValueError("Your list has 2,000 open tasks. Finish or drop some first." if count >= 2000 else
+                                 f"That's {len(rows)} more, and your list already has {count:,} open tasks "
+                                 "(2,000 is the most). Finish or drop some first, or add fewer.")
+            if new_tags:
+                Tags(self.db, self.owner).add_new(conn, list(new_tags))
+            ids = [conn.execute(insert(db.tasks).values(owner=self.owner, household_id=self.household,
+                                                        created=now, **values)).inserted_primary_key[0]
+                   for values in rows]
+            found = {r["id"]: self._task(r) for r in conn.execute(
+                select(db.tasks).where(db.tasks.c.id.in_(ids))).mappings()}
+        return [found[i] for i in ids]
 
     def update(self, task_id: str, fields: dict) -> dict:
         num = self._num(task_id)
-        self.get_task(task_id)
-        values = self._validate(fields, creating=False)
+        with self.db.connect() as conn:
+            had = conn.execute(select(db.tasks).where(self._mine(num))).mappings().first()
+        if not had:
+            raise TaskNotFound(GONE)
+        values = self._settle(self._validate(fields, creating=False), dict(had))
         if values:
             with self.db.begin() as conn:
                 conn.execute(update(db.tasks).where(self._mine(num)).values(**values))
         return self.get_task(task_id)
+
+    def _settle(self, values: dict, had: dict | None = None) -> dict:
+        """Rules about the task as a whole, once a change is applied: a time or a repeat needs a
+        day (today, as Brain dump does, when none was picked), a weekday repeat starts on a weekday,
+        a monthly repeat remembers its day of the month, and the urgent tag means urgent."""
+        merged = {**(had or {}), **values}
+        if (merged.get("due_time") or merged.get("repeat")) and not merged.get("due_date"):
+            values["due_date"] = merged["due_date"] = self._today().isoformat()
+        if merged.get("repeat") == "weekdays" and merged.get("due_date"):
+            rolled = _roll_to_weekday(date.fromisoformat(merged["due_date"])).isoformat()
+            if rolled != merged["due_date"]:
+                values["due_date"] = merged["due_date"] = rolled
+        if "repeat" in values or "due_date" in values:
+            monthly = merged.get("repeat") == "monthly" and merged.get("due_date")
+            values["repeat_day"] = int(merged["due_date"][8:10]) if monthly else None
+        if ("tags" in values or "priority" in values) and "urgent" in (merged.get("tags") or []) \
+                and int(merged.get("priority") or 1) < 3:
+            values["priority"] = 3
+        return values
 
     def close_task(self, task_id: str, on_day: date | None = None) -> dict | None:
         """Finish it (a repeat moves to its next day) and count it as a win on `on_day` (default
@@ -309,7 +547,8 @@ class LocalTasks(TaskProvider):
                 return None
             if task["repeat"] and task["due"]:
                 prev = task["due"]["date"][:10]
-                nxt = next_due(task["repeat"], date.fromisoformat(prev), day)
+                anchor = conn.execute(select(db.tasks.c.repeat_day).where(self._mine(num))).scalar()
+                nxt = next_due(task["repeat"], date.fromisoformat(prev), day, anchor_day=anchor)
                 changed = conn.execute(update(db.tasks).where(self._mine(num), db.tasks.c.due_date == prev).values(
                     due_date=nxt.isoformat(), steps=[{**s, "done": False} for s in task["steps"]])).rowcount
                 undo = {"prev_due": prev, "prev_steps": [bool(s.get("done")) for s in task["steps"]]}
@@ -411,10 +650,7 @@ class LocalTasks(TaskProvider):
         if "minutes" in f:
             m = f["minutes"]
             out["minutes"] = None if m in (None, "", 0) else max(1, min(int(m), 24 * 60))
-        if out.get("repeat") and not (out.get("due_date") or f.get("due_date")):
-            if creating:
-                out["due_date"] = self._today().isoformat()
-        return out
+        return out  # _settle adds what depends on the whole task (a day for a time or a repeat)
 
 
 # --- built-in list + linked app ----------------------------------------------------------------
