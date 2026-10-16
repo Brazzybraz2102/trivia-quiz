@@ -85,9 +85,9 @@ def run_doctor(settings: Settings, accounts: Accounts) -> int:
     from .scan import heic_supported
     if not heic_supported():
         say(NOTE, "iPhone HEIC photos can't be opened (people are asked to send a JPEG)",
-            "to open them: .venv/bin/pip install -c constraints.txt -e '.[heic]', "
+            "to open them, in the Next Box folder: .venv/bin/pip install -c constraints.txt -e '.[heic]', "
             "then: systemctl --user restart nextbox")
-    users =accounts.list_users() if accounts.has_users() else []
+    users = accounts.list_users() if accounts.has_users() else []
     say(OK if users else BAD, f"{len(users)} sign-in account(s)" if users else "no sign-in accounts yet",
         "" if users else ".venv/bin/nextbox user add <your name>")
 
@@ -129,11 +129,15 @@ def run_doctor(settings: Settings, accounts: Accounts) -> int:
     if settings.dry_run:
         say(NOTE, "preview only (NEXTBOX_DRY_RUN=1): nothing is sent to a printer")
     # The example address isn't a hardware fault: nobody has typed the printer's address yet.
-    if settings.printer_ip == EXAMPLE_PRINTER_IP:
+    added = [p for p in printers if p.address != EXAMPLE_PRINTER_IP]
+    if settings.printer_ip == EXAMPLE_PRINTER_IP and not added:
         say(BAD, "PRINTER_IP is still the example address",
             "put your printer's IP in .env (hold its info button to print it) or add it in Admin → Printers, "
             "delete NEXTBOX_DRY_RUN=1, then: systemctl --user restart nextbox. "
             "No label printer? Delete the PRINTER_IP line instead")
+    elif settings.printer_ip == EXAMPLE_PRINTER_IP:  # printers were added in the web app: the line is left over
+        say(NOTE, "PRINTER_IP in .env is still the example address, so it isn't used",
+            "delete that line, or put your printer's IP there")
     elif not printers:
         say(NOTE, "no printer added yet: add one in the web app under Admin → Printers")
     for p in printers:

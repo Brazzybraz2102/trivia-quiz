@@ -141,6 +141,25 @@ def test_doctor_calls_the_example_printer_address_what_it_is(tmp_path, capsys, m
     assert "does not answer" not in out and knocked == []  # not a hardware fault: nothing to knock on
 
 
+def test_doctor_with_printers_added_in_the_app_only_notes_the_leftover_example(tmp_path, capsys, monkeypatch):
+    knocked = []
+    monkeypatch.setattr(printer, "is_reachable", lambda p: knocked.append(p.address) or True)
+    Printers(tmp_path, Settings(data_dir=tmp_path)).add({"name": "Office", "driver": "zpl", "address": "192.168.1.77"})
+    out = run_doctor(tmp_path, capsys, printer_ip=EXAMPLE_PRINTER_IP)
+    assert "✗ PRINTER_IP" not in out and "• PRINTER_IP in .env is still the example address" in out
+    assert "✓ printer Office (192.168.1.77) answers" in out and knocked == ["192.168.1.77"]
+
+
+def test_doctor_names_a_seeded_example_printer_once_the_real_address_is_elsewhere(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(printer, "is_reachable", lambda p: True)
+    old = Settings(printer_ip=EXAMPLE_PRINTER_IP, data_dir=tmp_path)
+    Printers(tmp_path, old)._insert(legacy_config(old), "home")  # seeded by an older version
+    Printers(tmp_path, old).add({"name": "Office", "driver": "zpl", "address": "192.168.1.77"})
+    out = run_doctor(tmp_path, capsys, printer_ip="")  # PRINTER_IP deleted: that row can't be fixed for them
+    assert "✗ printer Label printer still has the example address (192.168.1.50)" in out
+    assert "does not answer" not in out
+
+
 def test_doctor_notes_heic_and_an_unnamed_host(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(scan, "heic_supported", lambda: False)
     monkeypatch.setenv("NEXTBOX_PUBLIC_URL", "https://nextbox.example.com")
@@ -225,9 +244,25 @@ def test_about_names_cloudflare_when_the_request_came_through_it(ctx, monkeypatc
     assert anon.get("/about").json()["hosting"] == "Cloudflare Tunnel"  # the owner's own words win
 
 
-def test_going_online_names_the_host():
+def test_going_online_names_the_host(tmp_path):
+    """go-online.sh's .env lines (run on their own: the rest installs cloudflared and restarts the service)."""
+    import subprocess
     script = (PROJECT_DIR / "scripts" / "go-online.sh").read_text()
-    assert "NEXTBOX_HOSTING=Cloudflare" in script and "^NEXTBOX_HOSTING=" in script
+    block = script[script.index("if grep -q '^NEXTBOX_PUBLIC_URL="):script.index("systemctl --user restart")]
+    for before, hosting in (("PRINTER_IP=1.2.3.4\n", "Cloudflare"),           # added
+                            ("NEXTBOX_HOSTING=\n", "Cloudflare"),            # filled in
+                            ("NEXTBOX_HOSTING=Cloudflare Tunnel\n", "Cloudflare Tunnel")):  # the owner's words kept
+        (tmp_path / ".env").write_text(before)
+        subprocess.run(["bash", "-euc", 'PUBLIC="https://nextbox.example.com"\n' + block], cwd=tmp_path, check=True)
+        env = (tmp_path / ".env").read_text().splitlines()
+        assert f"NEXTBOX_HOSTING={hosting}" in env and "NEXTBOX_PUBLIC_URL=https://nextbox.example.com" in env
+        assert sum(line.startswith("NEXTBOX_HOSTING=") for line in env) == 1
+
+
+def test_every_script_is_valid_bash():
+    import subprocess
+    for script in sorted((PROJECT_DIR / "scripts").glob("*.sh")):
+        assert subprocess.run(["bash", "-n", str(script)]).returncode == 0, script.name
 
 
 # ------------------------------------------------------------------ R-D06: updating
@@ -246,6 +281,9 @@ def test_update_instructions_use_the_path_the_install_made(ctx, monkeypatch):
     # Run through the ~/.local/share/nextbox/app link, install.sh must not point that link at itself.
     install = (PROJECT_DIR / "scripts" / "install.sh").read_text()
     assert 'pwd -P)"' in install.split("ln -sfn")[0]
+    readme = (PROJECT_DIR / "README.md").read_text()
+    assert "## Update to a new version" in readme and "~/.local/share/nextbox/app/scripts/update.sh" in readme
+    assert "~/next-box/.env" not in readme and "NEXTBOX_HOSTING=Cloudflare" in readme
 
 
 # ------------------------------------------------------------------ R-D10: iPhone photos
@@ -253,7 +291,10 @@ def test_heic_is_an_installable_extra_and_its_help_names_the_settings_app():
     assert "Settings app" in scan.HEIC_HELP and "In Settings →" not in scan.HEIC_HELP
     assert "heic = [" in (PROJECT_DIR / "pyproject.toml").read_text()
     assert any(line.startswith("pillow-heif==") for line in (PROJECT_DIR / "constraints.txt").read_text().splitlines())
-    assert "heic]'" in (PROJECT_DIR / "scripts" / "install.sh").read_text()
+    install = (PROJECT_DIR / "scripts" / "install.sh").read_text()
+    assert "-e '.[dev,postgres,heic]'" in install
+    # Optional: where pillow-heif can't be installed, everything else still is.
+    assert "if ! .venv/bin/pip install" in install and "-e '.[dev,postgres]'" in install
 
 
 # ------------------------------------------------------------------ R-D11: the help pages follow Text size and Easy-to-read
@@ -275,7 +316,7 @@ def test_guide_covers_this_release():
         assert words in guide, words
 
 
-def test_legal_pages_version_and_notice_are_up_to_date(capsys):
+def test_legal_pages_version_and_notice_are_up_to_date(ctx, capsys):
     from nextbox import cli
     assert "keeping your journal, and the AI helpers when you tap them" in (WEB / "terms.html").read_text()
     about = (WEB / "about.html").read_text()
@@ -286,3 +327,51 @@ def test_legal_pages_version_and_notice_are_up_to_date(capsys):
         cli.main(["--version"])
     assert done.value.code == 0 and capsys.readouterr().out.strip() == f"Next Box {app_version()}"
     assert "Checking everything works" in (PROJECT_DIR / "scripts" / "install.sh").read_text()
+    assert TestClient(create_app(ctx)).get("/about").json()["version"] == app_version()  # one answer everywhere
+
+
+def test_the_app_tells_the_owner_how_to_add_the_key_in_the_servers_words():
+    app = (WEB / "app.js").read_text()
+    steps = app.split('const NO_KEY_STEPS = "')[1].split('"')[0]
+    assert f"This needs an AI key. {steps}" == coaching.NO_KEY_OWNER  # the same words, on screen and from the server
+    assert "`This needs an AI key. ${NO_KEY_STEPS}`" in app
+    assert '"Ask your Next Box owner to add an AI key."' in app and coaching.NO_KEY == "Ask your Next Box owner to add an AI key."
+    # Without a key no Break it down button shows (only the Look back card, to say what's missing).
+    assert 'el.hidden = !on || (!ready && el.id !== "lookCard")' in app
+    assert "aiOn() && me?.ai_ready" in app and "me?.scan_ready" in app
+    assert 'id="snapNoKey"' in (WEB / "index.html").read_text()
+
+
+# ------------------------------------------------------------------ R-D05, R-D07, R-D08: README, SPEC and CLAUDE.md
+def test_readme_uses_the_names_on_screen():
+    readme = (PROJECT_DIR / "README.md").read_text()
+    for stale in ("Settings → Your to-do app", "Feedback tab", "Print it big", "My list, Print, Read back, More",
+                  "Read back → photo", "7 steps", "10 short", "Your tasks are never copied there",
+                  "for photo read-back", "on your home network only"):
+        assert stale not in readme, stale
+    for name in ("My list, Print, Snap, Journal, More", "Snap → Take a photo", "Feedback board", "Settings → Linked app",
+                 "9 steps", "11 short", "Notion", "Asana", "monday.com", "Back up the whole data folder",
+                 "Snap (marks and handwriting) and the AI helpers", "`ANTHROPIC_API_KEY`, accounts", "pillow-heif"):
+        assert name in readme, name
+
+
+def test_spec_names_every_table_and_what_export_and_wins_really_do():
+    from nextbox import db
+    spec = (PROJECT_DIR / "SPEC.md").read_text()
+    tables = spec.split("## 16. Database")[1].split("**Learning kit**")[0]
+    assert f"Tables ({len(db.metadata.tables)})" in tables
+    for name in db.metadata.tables:
+        assert name in tables, name
+    assert "tickets without\nimages" not in spec and "Exported (without photos)" not in spec
+    assert "journal photos (`journal/*.jpg`)" in spec
+    assert "`task_done` events + My list `done_at`" not in spec and "(`wins` table, `journal.Wins`" in spec
+    assert "Label colors, Printing" in spec and "`scan_ready: false`" in spec and "NO_KEY_OWNER" in spec
+    # §1 rule 6 and the top line (LAN only) are Mike's to change: not edited here.
+    assert "6. **LAN only**" in spec
+
+
+def test_claude_md_records_the_ai_and_wins_rules():
+    guide = (PROJECT_DIR / "CLAUDE.md").read_text()
+    for rule in ("only when the person taps", "include_notes", "coach.CRISIS", "never writes to a linked app",
+                 "`{ms, steps}`", "Wins (`wins` table", "create_app(coach=...)", "ANTHROPIC_API_KEY"):
+        assert rule in guide, rule

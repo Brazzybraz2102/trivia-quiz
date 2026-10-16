@@ -188,7 +188,7 @@ def _db(data_dir, args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="nextbox", description="Your to-do list on a Brother QL label printer")
+    ap = argparse.ArgumentParser(prog="nextbox", description="Your to-do list on label printers and paper")
     ap.add_argument("--version", action="version", version=f"Next Box {app_version()}")
     ap.add_argument("--dry-run", action="store_true", help="render the PNG only; never touch the printer")
     ap.add_argument("--user", help="whose to-do app and tickets (default: the owner, i.e. first superadmin)")

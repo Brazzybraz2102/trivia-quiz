@@ -908,12 +908,16 @@ $("#snapLib").onclick = () => $("#photo").click();
 $("#photoCam").onchange = (e) => choosePhoto(e.target.files[0]);
 $("#photo").onchange = (e) => choosePhoto(e.target.files[0]);
 $("#scanRetake").onclick = () => { choosePhoto(null); $("#snapCam").focus(); };
+// No AI key (Snap, Break it down, Look back): the owner (a superadmin) is told how to add one, everyone
+// else who to ask, as the server says (coach.NO_KEY_OWNER / coach.NO_KEY).
+const NO_KEY_STEPS = "Add ANTHROPIC_API_KEY to .env (console.anthropic.com → API keys), then run: systemctl --user restart nextbox";
+const noKeyText = () => (me?.role === "superadmin" ? `This needs an AI key. ${NO_KEY_STEPS}` : "Ask your Next Box owner to add an AI key.");
 // Snap reads photos with Claude. Without an AI key, say so here instead of offering a photo that can't be read.
 function applySnapReady() {
   const ready = me?.scan_ready !== false;
   $("#snapCam").disabled = $("#snapLib").disabled = !ready;
   $("#snapNoKey").hidden = ready;
-  $("#snapNoKey").textContent = `Snap needs an AI key to read photos. ${me?.role === "superadmin" ? NO_KEY_OWNER : "Ask your Next Box owner to add one."}`;
+  $("#snapNoKey").textContent = `Snap needs an AI key to read photos. ${me?.role === "superadmin" ? NO_KEY_STEPS : "Ask your Next Box owner to add one."}`;
 }
 
 $("#scanGo").onclick = async () => {
@@ -3925,9 +3929,6 @@ function applyAi(on = aiOn()) {
   $("#lookNoKey").textContent = noKeyText();
   $("#lookNoKey").hidden = ready; $("#lookAsk").hidden = !ready;
 }  // loadPrefs calls it, so it follows the setting once it's saved (or put back if saving failed)
-// No AI key: the owner (a superadmin) is told how to add one, everyone else who to ask (as the server says).
-const NO_KEY_OWNER = "Add ANTHROPIC_API_KEY to .env (console.anthropic.com → API keys), then run: systemctl --user restart nextbox";
-const noKeyText = () => (me?.role === "superadmin" ? NO_KEY_OWNER : "Ask your Next Box owner to add an AI key.");
 
 const BREAK_SENT = "This sends the task's name and steps to Anthropic's AI. Nothing is kept unless you save the steps.";
 let brk = null;  // the sheet that's open: { id, content, from: edit|now|slug, opener, task, steps, replace, hint, ctl, changed }

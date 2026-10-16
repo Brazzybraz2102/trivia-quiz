@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from . import coach as coaching
 from . import jobs, printer, quiz, scan, upkeep
 from .auth import PREF_HINTS, ROLES, Accounts, AuthError, default_prefs, rank
-from .config import PROJECT_DIR
+from .config import PROJECT_DIR, app_version
 from .connections import Builder, Connections, NotConnected
 from .events import Events, ServerSettings
 from .feedback import Feedback, FeedbackError
@@ -3060,16 +3060,7 @@ def share_text(title=None, text=None, url=None) -> str:
 
 def _version() -> str:
     """pyproject.toml is the source of truth (installed metadata can lag behind an update)."""
-    try:
-        import tomllib
-        with open(PROJECT_DIR / "pyproject.toml", "rb") as fh:
-            return tomllib.load(fh)["project"]["version"]
-    except Exception:
-        try:
-            from importlib.metadata import version
-            return version("nextbox")
-        except Exception:
-            return "dev"
+    return app_version()  # the same answer as `nextbox --version` and `nextbox doctor`
 
 
 def build_default_app() -> FastAPI:

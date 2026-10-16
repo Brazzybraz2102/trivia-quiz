@@ -7,7 +7,9 @@ Each person's to-do app ↔ Brother QL-1110NWB label printer, running on Mike's 
    built-in list ("My list", the `tasks` table, §17). A linked app (Todoist, CalDAV) is optional;
    its tasks are shown and printed next to the built-in ones but never copied, cached or synced
    into the database. The database (§16) also keeps accounts, print history, ticket manifests
-   (row → task ID), scan results, the auto-print guard, printers, tags, feedback and the activity log.
+   (row → task ID), scan results, the auto-print guard, printers, tags, feedback, the activity log,
+   journal pages (notes and photos, private to their owner, §25), wins (one row per finished task;
+   text only for My list tasks) and `task_slides` (task ids and counts, never text).
 2. **Nothing prints unless Mike asks.** The one exception is the once-a-day `source="auto"` print
    of today's list when Home Assistant sees him enter the office. The server guards it
    (`Store.claim_auto`), so a second auto call that day returns `skipped`. There are no
@@ -161,7 +163,11 @@ width and dpi, plus the **label color loaded** and ink. Addresses must be one of
 - `usb://0xVVVV:0xPPPP`, for Brother only
 - a CUPS queue name
 
-Anything else is refused. On the first run after upgrading, `PRINTER_IP` becomes the first printer.
+Anything else is refused. On the first run after upgrading, `PRINTER_IP` becomes the first printer,
+unless it's still the .env.example address (`printers.EXAMPLE_PRINTER_IP`, 192.168.1.50), which is never
+added. A first printer an older version seeded from that example address takes the real `PRINTER_IP` once
+it's set. `nextbox doctor` calls the example address what it is (not a printer that doesn't answer), and a
+superadmin on a preview-only Next Box (`NEXTBOX_DRY_RUN=1`) is told how to leave it.
 
 **Routing:** every ticket has a reason: overdue, urgent, today (daily list), list, task, note or
 new_task. Each person's `color_rules` maps reasons to label colors (default: overdue → red), and
@@ -283,6 +289,11 @@ tables. See §16.
    Confirm/Skip for each one, and `POST /scan/{id}/confirm` applies only rows still `pending`,
    so a double tap can't delete twice.
 5. Row numbers that aren't on the label are ignored and reported.
+6. iPhone HEIC photos open when the optional `heic` extra (`pillow-heif`, pinned in constraints.txt) is
+   installed; `scripts/install.sh` adds it when it can, and `nextbox doctor` notes when it's missing.
+   Without it a HEIC photo gets 415 with `scan.HEIC_HELP` (the iPhone Settings app → Camera → Formats →
+   Most Compatible, or share it as a JPEG).
+7. Without an AI key Snap can't read anything: see §27 for the 503 and `scan_ready`.
 
 ## 9. Phase checklist
 ### Phase A: desktop
@@ -318,8 +329,9 @@ Everything Next Box keeps is in one database (`nextbox/db.py`, SQLAlchemy Core):
   chmod 600. Nothing to install.
 - **PostgreSQL** when `DATABASE_URL` is set (`pip install -e '.[postgres]'`). Same code, same tables.
 
-Tables: households, users, sessions, invites, tickets (record JSON + PNG), scans, auto_guard,
-events, server_settings, printers, feedback, feedback_identities. `nextbox db diagram` draws them.
+Tables (17): households, users, sessions, invites, tickets (record JSON + PNG), scans, auto_guard,
+events, server_settings, printers, feedback, feedback_identities, tasks (My list, §17), tags,
+journal (§25), wins (§25) and task_slides (§25). `nextbox db diagram` draws them.
 
 **Learning kit** (`nextbox/dbtools.py`, tutorial in `DATABASE.md`):
 - `nextbox db demo` builds a separate practice database (`<data dir>/practice/nextbox.db`) full
@@ -435,8 +447,9 @@ a printer; the person prints it from their device.
 ## 22. Your account (the round button, top right)
 Profile and email (`PATCH /auth/profile`; sign in with username or email), change password, signed-in
 devices (sign out the others), settings, help, feedback, refresh, **download my data**
-(`GET /auth/export`: account, settings, tags, tasks, linked app and calendar names, tickets without
-images, read-backs, devices; never passwords, hashes or tokens), sign out, and **delete my account**
+(`GET /auth/export`: account, settings, tags, tasks, linked app and calendar names, tickets, read-backs,
+journal pages, wins and devices as data.json; `?format=zip` adds the ticket images (`tickets/*.png`) and
+journal photos (`journal/*.jpg`); never passwords, hashes or tokens), sign out, and **delete my account**
 (`POST /auth/delete-account`: password + typed username; removes the account, tasks, tags,
 tickets, scans and activity; feedback stays, unlinked; the protected admin and the last superadmin
 can't). The login page has show-password and "Forgot your password?" (an admin gives a one-time
@@ -446,7 +459,7 @@ reads the published pyproject.toml at most every 6 hours).
 ## 23. Profile page and settings
 **Profile** tab (also from the account menu): name to show (`display_name` pref), email, password,
 signed-in devices, what the admin can see, download my data, delete my account. **Settings** has a
-jump bar (General, Focus, Tags, Calendars, Linked app, Printing, Read-back, Help); General holds
+jump bar (General, Tags, Focus, Calendars, Linked app, Label colors, Printing, Read-back, Help); General holds
 theme, text size (`text_size`), the screen it opens to (`start_tab`), 24-hour times and where new
 tasks go. `/app/` is served with `app.js?v=<version>-<build>` and every `/app` response says
 `Cache-Control: no-cache`, so phones and Cloudflare never keep showing an old version.
@@ -454,7 +467,11 @@ tasks go. `/app/` is served with `app.js?v=<version>-<build>` and every `/app` r
 ## 24. Standard app pages and navigation
 Static pages in `web/`: privacy.html, terms.html, about.html, guide.html, 404.html (shared
 pages.css/pages.js; operator, contact, version and retention come from the public `GET /about`, set
-by `NEXTBOX_OPERATOR` and `NEXTBOX_CONTACT`). Unknown addresses get the 404 page when a browser asks for
+by `NEXTBOX_OPERATOR` and `NEXTBOX_CONTACT`; `hosting`, the service named as carrying traffic on the
+Privacy and About pages, is `NEXTBOX_HOSTING` (scripts/go-online.sh sets it to Cloudflare), else
+"Cloudflare" when the request itself came through Cloudflare, else nothing). pages.js applies the Theme,
+Text size and Easy-to-read text the app saved on this device (localStorage `theme`, `nb.textSize`,
+`nb.reading`, written by app.js `applyLook`). Unknown addresses get the 404 page when a browser asks for
 HTML, JSON otherwise. `POST /auth/signup` needs `agree: true`; the sign-up event records
 `terms_version` (`TERMS_VERSION`). Phones (≤720 px) get a bottom tab bar with a More sheet holding
 the other tabs and the legal/help links; an offline banner follows the browser's online state.
@@ -464,15 +481,19 @@ the other tabs and the legal/help links; an offline banner follows the browser's
 one photo of both pages at night.
 - **Read-back reads notes too**: `ReadBack.notes` holds handwritten text outside the label, transcribed
   as written (`[unclear]` for unreadable words). `scan_photo` keeps the photo as a journal page when there
-  are notes, or always when the `journal_mode` pref is on (default). A photo with notes but no label is
+  is handwriting (notes or a win), or always when the `journal_mode` pref is on (default); the Privacy
+  Policy and the Journal mode setting say so. A photo with notes but no label is
   saved to the journal instead of failing. A daily ticket's page is filed under the ticket's day.
 - **Journal pages** (`journal` table): id, owner, household, day, notes (editable), photo (JPEG),
-  scan_id, label_id. Strictly private: every query is scoped to the owner, no admin or superadmin
-  endpoint shows them, and `nextbox db sql` masks `notes` and `photo`. Exported (without photos) by
-  `/auth/export`; deleted with the account. Deleting a page needs `confirm=true`.
-- **Wins** (`wins_by_day` in server.py): `task_done` events + My list `done_at` + read-back "done" marks
-  (applied or confirmed). Names come only from My list and read-backs; linked-app names are never stored,
-  so those show as "+N more".
+  scan_id, label_id, win, photo_sha. Strictly private: every query is scoped to the owner, no admin or
+  superadmin endpoint shows them, and `nextbox db sql` masks `notes` and `photo`. In `/auth/export`'s
+  data.json (the photos are in its `?format=zip`, and in Download my journal, §26); deleted with the
+  account. Deleting a page needs `confirm=true`.
+- **Wins** (`wins` table, `journal.Wins`; `wins_by_day` in server.py reads it): one row per finished task,
+  filed under the day it was done (a read-back's under its ticket's day), with `source` nextbox, linked or
+  readback. `content` is kept only for My list tasks; a linked app's task text is never stored, so a
+  read-back's name comes from that scan while it's kept, and the rest show as "+N more". Private like the
+  journal; kept until the account is deleted; Undo removes the row.
 - **Slugs**: `task_slides` counts moves to a later day per task id (no text), from read-back → marks and
   from My list due-date changes to a later day; cleared when the task is done. A slug is moved
   `slug_after` (default 3) times or waiting 7+ days. The daily label shows "slid N×" and the Journal tab
@@ -520,9 +541,14 @@ Everything here is the owner's own journal: owner-scoped, never in events, admin
 ## 27. FD: gentle AI helpers and monday.com
 **AI helpers** (`nextbox/coach.py`): only when the person taps a button, never automatic, 20 an hour per
 person for both together (in memory). Off with the `ai_helpers` pref (default on, Settings → Focus):
-both endpoints then answer 409 and nothing is sent. Without `ANTHROPIC_API_KEY` they answer 503 "Ask your
-Next Box owner to add an AI key." and `GET /auth/me` says `ai_ready: false`, so the app shows that instead
-of a button. Model: `NEXTBOX_COACH_MODEL` (default `claude-opus-5-5`, in `Settings.redacted()` and
+both endpoints then answer 409 and nothing is sent. Without `ANTHROPIC_API_KEY` they answer 503
+`coach.NO_KEY` ("Ask your Next Box owner to add an AI key.") or, to a superadmin, `coach.NO_KEY_OWNER` (add
+the key to .env, then restart), and `GET /auth/me` says `ai_ready: false`: the app hides every Break it down
+button and the Look back card says the same thing instead of its button. Snap needs the key too: without it
+(and without a stand-in vision in tests) `POST /scan` and `/scan/{id}/retry` answer the same 503 before
+anything is read or counted against the hour's photos, `GET /auth/me` says `scan_ready: false` (separate from
+`ai_ready`, which also counts a stand-in coach), the Snap tab's photo buttons are off with that note, and
+`nextbox scan` and `nextbox doctor` say how to add the key. Model: `NEXTBOX_COACH_MODEL` (default `claude-opus-5-5`, in `Settings.redacted()` and
 diagnostics). Each call: `client.beta.messages.parse` with a pydantic output format, effort low, the
 server-side refusal fallback (`fallbacks="default"`), 60 s timeout, 2 SDK retries; stable instructions
 (no dates or names) and the person's data in the user message inside `<task>`/`<week>`, marked as data.
@@ -624,7 +650,7 @@ ClickUp and Trello are listed under Settings → Linked app → Other apps as "n
   ("tap Print on paper") instead of "Always preview only is on".
 - **Easy-to-read text** (`reading_mode`, Settings → General): Atkinson Hyperlegible (SIL OFL; `web/fonts/` with
   OFL.txt), line height 1.6, letter spacing .03em, no all-capitals headers, bigger and darker small print, in light and
-  dark. Labels drawn for that person use the same font (`render.reading_font`, set in `jobs._finish`), take the symbols
+  dark. The Help, Privacy, Terms and About pages follow it, and Text size, on that device (§24). Labels drawn for that person use the same font (`render.reading_font`, set in `jobs._finish`), take the symbols
   it lacks (✓ → ✗ ↻) from DejaVu, fall back to DejaVu if the files are missing, and print SCHEDULE, JUST ONE THING,
   TASK, NEW TASK and NOTE in sentence case.
 - **Same words every time** (`routine_mode`, Settings → Focus): the Done message is always "Done ✓" (no random

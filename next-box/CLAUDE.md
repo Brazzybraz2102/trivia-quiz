@@ -22,6 +22,15 @@ Read SPEC.md first. Its §1 rules override everything:
 - Printers: every real send goes through `printer._send_raster`. Validate addresses in `printers.validate`.
 - Journal pages (`nextbox/journal.py`) are private to their owner: no admin view, export only to the owner,
   masked in `nextbox db sql`. `task_slides` keeps task ids and counts only, never text.
+- Wins (`wins` table, `journal.Wins`) are private like journal pages: owner-scoped, no admin view, export only
+  to the owner. Keep `content` only for My list tasks; a linked app's task text is never stored there.
+- AI (Anthropic) is called only when the person taps: the AI helpers (`nextbox/coach.py`: Break it down,
+  Look back on my week) and Snap's read-back. Never add an automatic or background AI call.
+  - Send only what that one helper needs. Journal notes go only with `include_notes`; crisis words
+    (`coach.CRISIS`) are never sent or logged.
+  - Never log or store what was sent or what came back: events carry only `{ms, steps}` or the kind of failure.
+  - Break it down never writes to a linked app (a new My list task, or steps printed on a card, instead).
+  - No `ANTHROPIC_API_KEY`: say so (`coach.NO_KEY`, `coach.NO_KEY_OWNER` for a superadmin) instead of calling.
 - Feedback is anonymous: the `feedback_identities` table is the ONLY place a person is linked to feedback.
   Never log feedback to events, never put usernames in `feedback`, and audit reveals by feedback id only.
 - `nextbox db sql` stays read-only on the real database and keeps masking hashes and secrets (`dbtools.py`).
@@ -37,5 +46,7 @@ systemctl --user restart nextbox       # after code changes, if the service is i
 
 Layout: `nextbox/render.py`. Print paths: `nextbox/jobs.py`, which the CLI and the server share.
 Read-back: `nextbox/scan.py`. Connections: `nextbox/connections.py` + `nextbox/vault.py`.
-Tests use `FakeTodoist`, a fake vision function and a real in-process Radicale server for CalDAV, and a
-fixture fails the test if anything tries to reach the printer.
+Tests use `FakeTodoist`, a fake vision function (`create_app(vision=...)`), a fake coach
+(`create_app(coach=...)`) and a real in-process Radicale server for CalDAV. They never reach Anthropic
+(a conftest fixture hides any `ANTHROPIC_API_KEY` in your environment), and a fixture fails the test if
+anything tries to reach the printer.

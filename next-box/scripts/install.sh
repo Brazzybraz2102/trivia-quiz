@@ -11,8 +11,11 @@ cd "$HERE"
 python3 -m venv .venv
 .venv/bin/pip install -q --upgrade pip setuptools
 # constraints.txt pins every package to the versions this release was tested with.
-# heic: iPhone HEIC photos on Snap.
-.venv/bin/pip install -q -c constraints.txt -e '.[dev,postgres,heic]'
+# heic: iPhone HEIC photos on Snap. Optional: if it can't be installed here, everything else still is.
+if ! .venv/bin/pip install -q -c constraints.txt -e '.[dev,postgres,heic]'; then
+  echo "Couldn't add iPhone (HEIC) photos, so installing without them: people send JPEGs instead."
+  .venv/bin/pip install -q -c constraints.txt -e '.[dev,postgres]'
+fi
 echo "Checking everything works (about 3 minutes)..."
 .venv/bin/python -m pytest -q
 
