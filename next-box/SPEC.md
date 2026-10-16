@@ -517,3 +517,34 @@ Everything here is the owner's own journal: owner-scoped, never in events, admin
   an hour, no reset wait: it shows nothing the Journal tab doesn't).
 - `Store.list_printed(until=)` bounds tickets by day, like `list_scans`.
 
+## 27. FC: setup questions, Easy-to-read text and Same words every time
+- **Setup questions** (`nextbox/quiz.py`, `POST /setup/quiz`): after the data notice, a new account (no tasks of its
+  own, no tickets, no linked app, `setup_quiz_done` off; `GET /auth/me` says `setup_quiz`) gets five one-question
+  screens with big buttons: how you'll print (label printer / regular printer / no printer yet → `print_with`,
+  `always_dry_run`), a paper journal (A5 / half letter / letter / A4 / no → `paper_size`, `journal_mode`), how many tasks
+  a day (3 / 5 / 8 → `max_rows`), what helps (any of: short lists and gentle words → `gentle_words`; easy-to-read text →
+  `reading_mode`; same routine every day → `routine_mode`; or "just the basics", which turns all three off) and when you
+  plan and look back (`routine_morning`, `routine_evening`, default 08:00 and 18:00). Any question, or the rest, can be
+  skipped (Esc does what the Skip button says); the answers are saved together at the end, and the last screen lists
+  what changed and where to change it. Skipping counts as done. People already using Next Box aren't interrupted:
+  Settings → Help → Run setup again, and the Get started guide's "Make it fit your brain" step, open it. Answering how
+  many tasks or what helps ticks that step; a regular printer or no printer puts the printer step away.
+- **What helps is never kept as such.** Only the ordinary settings it changes are saved (anyone can switch them in
+  Settings); the event log records which settings changed, never the answers.
+- **Paper hints**: with `print_with` paper or none, the Preview box and each preview's note say what to do next
+  ("tap Print on paper") instead of "Always preview only is on".
+- **Easy-to-read text** (`reading_mode`, Settings → General): Atkinson Hyperlegible (SIL OFL; `web/fonts/` with
+  OFL.txt), line height 1.6, letter spacing .03em, no all-capitals headers, bigger and darker small print, in light and
+  dark. Labels drawn for that person use the same font (`render.reading_font`, set in `jobs._finish`), take the symbols
+  it lacks (✓ → ✗ ↻) from DejaVu, fall back to DejaVu if the files are missing, and print SCHEDULE, JUST ONE THING,
+  TASK, NEW TASK and NOTE in sentence case.
+- **Same words every time** (`routine_mode`, Settings → Focus): the Done message is always "Done ✓" (no random
+  phrases), and My list opens on Schedule.
+- **List | Schedule** on My list (everyone; the pick is kept per device, and switching `routine_mode` resets it to that
+  mode's default): today's calendar events (read-only, from `/calendars/today`), today's timed tasks and the routine's
+  "Plan your day" / "Look back" in one column by time, a Now line, "Now: … until …" and "Next: … in 20 min", finished
+  events greyed; all-day events on top; untimed tasks due today or waiting under "Any time today" in ticket order
+  (linked-app tasks slotted in by the same rule); "Later: N more" goes back to List. Computed in the browser and
+  updated every 30 s only while it's on screen; a calendar that fails is named, with Try again. Today's calendar card
+  steps aside while Schedule shows the events. Nothing is printed or sent by it.
+

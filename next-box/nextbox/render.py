@@ -1,6 +1,8 @@
 """Draw labels for 62 mm continuous tape (696 px printable width at 300 dpi)."""
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import functools
 import os
 import unicodedata
@@ -19,12 +21,46 @@ FONT_DIRS = [
 ]
 
 
-def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
+# Easy-to-read text (the reading_mode pref): Atkinson Hyperlegible (SIL OFL, see web/fonts/OFL.txt),
+# the same copy the web app uses. jobs._finish draws a ticket inside reading_font(True); a font file
+# that's missing falls back to DejaVu, and symbols it lacks (✓ → ✗ ↻) come from DejaVu too.
+READING_DIR = Path(__file__).resolve().parent.parent / "web" / "fonts"
+READING_FONTS = ("AtkinsonHyperlegible-Regular.ttf", "AtkinsonHyperlegible-Bold.ttf")
+_reading = contextvars.ContextVar("nextbox_reading_font", default=False)
+
+
+@contextlib.contextmanager
+def reading_font(on: bool = True):
+    token = _reading.set(bool(on))
+    try:
+        yield
+    finally:
+        _reading.reset(token)
+
+
+def _dejavu(bold: bool = False) -> str | None:
     name = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
-    for d in FONT_DIRS:
-        if (d / name).exists():
-            return ImageFont.truetype(str(d / name), size)
+    return next((str(d / name) for d in FONT_DIRS if (d / name).exists()), None)
+
+
+def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
+    if _reading.get():
+        path = READING_DIR / READING_FONTS[bool(bold)]
+        if path.exists():
+            return ImageFont.truetype(str(path), size)
+    path = _dejavu(bold)
+    if path:
+        return ImageFont.truetype(path, size)
     return ImageFont.load_default(size=size)
+
+
+# Headings printed in capitals are harder to read with dyslexia: with Easy-to-read text they're in sentence case.
+_HEADINGS = {"SCHEDULE": "Schedule", "JUST ONE THING": "Just one thing", "TASK": "Task", "NEW TASK": "New task",
+             "NOTE": "Note"}
+
+
+def _heading(text: str) -> str:
+    return _HEADINGS.get(text, text) if _reading.get() else text
 
 
 # --- characters DejaVu doesn't have ------------------------------------------------------------
@@ -86,6 +122,9 @@ def _font_for(ch: str, font):
     if ch.isspace() or _covers(font.path, ch):
         return font
     bold = "Bold" in os.path.basename(font.path)
+    plain = _dejavu(bold)  # the reading font lacks the legend's symbols: DejaVu has them
+    if plain and plain != font.path and _covers(plain, ch):
+        return _sized(plain, int(font.size))
     have = _installed()
     for regular, heavy in FALLBACK_FONTS:
         path = have.get(heavy) if bold and heavy else None
@@ -208,7 +247,7 @@ def render_label(title: str, subtitle: str = "", rows: list[Row] | None = None,
     canvas = Image.new("RGB", (WIDTH, _height), "white")
     d = _Draw(canvas)
     y = MARGIN
-    for line in _wrap(d, title, title_f, WIDTH - 2 * MARGIN):
+    for line in _wrap(d, _heading(title), title_f, WIDTH - 2 * MARGIN):
         d.text((MARGIN, y), line, font=title_f, fill=0)
         y += 54
     if subtitle:
@@ -320,7 +359,7 @@ def render_day(day_name: str, date_text: str, rows: list[DayRow], code: str, foo
         d.line((left, y, right, y), fill=0, width=4)
         y += 8
         sched_head, sched_time, sched_f = _font(22, True), _font(26, True), _font(28)
-        d.text((left, y), "SCHEDULE", font=sched_head, fill=0)
+        d.text((left, y), _heading("SCHEDULE"), font=sched_head, fill=0)
         y += 32
         for when, what in schedule:
             if when:
@@ -652,7 +691,7 @@ def render_focus(text: str, steps: list[str], code: str, tag: str = "", color: s
     left, right = MARGIN + 4, WIDTH - MARGIN - 4
     y = MARGIN
     head_f = _font(30, True)
-    d.text((left, y), "JUST ONE THING", font=head_f, fill=0)
+    d.text((left, y), _heading("JUST ONE THING"), font=head_f, fill=0)
     if tag:
         draw_tag(canvas, (right - 220, y - 4, right, y + 40), color, tag, _font(22, True))
     y += 54

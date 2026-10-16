@@ -351,6 +351,10 @@ Closing the loop:
 | Notes → tasks | Snap result or a journal page → Add lines to my list → tick → Add |
 | Find something you wrote | Journal → Search your journal |
 | A copy of your journal | Journal → Download my journal (.zip or PDF); one day: Print my journal page |
+| Fit Next Box to you | New accounts answer 5 quick questions after the notice; any time: Settings → Help → Run setup again |
+| Your day in time order | My list → Schedule: calendar events, timed tasks, a Now line and "Next: … in 20 min" |
+| Easier reading | Settings → General → Easy-to-read text (screen and printed labels) |
+| No surprises | Settings → Focus → Same words every time (opens My list on Schedule) |
 | History | web app → Printed, or `nextbox printed` |
 | Sign out | web app → Account → Sign out |
 

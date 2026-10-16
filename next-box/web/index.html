@@ -128,6 +128,75 @@
   #login a, #mustChange a, #noticeDialog a { color:var(--accent); }  /* readable in dark mode too */
   .guidemini { display:block; width:100%; background:none; border:0; padding:0; font:inherit; font-weight:600; color:var(--fg); text-align:left; cursor:pointer; }
   .guidemini[hidden], #guideHead[hidden] { display:none; }
+  /* FC: setup questions, Easy-to-read text, My list's Schedule view */
+  #quizDialog { max-width:560px; max-height:calc(100dvh - 24px); }
+  #quizDialog h2 { font-size:1.375rem; margin:10px 0 4px; }
+  #quizDialog h2:focus { outline:none; }
+  .quizhead { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .quizbar { height:6px; background:var(--line); border-radius:99px; overflow:hidden; margin:8px 0 0; }
+  .quizbar div { height:100%; background:var(--accent); border-radius:99px; }
+  .quizopts { display:grid; gap:8px; margin:12px 0 4px; }
+  .quizopt { display:flex; gap:12px; align-items:center; width:100%; min-height:3.5rem; text-align:left; padding:10px 14px; border:2px solid var(--fieldLine);
+             border-radius:12px; background:var(--card); color:var(--fg); font:inherit; cursor:pointer; }
+  .quizopt b { display:block; font-size:1.0625rem; }
+  .quizopt .muted { display:block; }
+  .quizopt .tick { flex:none; width:1.5rem; height:1.5rem; border:2px solid var(--fieldLine); border-radius:6px; display:grid; place-items:center; font-weight:700; }
+  .quizopt[aria-pressed="true"], .quizopt.chosen { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+  .quizopt[aria-pressed="true"] .tick { background:var(--accent); border-color:var(--accent); color:var(--onAccent); }
+  .quizopt .quiznow { margin-left:auto; flex:none; font-size:.75rem; font-weight:700; padding:2px 8px; border-radius:99px; background:var(--note); color:var(--noteFg); }
+  .quiztimes { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:12px; margin:12px 0 4px; }
+  .quiztimes input { width:100%; font-size:1.125rem; }
+  .quiznav { justify-content:space-between; }
+  /* The buttons stay in view at the bottom of a long question or summary (big text, small phones). */
+  .quizfoot { position:sticky; bottom:-18px; background:var(--card); margin:8px -18px -18px; padding:10px 18px 18px; border-top:1px solid var(--line); }
+  .quiznav .go { margin-left:auto; }
+  .quiznav button { min-height:44px; }
+  .quiznav [hidden], .quiznav[hidden] { display:none; }
+  .quizsum { list-style:none; padding:0; margin:10px 0; }
+  .quizsum li { padding:8px 0; border-top:1px solid var(--line); }
+  .quizsum li:first-child { border-top:0; }
+  .quizsum .muted { display:block; }
+  #quizMsg:empty { display:none; }
+  #quizSkip, #quizAgain { white-space:nowrap; flex:none; }
+  @media (max-width:720px) { #quizSkip { min-height:44px; } }
+  .srow .nowtag[hidden] { display:none; }
+  @font-face { font-family:"Atkinson Hyperlegible"; src:url("fonts/AtkinsonHyperlegible-Regular.ttf") format("truetype"); font-weight:400; font-display:swap; }
+  @font-face { font-family:"Atkinson Hyperlegible"; src:url("fonts/AtkinsonHyperlegible-Bold.ttf") format("truetype"); font-weight:700; font-display:swap; }
+  /* Easy-to-read text: a font made for reading, more room between lines, letters and words, no all-capitals
+     headers, bigger and darker small print. */
+  html[data-reading] body { font-family:"Atkinson Hyperlegible", system-ui, sans-serif; line-height:1.6; letter-spacing:.03em; word-spacing:.08em; }
+  html[data-reading] :is(.avatar, .bottombar button, .navcount) { font-family:"Atkinson Hyperlegible", system-ui, sans-serif; }
+  html[data-reading] :is(.group, .badge) { text-transform:none; letter-spacing:.03em; }
+  html[data-reading] .group { font-size:.9375rem; font-weight:700; }
+  html[data-reading] :is(.muted, .task .meta, .setting .label span, .hint, .mini) { font-size:.9375rem; }
+  html[data-reading] { --muted:#474747; }
+  @media (prefers-color-scheme: dark) { html[data-reading]:not([data-theme="light"]) { --muted:#cfcfcf; } }
+  html[data-reading][data-theme="dark"] { --muted:#cfcfcf; }
+  /* My list → Schedule */
+  /* Not .seg: the feedback dialog's own script takes over every .seg button. */
+  .viewseg { display:flex; gap:4px; margin:2px 0 8px; }
+  .viewseg button { border:1px solid var(--fieldLine); background:none; color:var(--fg); border-radius:99px; min-height:36px; padding:6px 16px; font:inherit; font-size:.875rem; cursor:pointer; }
+  .viewseg button.on { background:var(--accent); border-color:var(--accent); color:var(--onAccent); }
+  @media (max-width:720px) { .viewseg button { min-height:44px; } }
+  .schednext { margin:4px 0 10px; padding:10px 12px; border-radius:10px; background:var(--note); color:var(--noteFg); overflow-wrap:anywhere; }
+  .schednext:empty { display:none; }
+  .sched { list-style:none; margin:0; padding:0; }
+  .srow { display:flex; gap:10px; align-items:flex-start; border-top:1px solid var(--line); }
+  .sched > .srow:first-child { border-top:0; }
+  .srow .stime { flex:none; width:5.25rem; padding:11px 0; font-weight:700; font-variant-numeric:tabular-nums; }
+  .srow .stime span { display:block; font-weight:400; font-size:.8125rem; color:var(--muted); }
+  .srow > .task, .srow > .sbody { flex:1; min-width:0; }
+  .srow > .task { border-top:0; }
+  .srow > .sbody { padding:10px 0; }
+  .srow .sbody .text { font-size:1.0625rem; overflow-wrap:anywhere; }
+  .srow .sbody .meta { font-size:.8125rem; color:var(--muted); margin-top:2px; }
+  .srow.routine .sbody .text { font-weight:600; }
+  .srow.past .stime, .srow.past .sbody .text { color:var(--muted); }
+  .srow .nowtag { display:inline-block; font-size:.75rem; font-weight:700; padding:1px 7px; border-radius:99px; background:var(--accent); color:var(--onAccent); margin-left:6px; vertical-align:1px; }
+  .nowline { display:flex; align-items:center; gap:8px; color:var(--warn); font-weight:700; font-size:.875rem; margin:2px 0; }
+  .nowline::after { content:""; flex:1; height:2px; background:var(--warn); border-radius:2px; }
+  .sched .linkish { font-size:.9375rem; }
+  @media (max-width:400px) { .srow { gap:6px; } .srow .stime { width:4rem; } }
   /* Super admin: users */
   .tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(118px, 1fr)); gap:8px; }
   .tile { background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:10px; text-align:left; font:inherit; color:var(--fg); cursor:pointer; }
@@ -499,6 +568,8 @@
     <div class="card"><div class="row listhead"><h2 id="listTitle" tabindex="-1">My list</h2>
         <button class="plain small" id="printTodayList">Today's label</button>
         <button class="plain small" id="showDone" aria-pressed="false">Show done</button></div>
+      <div class="viewseg" id="listView" role="group" aria-label="Show my list as">
+        <button type="button" data-view="list" aria-pressed="true">List</button><button type="button" data-view="schedule" aria-pressed="false">Schedule</button></div>
       <p class="err" id="linkedErr" hidden></p>
       <div id="listBody" class="muted">…</div>
       <div class="printbar">
@@ -675,6 +746,7 @@
         <select id="theme" aria-label="Theme"><option value="">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
       <label class="setting"><div class="label"><b>Text size</b><span>Bigger text everywhere in the app.</span></div>
         <select data-pref="text_size" aria-label="Text size"><option value="normal">Normal</option><option value="large">Large</option><option value="xlarge">Extra large</option></select></label>
+      <label class="setting"><div class="label"><b>Easy-to-read text</b><span>A font made for easy reading, more space between lines and letters, and darker small print. Your labels print in the same font.</span></div><input type="checkbox" data-pref="reading_mode"></label>
       <label class="setting"><div class="label"><b>Open to</b><span>The screen you see when Next Box opens.</span></div>
         <select data-pref="start_tab" aria-label="Open to"><option value="mylist">My list</option><option value="print">Print</option><option value="scan">Snap</option><option value="journal">Journal</option></select></label>
       <label class="setting"><div class="label"><b>24-hour times</b><span>19:00 instead of 7:00p.</span></div><input type="checkbox" data-pref="time_24h"></label>
@@ -697,6 +769,9 @@
       <label class="setting"><div class="label"><b>Print the next tiny step</b><span>Under each task that has steps.</span></div><input type="checkbox" data-pref="show_next_step"></label>
       <label class="setting"><div class="label"><b>Journal mode</b><span>The daily label gets a "Today's win" line for your journal, and every page you snap is kept in your Journal.</span></div><input type="checkbox" data-pref="journal_mode"></label>
       <label class="setting"><div class="label"><b>Call it a slug after</b><span>How many moves before a task shows under Slugs and prints "slid 3×". 2–10.</span></div><input type="number" min="2" max="10" data-pref="slug_after"></label>
+      <label class="setting"><div class="label"><b>Same words every time</b><span>Messages always say the same thing, and My list opens on Schedule: your day in time order.</span></div><input type="checkbox" data-pref="routine_mode"></label>
+      <label class="setting"><div class="label"><b>Plan my day at</b><span>Shows on Schedule as “Plan your day”.</span></div><input type="time" data-pref="routine_morning"></label>
+      <label class="setting"><div class="label"><b>Look back at</b><span>Shows on Schedule as “Look back”: snap your pages.</span></div><input type="time" data-pref="routine_evening"></label>
     </div>
 
     <div class="card" id="calCard"><h2>Calendars</h2>
@@ -746,6 +821,8 @@
 
     <div class="card" id="helpCard"><h2>Help</h2>
       <p class="muted"><a href="guide.html" target="_blank" rel="noopener">Quick start guide</a> · <button class="linkish" id="guideShow">Show the Get started checklist</button></p>
+      <div class="setting"><div class="label"><b>Setup questions</b><span>Five quick questions that fit Next Box to you: printing, your journal, how many tasks, what helps.</span></div>
+        <button class="plain" id="quizAgain" type="button">Run setup again</button></div>
       <p class="muted">Something wrong, confusing or great? Feedback is shared with everyone, never with your name.</p>
       <div class="row"><button class="go" data-feedback>Send feedback</button></div>
     </div>
@@ -931,6 +1008,21 @@
   <p class="err" id="noticeMsg" role="alert"></p>
   <div class="row"><button class="go" id="noticeOk">I understand and agree</button>
     <button class="plain" id="noticeNo">No thanks, sign me out</button></div>
+</dialog>
+
+<dialog id="quizDialog" aria-labelledby="quizQ" aria-describedby="quizHint">
+  <div class="quizhead"><span class="muted" id="quizStep"></span>
+    <button type="button" class="linkish" id="quizSkip">Skip setup</button></div>
+  <div class="quizbar" aria-hidden="true"><div id="quizBar"></div></div>
+  <h2 id="quizQ" tabindex="-1"></h2>
+  <p class="muted" id="quizHint"></p>
+  <div id="quizBody"></div>
+  <p class="err" id="quizMsg" role="alert"></p>
+  <div class="row quiznav quizfoot">
+    <button type="button" class="plain" id="quizBack">← Back</button>
+    <button type="button" class="linkish" id="quizPass">Skip this question</button>
+    <button type="button" class="go" id="quizNext">Next</button>
+  </div>
 </dialog>
 
 <dialog id="fbDialog" aria-labelledby="fbTitle">
