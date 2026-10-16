@@ -256,9 +256,10 @@ async function boot() {
   if (!me.consented || me.terms_ok === false) {  // new, or the notice or Terms changed since they agreed
     $("#noticeBody").textContent = me.data_notice;
     $("#noticeChanged").hidden = !me.notice_changed;
-    // What's new in the Privacy Policy (TERMS_VERSION 3), when that's what changed.
+    // What's new in the Privacy Policy (TERMS_VERSION 3 and 4), when that's what changed.
     $("#noticeChanged").textContent = "This changed since you last agreed. " + (me.terms_ok === false
-      ? "The Privacy Policy now says just what the AI helpers (Break it down and Look back on my week) send to Anthropic, and that they only do it when you tap them. " : "")
+      ? "The Privacy Policy now says just what the AI helpers (Break it down and Look back on my week) send to Anthropic, and that they only do it when you tap them. "
+        + "It also says that with Journal mode off, a photo with handwriting on it is still kept as that day's journal page. " : "")
       + "Have a quick look before you carry on.";
     $("#noticeMsg").textContent = "";
     if (!$("#noticeDialog").open) $("#noticeDialog").showModal();
