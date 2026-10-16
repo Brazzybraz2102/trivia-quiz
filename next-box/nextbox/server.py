@@ -1427,9 +1427,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                     now = ((tasks.get_task(task_id).get("due") or {}).get("date") or "")[:10] or target
                 except Exception:
                     now = target
-                if now == prev:
+                if now == prev:  # nothing moved: say so, and don't count a slide
                     name = tasks.linked_name() if hasattr(tasks, "linked_name") else "your linked app"
-                    raise ValueError(f"{name} kept it on the same day. Move it there instead.")
+                    raise ValueError(f"{name} kept it on the same day. Change its date in {name}.")
             slides, slid = Slides(accounts.db, caller.name), None
             if prev and now and not body.undo and now > prev:
                 slid = slides.bump(task_id)

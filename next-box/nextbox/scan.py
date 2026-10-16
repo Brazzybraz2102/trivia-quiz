@@ -246,13 +246,16 @@ def _due(task: dict | None) -> str:
     return (((task or {}).get("due") or {}).get("date") or "")[:10]
 
 
-def _added_since(task: dict | None, printed: str | None) -> bool:
-    """A My list task made after the ticket printed can't be the one on it (its id was a deleted
-    task's, on a database from before ids were never reused)."""
-    if not task or not task.get("created") or not printed:
+def _not_on_ticket(task: dict | None, item: dict, printed: str | None) -> bool:
+    """The My list task with the row's id isn't the one that printed: the printed one was deleted
+    and a newer task got its id (SQLite did that before 0.14.1). A ticket's row says when its task
+    was made; an older ticket's rows don't, so then a task made after it printed can't be on it."""
+    if not task or not task.get("created"):
         return False
     try:
-        return int(task["created"]) > datetime.fromisoformat(printed).timestamp()
+        if item.get("created") is not None:
+            return int(task["created"]) != int(item["created"])
+        return bool(printed) and int(task["created"]) > datetime.fromisoformat(printed).timestamp()
     except (TypeError, ValueError):
         return False
 
@@ -264,10 +267,11 @@ def _apply(ctx: Context, mark: str, item: dict, day: str | None = None, scan_id:
     printed), or when the row's task was deleted since and a newer one has its id."""
     td, tid = ctx.tasks, item["task_id"]
     on_day = date.fromisoformat(day) if day else ctx.today()
-    if printed and is_local(tid) and _added_since(_current(ctx, tid), printed):
+    mine = _current(ctx, tid) if is_local(tid) else None  # asked once; a linked task is asked below
+    if _not_on_ticket(mine, item, printed):
         return {"skip": NEWER_TASK}
     if mark == "done":
-        cur = _current(ctx, tid)
+        cur = mine if is_local(tid) else _current(ctx, tid)
         if cur is not None:
             if _is_done(cur):
                 return {"skip": ALREADY_DONE}
@@ -289,7 +293,7 @@ def _apply(ctx: Context, mark: str, item: dict, day: str | None = None, scan_id:
         return undo
     if mark == "tomorrow":
         target = max(on_day + timedelta(days=1), ctx.today())
-        cur = _current(ctx, tid)
+        cur = mine if is_local(tid) else _current(ctx, tid)
         if cur is not None and _is_done(cur):
             return {"skip": ALREADY_DONE}
         if _due(cur) and _due(cur) >= target.isoformat():

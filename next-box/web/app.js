@@ -1801,9 +1801,9 @@ async function undoMove(id, undo) {
 // Quick ticks on one task go one after another, so the screen ends up showing all of them.
 const stepTicks = new Map();  // task id -> its last tick on the way
 function tickStep(id, ...args) {
-  const go = (stepTicks.get(id) || Promise.resolve()).then(() => sendStepTick(id, ...args));
+  const go = (stepTicks.get(id) || Promise.resolve()).catch(() => null).then(() => sendStepTick(id, ...args));
   stepTicks.set(id, go);
-  go.then(() => { if (stepTicks.get(id) === go) stepTicks.delete(id); });
+  go.finally(() => { if (stepTicks.get(id) === go) stepTicks.delete(id); }).catch(() => {});
   return go;
 }
 async function sendStepTick(id, i, done, text, box = null) {
@@ -2341,6 +2341,8 @@ function editBody() {
   }
   const tags = $$("#tdTags [data-tag].on").map((b) => b.dataset.tag);
   if ([...tags].sort().join("\n") !== [...(t.labels || [])].sort().join("\n")) body.tags = tags;
+  // Urgent taken off: the urgency shown here is the one meant (the server would take back what the tag gave).
+  if (body.tags && (t.labels || []).includes("urgent") && !tags.includes("urgent")) body.priority = Number(now.priority);
   const steps = stepsNow();
   if (JSON.stringify(steps) !== JSON.stringify((t.steps || []).map((s) => ({ text: s.text, done: !!s.done })))) body.steps = steps;
   return body;
