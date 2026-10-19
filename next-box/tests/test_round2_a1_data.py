@@ -20,7 +20,7 @@ from sqlalchemy import event, insert, inspect, select, text
 from nextbox import auth, cli, db, dbtools, server, upkeep
 from nextbox.auth import Accounts
 from nextbox.journal import Journal, Slides
-from nextbox.mylist import DEFAULT_TAGS, LocalTasks, Tags
+from nextbox.mylist import DEFAULT_TAGS, LocalTasks, Merged, Tags
 from nextbox.providers import CalDAVTasks
 from nextbox.server import create_app
 from nextbox.store import Store
@@ -34,10 +34,12 @@ POSTGRES = bool(os.environ.get("DATABASE_URL"))
 
 
 def site(ctx, today=date.today):
-    """boss (superadmin), hal (admin) and sam, My list only."""
-    ctx = dataclasses.replace(ctx, tasks_factory=None, today=today)
-    ctx.settings.todoist_token = ""
+    """boss (superadmin), hal (admin) and sam, My list only. A pinned `today` is sam's list's day too
+    (the server's own list would use the real date), so these tests pass on any day."""
     a = Accounts(ctx.settings.data_dir)
+    factory = None if today is date.today else (lambda: Merged(LocalTasks(a.db, "sam", today=today)))
+    ctx = dataclasses.replace(ctx, tasks_factory=factory, today=today)
+    ctx.settings.todoist_token = ""
     a.set_password("boss", "boss password", create=True)
     a.create("hal", "hal password", role="admin")
     a.create("sam", "sam password", email="sam@example.com")
