@@ -203,8 +203,9 @@ def _find_label(ctx: Context, code: str | None, label_id: str | None) -> dict | 
         rec = ctx.store.get_printed(wanted)
         if not rec and len(wanted) == 4 and wanted.isalnum():
             since = (ctx.today() - timedelta(days=7)).isoformat()
-            rec = next((r for r in ctx.store.list_printed(50, by=ctx.user, since=since)
-                        if r["id"].endswith("-" + wanted) and r.get("manifest")), None)
+            # Filtered by code in the database: any number of newer notes can't push the ticket out of reach.
+            rec = next((r for r in ctx.store.list_printed(50, by=ctx.user, since=since, ending=wanted)
+                        if r.get("manifest")), None)
         # Only your own tickets: their task ids belong to your to-do app.
         if rec and rec["manifest"] and rec.get("by", ctx.user) == ctx.user:
             return rec

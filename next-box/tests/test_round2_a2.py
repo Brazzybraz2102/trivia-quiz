@@ -90,6 +90,27 @@ def test_snap_candidates_page_past_notes_and_keep_todays_label_first(ctx):
     assert sam.post("/scan", files={"photo": ("p.jpg", tiny_jpeg(), "image/jpeg")}).json()["errors"] == [scan.NO_CODE]
 
 
+def test_typed_last_4_characters_find_the_ticket_behind_many_notes(ctx, monkeypatch):
+    class Ticking(datetime):  # each print a second after the last, so the notes are newer than the ticket
+        at = datetime.now().replace(microsecond=0)
+
+        @classmethod
+        def now(cls, tz=None):
+            cls.at += timedelta(seconds=1)
+            return cls.at
+    monkeypatch.setattr(jobs, "datetime", Ticking)
+    ctx, _, sam = site(ctx)
+    sam.post("/list/dump", json={"text": "Call the dentist today"})
+    label = sam.post("/print/today", json={"dry_run": True}).json()
+    for n in range(51):  # notes, clip-hotkey and test labels: no tasks on them
+        assert sam.post("/print/text", json={"text": f"Note {n}", "dry_run": True}).status_code == 200
+    rec = sam.post("/scan", data={"label_id": label["id"][-4:]},
+                   files={"photo": ("p.jpg", tiny_jpeg(), "image/jpeg")}).json()
+    assert rec["label_id"] == label["id"] and rec["errors"] == []
+    assert [a["content"] for a in rec["applied"]] == ["Call the dentist"]
+    assert not any(t["content"] == "Call the dentist" for t in sam.get("/list").json()["tasks"])
+
+
 # ------------------------------------------------------------------ R1-04: "ticked boxes" only when one was ticked
 @pytest.mark.parametrize("marks, message", [
     (("none", "drop"), scan.NO_TICKETS_UNMARKED),
