@@ -57,9 +57,11 @@ def _page_answers(port: int) -> bool:
         return False
 
 
-def run_doctor(settings: Settings, accounts: Accounts, as_json: bool = False) -> int:
+def run_doctor(settings: Settings, accounts: Accounts | None, as_json: bool = False) -> int:
     """Plain: each line as it's checked, then a summary. `as_json` (`nextbox doctor --json`, read by the
-    top-bar status icon, tray/nextbox_tray.py): the same checks as one JSON object, and nothing else."""
+    top-bar status icon, tray/nextbox_tray.py): the same checks as one JSON object, and nothing else.
+    `accounts` None: opened here once the database answers. `nextbox doctor --json` does that, so a database
+    that's down is a ✗ with its fix in the JSON, not a traceback."""
     checks: list[tuple[str, str, str]] = []
 
     def say(mark: str, text: str, fix: str = "") -> None:
@@ -94,7 +96,7 @@ def json_report(settings: Settings, checks: list[tuple[str, str, str]]) -> dict:
             "problems": sum(mark == BAD for mark, _, _ in checks)}
 
 
-def _checks(settings: Settings, accounts: Accounts, say) -> bool:
+def _checks(settings: Settings, accounts: Accounts | None, say) -> bool:
     """Every check, in order, through `say(mark, text, fix)`. False when it had to stop early."""
     say(NOTE, f"Next Box {app_version()}")
     from . import db as _db
@@ -109,6 +111,8 @@ def _checks(settings: Settings, accounts: Accounts, say) -> bool:
         say(BAD, f"can't open the {kind} database: {str(getattr(exc, 'orig', exc)).splitlines()[0][:160]}",
             "sudo systemctl start postgresql" if kind == "PostgreSQL" else "check the data folder's permissions")
         return False
+    if accounts is None:
+        accounts = Accounts(settings.data_dir)
     say(OK if settings.server_key else BAD, "NEXTBOX_KEY is set" if settings.server_key else "NEXTBOX_KEY is missing",
         "" if settings.server_key else "run scripts/install.sh again; it makes one for you")
     if settings.anthropic_api_key:

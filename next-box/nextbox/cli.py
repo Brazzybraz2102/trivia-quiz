@@ -269,6 +269,11 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     os.umask(0o077)  # files Next Box writes stay private to this desktop user
     settings = load_settings()
+    if args.cmd == "doctor" and (args.doctor_json or args.json):
+        # Before anything opens the database: a database that's down is then one of its answers (with its
+        # fix), and the status icon still gets one JSON object, not a traceback.
+        from .doctor import run_doctor
+        return run_doctor(settings, None, as_json=True)
     accounts = Accounts(settings.data_dir)
     conns = Connections(settings, accounts, Vault(settings.data_dir))
     who = (args.user or accounts.owner() or "cli").lower()
@@ -294,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "doctor":
         from .doctor import run_doctor
-        return run_doctor(settings, accounts, as_json=args.doctor_json or args.json)
+        return run_doctor(settings, accounts)
     if args.cmd == "add":
         if not accounts.get(who):
             print("Create your account first: nextbox user add <name>")

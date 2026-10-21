@@ -786,7 +786,8 @@ GTK 3; GNOME shows it through the Ubuntu AppIndicators extension). Optional: `sc
 started now with a pid file in `~/.cache/nextbox-tray/`); `--remove` takes it away. `install.sh` only suggests it.
 - **Outside Next Box:** it runs on the system python3 (PyGObject) and never imports `nextbox`. It reads only
   `.venv/bin/nextbox doctor --json`, `http://127.0.0.1:<port>/health`, `<NEXTBOX_PUBLIC_URL>/version` and
-  `systemctl --user is-active nextbox` / `systemctl is-active cloudflared`. No labels, no AI, no `.env`, no log.
+  `systemctl --user is-active nextbox` / `systemctl is-active cloudflared`. No labels, no AI, no `.env`, no log of
+  its own (when `install-tray.sh` starts it, GTK's warnings go to `~/.cache/nextbox-tray/tray.log`).
 - **`nextbox doctor --json`:** the same checks as plain `nextbox doctor` (whose output doesn't change), as one object:
   `{version, port, public_url, checks: [{mark: ok|bad|note, text, fix}], problems}`. Secrets only as "set"/"missing".
 - **When:** quick checks every 60 s (local page, service, and with a public address: `/version` within 8 s and
@@ -799,7 +800,10 @@ started now with a pid file in `~/.cache/nextbox-tray/`); `--remove` takes it aw
   this computer decide red or green. Grey while the first round runs.
 - **Menu:** "Next Box <version>: <headline>", one line per reason with its fix under it, Open Next Box (the public
   address + `/app/`, else `http://localhost:<port>/app/`), Check now, Show details (`nextbox doctor` in a terminal,
-  until Enter), Quit status icon. A notification (notify-send, if there) only when it turns red or comes back.
+  until Enter), Quit status icon. On GNOME each line is a mnemonic label with one leading `_`, because the
+  AppIndicator extension removes only the first `_` of a plain label's doubled ones (`ANTHROPIC_API__KEY`).
+  A notification (notify-send, if there) only when it turns red or comes back, and when the first answer after
+  a fresh start (login) is red. An update's restart passes the colour on (`--was=`), so it never repeats one.
 - **Updates:** each minute it compares its own file's time; after an update (that compiles) it starts itself again
   with `os.execv`, so no logout is needed.
 

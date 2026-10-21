@@ -433,9 +433,11 @@ A small square in the desktop's top bar shows how Next Box is doing:
 | Grey | Still checking (just after you log in) |
 
 Click it for what's wrong and the fix for each, **Open Next Box**, **Check now**, **Show details**
-(`nextbox doctor` in a terminal) and **Quit status icon**. You get a pop-up only when it turns red,
-and when it comes back. It checks every minute and runs `nextbox doctor` every 10 minutes. It never
-prints a label, never calls the AI and never shows anything from `.env`.
+(`nextbox doctor` in a terminal) and **Quit status icon**. You get a pop-up only when it turns red
+(also when it's red as you log in), and when it comes back. It checks every minute and runs
+`nextbox doctor` every 10 minutes. It never prints a label, never calls the AI and never shows
+anything from `.env`. It keeps no log of its own; if `scripts/install-tray.sh` started it, any
+warnings from the desktop go to `~/.cache/nextbox-tray/tray.log`.
 
 ```bash
 scripts/install-tray.sh            # add it (installs what it needs, starts it now and at every login)

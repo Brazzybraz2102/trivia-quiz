@@ -11,7 +11,8 @@ and adds it to the desktop's autostart. It never imports Next Box. It only asks:
   `nextbox doctor --json` (the deep check: at start, every 10 minutes and on "Check now"),
   http://127.0.0.1:<port>/health and <public address>/version (every minute), and
   `systemctl --user is-active nextbox` and `systemctl is-active cloudflared`.
-It prints no labels, calls no AI, never opens Next Box's settings file and writes no log.
+It prints no labels, calls no AI, never opens Next Box's settings file and writes no log of its own. (When
+scripts/install-tray.sh starts it, whatever GTK warns about goes to ~/.cache/nextbox-tray/tray.log.)
 
 Everything above `main()` is plain Python with no PyGObject, so the tests import it on its own.
 """
@@ -36,7 +37,7 @@ from pathlib import Path
 HERE = Path(os.path.abspath(__file__))  # abspath, not resolve: through the ~/.local/share/nextbox/app link
 APP_DIR = HERE.parent.parent  # so it follows the app when that link is pointed at a new folder
 NEXTBOX = APP_DIR / ".venv" / "bin" / "nextbox"
-CACHE = Path.home() / ".cache" / "nextbox-tray"  # the icons, the pid file and the "Show details" script
+CACHE = Path.home() / ".cache" / "nextbox-tray"  # the icons, the pid file, the "Show details" script (and tray.log)
 
 FAST_EVERY = 60  # seconds: service, local page, public page, tunnel
 DEEP_EVERY = 600  # seconds: nextbox doctor
@@ -138,9 +139,10 @@ def evaluate(c: Checks | None) -> tuple[str, str, list[tuple[str, str]]]:
 
 
 def notification(old: str, new: str, reasons: list[tuple[str, str]]) -> tuple[str, str] | None:
-    """(title, body) when the colour changes to red, or from red back to green or yellow. Nothing for the
-    first answer after starting (grey), so logging in or an update never pops one up."""
-    if old == new or GREY in (old, new):
+    """(title, body) when the colour changes to red, or from red back to green or yellow. `old` is grey on
+    a fresh start, so logging in while Next Box is down says so, and green or yellow then says nothing.
+    After an update it restarts itself with the colour it had (`--was=`), so that never repeats a pop-up."""
+    if old == new or new == GREY:
         return None
     if new == RED:
         return "Next Box is offline", reasons[0][0] if reasons else ""
@@ -174,6 +176,24 @@ def menu_lines(c: Checks | None) -> tuple[str, list[tuple[str, list[str]]]]:
     if len(reasons) > MAX_REASONS:
         lines.append((f"…and {len(reasons) - MAX_REASONS} more (Show details)", []))
     return header, lines
+
+
+def gnome_shell(desktop: str | None = None) -> bool:
+    """True on GNOME's own top bar ($XDG_CURRENT_DESKTOP "ubuntu:GNOME", "GNOME", "GNOME-Classic:GNOME")."""
+    desktop = os.getenv("XDG_CURRENT_DESKTOP", "") if desktop is None else desktop
+    parts = {p.strip().lower() for p in desktop.split(":")}
+    return "gnome" in parts and not parts & {"budgie", "gnome-flashback"}  # those draw their own panels
+
+
+def menu_label(text: str, desktop: str | None = None) -> tuple[str, bool]:
+    """(label, mnemonic) for one menu line, so names like NEXTBOX_DRY_RUN show exactly as typed.
+
+    The menu reaches the top bar over D-Bus (dbusmenu). A plain GTK label is sent with every "_" doubled,
+    which the dbusmenu spec says the bar turns back into one (KDE does). GNOME's AppIndicator extension only
+    takes away the first single "_" (`label.replace(/_([^_])/, '$1')`), so it showed NEXTBOX_DRY__RUN. A
+    mnemonic label is sent as it is: on GNOME each line gets one "_" in front, for the extension to take away.
+    """
+    return ("_" + text, True) if gnome_shell(desktop) else (text, False)
 
 
 def open_url(c: Checks | None) -> str:
@@ -406,6 +426,19 @@ def spawn(cmd: list[str]) -> bool:
     return True
 
 
+def was_color(argv: list[str]) -> str:
+    """The colour it had before an update restarted it (`--was=red`); grey on a fresh start."""
+    for arg in argv:
+        if arg.startswith("--was=") and arg[len("--was="):] in (GREEN, YELLOW, RED):
+            return arg[len("--was="):]
+    return GREY
+
+
+def restart_argv(argv: list[str], color: str) -> list[str]:
+    """The arguments to start again with after an update: the same ones, with the colour it has now."""
+    return [a for a in argv if not a.startswith("--was=")] + [f"--was={color}"]
+
+
 def check_once(monitor: Monitor | None = None) -> str:
     """`nextbox_tray.py --check`: one full round as text, for a terminal."""
     color, headline, reasons = evaluate((monitor or Monitor()).cycle(deep=True))
@@ -414,8 +447,10 @@ def check_once(monitor: Monitor | None = None) -> str:
 
 # ------------------------------------------------------------------ the top bar (PyGObject from here on)
 class Tray:
-    def __init__(self, Gtk, GLib, AppIndicator, icons: dict[str, str], monitor: Monitor, lock_fd: int):
+    def __init__(self, Gtk, GLib, AppIndicator, icons: dict[str, str], monitor: Monitor, lock_fd: int,
+                 was: str = GREY):
         self.Gtk, self.GLib, self.icons, self.monitor, self.lock_fd = Gtk, GLib, icons, monitor, lock_fd
+        self.known = was  # the last colour it showed, from before an update's restart too: for the pop-ups
         self.indicator = AppIndicator.Indicator.new("nextbox-status", icons[GREY],
                                                     AppIndicator.IndicatorCategory.APPLICATION_STATUS)
         self.indicator.set_title("Next Box status")
@@ -454,10 +489,10 @@ class Tray:
     # ---- GTK main thread
     def apply(self, checks: Checks) -> bool:
         color, _, reasons = evaluate(checks)
-        note = notification(self.color, color, reasons)
+        note = notification(self.known, color, reasons)
         if note and shutil.which("notify-send"):
             spawn(["notify-send", "-a", "Next Box", "-i", self.icons[color], *note])
-        self.checks, self.color = checks, color
+        self.checks, self.color, self.known = checks, color, color
         self.busy = self.force.is_set()  # "Check now" was pressed during this round: one more is coming
         self.show()
         return False
@@ -482,8 +517,9 @@ class Tray:
         self.menu.show_all()
         self.indicator.set_icon_full(self.icons[self.color], DESCRIPTIONS[self.color])
 
-    def _item(self, label: str, action) -> None:
-        item = self.Gtk.MenuItem.new_with_label(label)  # dbusmenu shows its underscores as they are
+    def _item(self, text: str, action) -> None:
+        label, mnemonic = menu_label(text)  # so its underscores reach the bar as typed
+        item = (self.Gtk.MenuItem.new_with_mnemonic if mnemonic else self.Gtk.MenuItem.new_with_label)(label)
         if action is None:
             item.set_sensitive(False)
         else:
@@ -508,7 +544,7 @@ class Tray:
                    f"Open one and run: {APP_DIR}/.venv/bin/nextbox doctor"])
 
     def restart(self) -> bool:
-        os.execv(sys.executable, [sys.executable, str(HERE), *sys.argv[1:]])
+        os.execv(sys.executable, [sys.executable, str(HERE), *restart_argv(sys.argv[1:], self.known)])
         return False
 
     def quit(self) -> None:
@@ -542,7 +578,7 @@ def main(argv: list[str] | None = None) -> int:
                          "Run scripts/install-tray.sh to add them.\n")
         return 1
     import signal
-    tray = Tray(Gtk, GLib, AppIndicator, write_icons(CACHE), Monitor(), lock_fd)
+    tray = Tray(Gtk, GLib, AppIndicator, write_icons(CACHE), Monitor(), lock_fd, was=was_color(argv))
     for sig in (signal.SIGINT, signal.SIGTERM):
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, lambda: tray.quit() or False)
     Gtk.main()

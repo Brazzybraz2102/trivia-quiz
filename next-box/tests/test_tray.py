@@ -324,9 +324,99 @@ def test_notifications_only_when_it_goes_red_or_comes_back():
     assert note("yellow", "red", reasons)[0] == "Next Box is offline"
     assert note("red", "green", []) == ("Next Box is back online", "All good.")
     assert note("red", "yellow", reasons)[0] == "Next Box is back online"
-    for old, new in (("grey", "red"), ("grey", "green"), ("green", "yellow"), ("yellow", "green"), ("red", "red"),
-                     ("green", "green"), ("green", "grey")):
+    # A fresh start (logging in) that finds it down says so; one that finds it up says nothing.
+    assert note("grey", "red", reasons) == ("Next Box is offline", "The Next Box service is stopped")
+    for old, new in (("grey", "green"), ("grey", "yellow"), ("green", "yellow"), ("yellow", "green"),
+                     ("red", "red"), ("green", "green"), ("green", "grey"), ("red", "grey")):
         assert note(old, new, reasons) is None, (old, new)
+
+
+def test_an_update_restart_keeps_its_colour_so_pop_ups_never_repeat():
+    assert tray.was_color([]) == "grey"  # a fresh start
+    assert tray.restart_argv([], "red") == ["--was=red"]
+    again = tray.restart_argv(["--was=red"], "green")  # restarted twice: only the newest colour
+    assert again == ["--was=green"] and tray.was_color(again) == "green"
+    for junk in (["--was=purple"], ["--was="], ["--was"], ["--check"]):
+        assert tray.was_color(junk) == "grey", junk
+    reasons = [("The Next Box service is stopped", "x")]
+    for before, after, says in (("red", "red", None), ("green", "red", "Next Box is offline"),
+                                ("red", "green", "Next Box is back online"), ("yellow", "green", None),
+                                ("green", "green", None)):
+        note = tray.notification(tray.was_color(tray.restart_argv([], before)), after, reasons)
+        assert (note and note[0]) == says, (before, after)
+    source = TRAY_FILE.read_text()
+    assert "restart_argv(sys.argv[1:], self.known)" in source and "was=was_color(argv)" in source
+    assert "notification(self.known, color, reasons)" in source
+
+
+# What the top bar does with a menu line's label after D-Bus. libdbusmenu-gtk sends a plain label with each
+# "_" doubled and a mnemonic one as it is (checked over D-Bus with com.canonical.dbusmenu GetLayout).
+def _over_dbus(label, mnemonic):
+    return label if mnemonic else label.replace("_", "__")
+
+
+def _gnome_bar(sent):  # the AppIndicator extension's dbusMenu.js: label.replace(/_([^_])/, '$1')
+    return re.sub(r"_([^_])", r"\1", sent, count=1)
+
+
+def _spec_bar(sent):  # the dbusmenu spec (KDE): "__" is one "_", a single "_" marks the mnemonic
+    return re.sub(r"_(.)", lambda m: m.group(1), sent)
+
+
+MENU_TEXTS = ["ANTHROPIC_API_KEY is missing: Snap (marks and handwriting) and the AI helpers won't work",
+              "      → put your printer's IP in .env, delete NEXTBOX_DRY_RUN=1, then: systemctl --user restart",
+              "Next Box 0.14.5: Online, needs attention", "Open Next Box", "Quit status icon", "_odd", "a__b"]
+
+
+@pytest.mark.parametrize("desktop", ["ubuntu:GNOME", "GNOME", "GNOME-Classic:GNOME", "pop:GNOME"])
+def test_menu_lines_show_their_underscores_on_gnome(desktop):
+    assert tray.gnome_shell(desktop)
+    for text in MENU_TEXTS:
+        label, mnemonic = tray.menu_label(text, desktop)
+        assert (label, mnemonic) == ("_" + text, True)
+        assert _gnome_bar(_over_dbus(label, mnemonic)) == text, text
+    # what it showed before: a plain label, whose doubled underscores GNOME only half undoes
+    assert _gnome_bar(_over_dbus(MENU_TEXTS[0], False)).startswith("ANTHROPIC_API__KEY")
+
+
+@pytest.mark.parametrize("desktop", ["KDE", "XFCE", "Budgie:GNOME", "GNOME-Flashback:GNOME", "X-Cinnamon", ""])
+def test_menu_lines_elsewhere_stay_plain_labels(desktop):
+    assert not tray.gnome_shell(desktop)
+    for text in MENU_TEXTS[:2]:
+        label, mnemonic = tray.menu_label(text, desktop)
+        assert (label, mnemonic) == (text, False)
+        assert _spec_bar(_over_dbus(label, mnemonic)) == text
+
+
+def test_menu_items_are_built_with_the_leading_underscore_on_gnome(monkeypatch):
+    made = []
+
+    class Item:
+        def __init__(self, how, label):
+            made.append((how, label))
+            self.sensitive, self.handlers = True, []
+
+        def set_sensitive(self, on):
+            self.sensitive = on
+
+        def connect(self, signal, handler):
+            self.handlers.append(signal)
+
+    class MenuItem:
+        new_with_mnemonic = staticmethod(lambda label: Item("mnemonic", label))
+        new_with_label = staticmethod(lambda label: Item("label", label))
+
+    menu = []
+    fake = type("FakeTray", (), {"Gtk": type("Gtk", (), {"MenuItem": MenuItem}), "menu": type(
+        "Menu", (), {"append": staticmethod(menu.append)})()})()
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "ubuntu:GNOME")
+    tray.Tray._item(fake, "ANTHROPIC_API_KEY is missing", None)
+    tray.Tray._item(fake, "Check now", lambda: None)
+    assert made == [("mnemonic", "_ANTHROPIC_API_KEY is missing"), ("mnemonic", "_Check now")]
+    assert menu[0].sensitive is False and menu[1].sensitive is True and menu[1].handlers == ["activate"]
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "KDE")
+    tray.Tray._item(fake, "PRINTER_IP is still the example address", None)
+    assert made[-1] == ("label", "PRINTER_IP is still the example address")
 
 
 def test_menu_lines_are_short_and_say_the_version():
@@ -480,6 +570,49 @@ def test_doctor_json_still_answers_when_a_check_breaks(tmp_path, monkeypatch, ca
     assert report["checks"][-1] == {"mark": "bad", "text": "doctor stopped with an error (RuntimeError)",
                                     "fix": "run .venv/bin/nextbox doctor to see it"}
     assert "secret words" not in json.dumps(report)
+
+
+def test_doctor_json_answers_when_the_database_is_down(tmp_path, monkeypatch, capsys):
+    """PostgreSQL stopped (or not up yet at login): still one object, with the database's ✗ and its fix."""
+    port = _free_port()  # nothing listens there
+    password = "pw-FAKE-db-9"
+    env_file = tmp_path / ".env"
+    env_file.write_text("".join(f"{k}={v}\n" for k, v in SECRETS.items())
+                        + "NEXTBOX_PUBLIC_URL=https://nextbox.example.com\nNEXTBOX_PORT=8791\n")
+    for name in [*SECRETS, "NEXTBOX_PUBLIC_URL", "NEXTBOX_PORT"]:
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)  # the .env file sets it; undone after the test
+    monkeypatch.setenv("NEXTBOX_ENV_FILE", str(env_file))
+    monkeypatch.setenv("NEXTBOX_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("DATABASE_URL", f"postgresql://nbuser:{password}@127.0.0.1:{port}/nb")
+
+    def boom(*a, **k):
+        raise AssertionError("doctor must not reach this")
+    monkeypatch.setattr(doctor, "_service_state", boom)  # it stops at the database, like plain doctor
+    monkeypatch.setattr(printer, "is_reachable", boom)
+
+    code = cli.main(["doctor", "--json"])
+    out, err = capsys.readouterr()
+    assert code == 1 and out.endswith("\n") and out.count("\n") == 1
+    report = json.loads(out)
+    assert report["version"] == app_version() and report["port"] == 8791
+    assert report["public_url"] == "https://nextbox.example.com"  # so the tray still checks the address
+    assert report["checks"][0] == {"mark": "note", "text": f"Next Box {app_version()}", "fix": ""}
+    assert report["checks"][1]["mark"] == "bad" and report["problems"] == 1 and len(report["checks"]) == 2
+    assert report["checks"][1]["text"].startswith("can't open the PostgreSQL database: ")
+    assert report["checks"][1]["fix"] == "sudo systemctl start postgresql"
+    for value in [password, *SECRETS.values()]:
+        assert value not in out and value not in err, value
+    assert "Traceback" not in err
+
+    # What the tray makes of it: yellow while the page still answers, with doctor's own words, the version
+    # in the header, and the public address checked.
+    parsed = tray.parse_doctor(out)
+    c = tray.Checks(port=parsed["port"], service="active", local_ok=True, public_url=parsed["public_url"],
+                    public_ok=True, public_seconds=0.3, cloudflared="active", doctor=parsed)
+    color, _, reasons = tray.evaluate(c)
+    assert color == "yellow" and reasons == [(report["checks"][1]["text"], "sudo systemctl start postgresql")]
+    assert tray.menu_lines(c)[0] == f"Next Box {app_version()}: Online, needs attention"
 
 
 # ------------------------------------------------------------------ plain doctor output is exactly as before
