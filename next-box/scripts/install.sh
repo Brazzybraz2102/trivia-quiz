@@ -111,3 +111,7 @@ echo "Check everything any time with: .venv/bin/nextbox doctor"
 if .venv/bin/nextbox user list | grep -q '(no accounts)'; then
   echo "No sign-in accounts yet. Create yours with: .venv/bin/nextbox user add <name>"
 fi
+# The top-bar status square is optional, so it's never added here. Once added, it updates itself.
+if [[ -n "${XDG_CURRENT_DESKTOP:-}${DISPLAY:-}${WAYLAND_DISPLAY:-}" && ! -f "$HOME/.config/autostart/nextbox-tray.desktop" ]]; then
+  echo "Want a status square in the top bar (green, yellow or red)? Run: scripts/install-tray.sh"
+fi

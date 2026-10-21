@@ -1,13 +1,17 @@
 """`nextbox doctor`: check the setup one step at a time and say exactly what to fix.
 
-Never prints secrets: it only says whether each one is set.
+Never prints secrets: it only says whether each one is set. `nextbox doctor --json` gives the same checks
+as JSON for the top-bar status icon. Neither one calls Anthropic or a linked app, or prints a label.
 """
 from __future__ import annotations
 
+import contextlib
+import json
 import os
 import shutil
 import socket
 import subprocess
+import sys
 import urllib.request
 
 from . import printer
@@ -16,6 +20,7 @@ from .config import Settings, app_version
 from .printers import EXAMPLE_PRINTER_IP, Printers
 
 OK, BAD, NOTE = "✓", "✗", "•"
+MARKS = {OK: "ok", BAD: "bad", NOTE: "note"}  # in `nextbox doctor --json`
 
 
 def _service_state() -> str:
@@ -52,16 +57,47 @@ def _page_answers(port: int) -> bool:
         return False
 
 
-def run_doctor(settings: Settings, accounts: Accounts) -> int:
-    problems = 0
+def run_doctor(settings: Settings, accounts: Accounts | None, as_json: bool = False) -> int:
+    """Plain: each line as it's checked, then a summary. `as_json` (`nextbox doctor --json`, read by the
+    top-bar status icon, tray/nextbox_tray.py): the same checks as one JSON object, and nothing else.
+    `accounts` None: opened here once the database answers. `nextbox doctor --json` does that, so a database
+    that's down is a ✗ with its fix in the JSON, not a traceback."""
+    checks: list[tuple[str, str, str]] = []
 
     def say(mark: str, text: str, fix: str = "") -> None:
-        nonlocal problems
-        problems += mark == BAD
-        print(f"{mark} {text}")
-        if fix:
-            print(f"    → {fix}")
+        checks.append((mark, text, fix))
+        if not as_json:
+            print(f"{mark} {text}")
+            if fix:
+                print(f"    → {fix}")
 
+    if as_json:
+        with contextlib.redirect_stdout(sys.stderr):  # a stray print can't break the JSON
+            try:
+                _checks(settings, accounts, say)
+            except Exception as exc:  # still one answer; the error's kind only, since its words could hold anything
+                say(BAD, f"doctor stopped with an error ({type(exc).__name__})",
+                    "run .venv/bin/nextbox doctor to see it")
+        print(json.dumps(json_report(settings, checks)))
+        return 1 if any(mark == BAD for mark, _, _ in checks) else 0
+    if not _checks(settings, accounts, say):
+        return 1
+    problems = sum(mark == BAD for mark, _, _ in checks)
+    print()
+    print("All good." if not problems else f"{problems} thing(s) to fix above.")
+    return 1 if problems else 0
+
+
+def json_report(settings: Settings, checks: list[tuple[str, str, str]]) -> dict:
+    """What `nextbox doctor --json` prints. Like the plain lines it says only whether a secret is set."""
+    from .providers import oauth
+    return {"version": app_version(), "port": settings.port, "public_url": oauth.public_url() or None,
+            "checks": [{"mark": MARKS[mark], "text": text, "fix": fix} for mark, text, fix in checks],
+            "problems": sum(mark == BAD for mark, _, _ in checks)}
+
+
+def _checks(settings: Settings, accounts: Accounts | None, say) -> bool:
+    """Every check, in order, through `say(mark, text, fix)`. False when it had to stop early."""
     say(NOTE, f"Next Box {app_version()}")
     from . import db as _db
     from .dbtools import describe_location, is_postgres
@@ -74,7 +110,9 @@ def run_doctor(settings: Settings, accounts: Accounts) -> int:
     except Exception as exc:
         say(BAD, f"can't open the {kind} database: {str(getattr(exc, 'orig', exc)).splitlines()[0][:160]}",
             "sudo systemctl start postgresql" if kind == "PostgreSQL" else "check the data folder's permissions")
-        return 1
+        return False
+    if accounts is None:
+        accounts = Accounts(settings.data_dir)
     say(OK if settings.server_key else BAD, "NEXTBOX_KEY is set" if settings.server_key else "NEXTBOX_KEY is missing",
         "" if settings.server_key else "run scripts/install.sh again; it makes one for you")
     if settings.anthropic_api_key:
@@ -150,6 +188,4 @@ def run_doctor(settings: Settings, accounts: Accounts) -> int:
         say(OK if up else BAD, f"printer {p.name} ({p.address}) {'answers' if up else 'does not answer'}",
             "" if up else "turn it on, check it's on the same Wi-Fi, and check the address "
                           "(hold the printer's info button to print its settings)")
-    print()
-    print("All good." if not problems else f"{problems} thing(s) to fix above.")
-    return 1 if problems else 0
+    return True

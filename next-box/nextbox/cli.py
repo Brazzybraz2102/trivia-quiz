@@ -217,7 +217,9 @@ def main(argv: list[str] | None = None) -> int:
     cf = sub.add_parser("confirm", help="review a scan's pending items one by one")
     cf.add_argument("scan_id")
     sub.add_parser("serve", help="run the HTTP server")
-    sub.add_parser("doctor", help="check the setup step by step and say what to fix")
+    dr = sub.add_parser("doctor", help="check the setup step by step and say what to fix")
+    dr.add_argument("--json", action="store_true", dest="doctor_json",
+                    help="the same checks as one JSON object (for the top-bar status icon)")
     ad = sub.add_parser("add", help="add tasks to your list (one per line; #tag ! tomorrow 3pm ~15m)")
     ad.add_argument("text", nargs="+")
     for name, helptext in (("stickers", "one sticker per task (today's, or a filter like #errand)"),
@@ -267,6 +269,11 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     os.umask(0o077)  # files Next Box writes stay private to this desktop user
     settings = load_settings()
+    if args.cmd == "doctor" and (args.doctor_json or args.json):
+        # Before anything opens the database: a database that's down is then one of its answers (with its
+        # fix), and the status icon still gets one JSON object, not a traceback.
+        from .doctor import run_doctor
+        return run_doctor(settings, None, as_json=True)
     accounts = Accounts(settings.data_dir)
     conns = Connections(settings, accounts, Vault(settings.data_dir))
     who = (args.user or accounts.owner() or "cli").lower()
