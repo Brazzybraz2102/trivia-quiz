@@ -383,7 +383,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     coach_window = _Window(20, 3600)  # the AI helpers, both together: each one is a paid call
     ai = {"coach": coach}             # the real one is made on first use
     connections = Connections(ctx.settings, accounts, vault, **({"builder": builder} if builder else {}),
-                              **({"calendar_builder": calendar_builder} if calendar_builder else {}))
+                              **({"calendar_builder": calendar_builder} if calendar_builder else {}),
+                              today=ctx.today)
 
     # ------------------------------------------------------------------ auth
     def _bearer(request: Request) -> str | None:

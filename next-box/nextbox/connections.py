@@ -44,7 +44,9 @@ def _split(kind_fields: list[dict], fields: dict) -> tuple[dict, dict]:
 
 class Connections:
     def __init__(self, settings: Settings, accounts: Accounts, vault: Vault,
-                 builder: Builder = build_provider, calendar_builder: CalendarBuilder = build_calendar):
+                 builder: Builder = build_provider, calendar_builder: CalendarBuilder = build_calendar,
+                 *, today: Callable[[], dt.date] = dt.date.today):
+        self.today = today  # the server's own clock, so My list and the rest agree on what day it is
         self.settings = settings
         self.accounts = accounts
         self.vault = vault
@@ -54,7 +56,8 @@ class Connections:
     # --- to-do app ---------------------------------------------------------------------------
     def provider_for(self, username: str) -> TaskProvider:
         """Everyone has the built-in list; a linked app adds its tasks next to it."""
-        local = LocalTasks(self.accounts.db, username, self.accounts.household_of(username) or "home")
+        local = LocalTasks(self.accounts.db, username, self.accounts.household_of(username) or "home",
+                           today=self.today)
         try:
             linked = self.linked_for(username)
         except NotConnected:

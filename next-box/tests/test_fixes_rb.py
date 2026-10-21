@@ -148,7 +148,8 @@ def test_an_older_ticket_without_task_times_goes_by_when_it_printed(ctx):
     typo = add(sam, content="Typo task", due_date=date.today().isoformat())
     label = sam.post("/print/today", json={"dry_run": True}).json()
     rec = ctx.store.get_printed(label["id"])
-    an_hour_ago = datetime.now() - timedelta(hours=1)
+    now = datetime.now()
+    an_hour_ago = max(now - timedelta(hours=1), now.replace(hour=0, minute=0, second=0, microsecond=0))  # today's ticket
     ctx.store.save_printed({**rec, "created_at": an_hour_ago.isoformat(timespec="seconds"),  # as 0.14.0 printed it
                             "manifest": [{k: v for k, v in m.items() if k != "created"} for m in rec["manifest"]]})
     with a.db.begin() as conn:  # the plants were on the list before it printed

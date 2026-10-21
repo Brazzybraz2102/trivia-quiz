@@ -66,7 +66,10 @@ def _ticket(ctx, label_id: str, at: datetime, kind: str, manifest: list) -> None
 
 def test_snap_with_no_code_still_offers_the_ticket_behind_many_notes(ctx):
     ctx, _, sam = site(ctx)
-    t0 = datetime.now().replace(microsecond=0) - timedelta(hours=1)
+    now = datetime.now().replace(microsecond=0)
+    t0 = max(now - timedelta(hours=1), now.replace(hour=0, minute=0, second=0))  # still today just after midnight
+    if (now - t0).total_seconds() < 60:
+        t0 = now - timedelta(seconds=50)
     today_id = f"{t0:%y%m%d}-TDAY"
     _ticket(ctx, today_id, t0, "today", [{"row": 1, "task_id": "nb:1", "content": "Call the dentist"}])
     for n in range(41):  # notes, clip-hotkey and test labels: no tasks on them
@@ -78,7 +81,10 @@ def test_snap_with_no_code_still_offers_the_ticket_behind_many_notes(ctx):
 
 def test_snap_candidates_page_past_notes_and_keep_todays_label_first(ctx):
     ctx, _, sam = site(ctx)
-    t0 = datetime.now().replace(microsecond=0) - timedelta(hours=2)
+    now = datetime.now().replace(microsecond=0)
+    t0 = max(now - timedelta(hours=2), now.replace(hour=0, minute=0, second=0))  # still today just after midnight
+    if (now - t0).total_seconds() < 120:  # the first two minutes of a day: put the tickets just before now
+        t0 = now - timedelta(seconds=110)
     day = f"{t0:%y%m%d}"
     _ticket(ctx, f"{day}-TDAY", t0, "today", [{"row": 1, "task_id": "nb:1", "content": "A"}])
     for n in range(6):  # six newer one-task tickets, then a run of notes on top

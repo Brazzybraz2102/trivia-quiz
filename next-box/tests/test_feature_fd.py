@@ -537,6 +537,21 @@ def test_monday_follows_pages_and_turns_utc_times_into_local_ones():
     assert tasks["Call the client"]["due"]["date"] == local
 
 
+def test_monday_move_keeps_the_local_time_across_a_clock_change(monkeypatch):
+    """New York, 9:00 a.m. EDT on Oct 30 (13:00 UTC), moved to Nov 2 after the clocks go back:
+    still 9:00 a.m. there, which is 14:00 UTC."""
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+    try:
+        fake = FakeMonday(items=[mitem("1001", "Send the report", "2026-10-30", time_="13:00:00")])
+        Monday("tok", client=fake.client(), today=lambda: date(2026, 10, 30)).set_due_date("1001", "2026-11-02")
+        change, = fake.sent("change_column_value")
+        assert json.loads(change["value"]) == {"date": "2026-11-02", "time": "14:00:00"}
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+
 def test_monday_done_move_delete_and_add():
     fake = FakeMonday(items=[mitem("1001", "Send the report", TODAY.isoformat(), time_="09:00:00")])
     m = Monday("tok", client=fake.client(), today=lambda: TODAY)
@@ -544,9 +559,14 @@ def test_monday_done_move_delete_and_add():
     m.set_due_date("1001", "2026-11-02")
     m.delete_task("1001")
     changes = fake.sent("change_column_value")
+    # Keeps its local time of day: 09:00 UTC today, shown in this computer's zone, on Nov 2 at that
+    # same local time, sent back in UTC. Where a clock change falls in between (New York: Nov 1),
+    # the UTC time differs by an hour; in UTC it stays 09:00.
+    was = datetime.fromisoformat(f"{TODAY.isoformat()}T09:00:00+00:00").astimezone()
+    moved = datetime.fromisoformat(f"2026-11-02T{was:%H:%M:%S}").astimezone().astimezone(timezone.utc)
     assert [(c["board"], c["item"], c["col"], json.loads(c["value"])) for c in changes] == [
         ("111", "1001", "status", {"index": 1}),                                  # the board's Done label
-        ("111", "1001", "date4", {"date": "2026-11-02", "time": "09:00:00"})]     # keeps its time
+        ("111", "1001", "date4", {"date": f"{moved:%Y-%m-%d}", "time": f"{moved:%H:%M:%S}"})]
     assert fake.sent("archive_item") == [{"item": "1001"}]                         # archived, not destroyed
     made = m.add_task("Book the room")
     create, = fake.sent("create_item")
