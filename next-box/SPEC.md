@@ -779,3 +779,27 @@ All of it is worked out in the browser while Next Box is open: no server timer, 
   `?`) can be turned off: Settings → General → One-key shortcuts (`keyboard_shortcuts`, default on), for speech input
   or keys pressed by accident (WCAG 2.1.4). Ctrl/⌘ shortcuts and Esc keep working.
 
+## 31. Status icon in the top bar
+`tray/nextbox_tray.py`: a filled square in the desktop's top bar (AyatanaAppIndicator3, else AppIndicator3, with
+GTK 3; GNOME shows it through the Ubuntu AppIndicators extension). Optional: `scripts/install-tray.sh` adds it
+(packages, the extension, `~/.config/autostart/nextbox-tray.desktop` through the `~/.local/share/nextbox/app` link,
+started now with a pid file in `~/.cache/nextbox-tray/`); `--remove` takes it away. `install.sh` only suggests it.
+- **Outside Next Box:** it runs on the system python3 (PyGObject) and never imports `nextbox`. It reads only
+  `.venv/bin/nextbox doctor --json`, `http://127.0.0.1:<port>/health`, `<NEXTBOX_PUBLIC_URL>/version` and
+  `systemctl --user is-active nextbox` / `systemctl is-active cloudflared`. No labels, no AI, no `.env`, no log.
+- **`nextbox doctor --json`:** the same checks as plain `nextbox doctor` (whose output doesn't change), as one object:
+  `{version, port, public_url, checks: [{mark: ok|bad|note, text, fix}], problems}`. Secrets only as "set"/"missing".
+- **When:** quick checks every 60 s (local page, service, and with a public address: `/version` within 8 s and
+  the tunnel's service); doctor at start, every 10 minutes, on Check now, and when the service goes down, comes
+  back or restarts. One worker thread does it all (never two doctor runs), handing results to GTK with `idle_add`.
+- **Colours** (`evaluate`, a pure function): red Offline = the service isn't active, or `/health` doesn't answer,
+  or the public `/version` failed two runs in a row (counted only while this computer is up). Yellow Online, needs
+  attention = doctor has a ✗, the public check failed once or took over 5 s, or cloudflared isn't active while the
+  address still answers, or doctor itself couldn't run. Green otherwise. No public address: only the checks on
+  this computer decide red or green. Grey while the first round runs.
+- **Menu:** "Next Box <version>: <headline>", one line per reason with its fix under it, Open Next Box (the public
+  address + `/app/`, else `http://localhost:<port>/app/`), Check now, Show details (`nextbox doctor` in a terminal,
+  until Enter), Quit status icon. A notification (notify-send, if there) only when it turns red or comes back.
+- **Updates:** each minute it compares its own file's time; after an update (that compiles) it starts itself again
+  with `os.execv`, so no logout is needed.
+

@@ -422,6 +422,31 @@ Linked apps' tasks are never kept there; they stay in that app. Back up the whol
 `DATABASE.md` is a step-by-step SQL course on the practice database. Queries on the real database
 are read-only, and password hashes and to-do app secrets are always hidden.
 
+## Status icon in the top bar
+A small square in the desktop's top bar shows how Next Box is doing:
+
+| Square | Means |
+|---|---|
+| Green | All good |
+| Yellow | Online, but something needs fixing (a missing key, a printer, a slow or blipped public address, the tunnel's service off) |
+| Red | Offline: the service has stopped, the page doesn't answer on this computer, or `NEXTBOX_PUBLIC_URL` didn't answer twice in a row |
+| Grey | Still checking (just after you log in) |
+
+Click it for what's wrong and the fix for each, **Open Next Box**, **Check now**, **Show details**
+(`nextbox doctor` in a terminal) and **Quit status icon**. You get a pop-up only when it turns red,
+and when it comes back. It checks every minute and runs `nextbox doctor` every 10 minutes. It never
+prints a label, never calls the AI and never shows anything from `.env`.
+
+```bash
+scripts/install-tray.sh            # add it (installs what it needs, starts it now and at every login)
+scripts/install-tray.sh --remove   # take it away
+```
+Updates reach it by themselves (it restarts itself on the new version).
+It moves with the app: run `scripts/install-tray.sh` on the new PC.
+Without a `NEXTBOX_PUBLIC_URL` (home network only), only the checks on this computer decide green
+or red. No square in the bar? Turn on **Ubuntu AppIndicators** in the Extensions app (the script
+tries to do it for you).
+
 ## Update to a new version
 A superadmin sees a banner in the web app when a newer version is published. To update, on the Next
 Box computer run:
