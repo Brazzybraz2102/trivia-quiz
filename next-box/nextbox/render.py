@@ -632,14 +632,15 @@ def stack_with_cuts(images: list[Image.Image]) -> Image.Image:
     """Preview of several stickers as they'll come out: one after another, with cut marks."""
     gap = 26
     h = sum(i.height for i in images) + gap * max(0, len(images) - 1)
-    out = Image.new("RGB", (WIDTH, max(h, 1)), "white")
+    width = max([WIDTH, *(i.width for i in images)])  # a 102 mm printer's labels are wider than WIDTH
+    out = Image.new("RGB", (width, max(h, 1)), "white")
     d = ImageDraw.Draw(out)
     y = 0
     for n, img in enumerate(images):
         out.paste(img, (0, y))
         y += img.height
         if n < len(images) - 1:
-            for x in range(0, WIDTH, 16):
+            for x in range(0, width, 16):
                 d.line((x, y + gap // 2, x + 8, y + gap // 2), fill=(160, 160, 160), width=2)
             y += gap
     return out

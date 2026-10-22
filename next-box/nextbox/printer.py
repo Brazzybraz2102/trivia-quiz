@@ -176,16 +176,100 @@ def tspl_bytes(img: Image.Image, dpi: int, label_height_mm: float = 0.0, gap_mm:
     return head + b"".join(rows) + b"\r\nPRINT 1,1\r\n"
 
 
+def brother_label(label_id: str):
+    """brother_ql's own spec for a label id: form factor, tape size in mm, printable dots."""
+    from brother_ql.labels import ALL_LABELS
+    return next((lab for lab in ALL_LABELS if lab.identifier == label_id), None)
+
+
+def die_cut_spec(cfg: PrinterConfig):
+    """brother_ql's spec when this printer has die-cut or round labels loaded, else None."""
+    if cfg.driver != "brother_ql":
+        return None
+    from brother_ql.labels import FormFactor
+    spec = brother_label(cfg.label)
+    return spec if spec and spec.form_factor in (FormFactor.DIE_CUT, FormFactor.ROUND_DIE_CUT) else None
+
+
+def _ink_box(img: Image.Image) -> tuple[int, int, int, int] | None:
+    """The box around everything that isn't (near) white, or None for a blank image."""
+    return img.convert("L").point(lambda p: 255 if p < 250 else 0).getbbox()
+
+
+def label_pages(img: Image.Image, cfg: PrinterConfig) -> list[Image.Image]:
+    """The labels a ticket comes out on. Continuous rolls and other printers: the ticket as it is.
+
+    A Brother die-cut label has one size, and brother_ql refuses an image of any other. So the
+    ticket is fitted to the label's width, then a short one is padded with white below it, and a
+    long one is split over several labels between rows of white (just below a row's dotted line
+    where there is one: paper._break_at), so a line of text or a checkbox is never cut in half.
+    A round label gets the whole ticket, shrunk and centred inside its circle."""
+    spec = die_cut_spec(cfg)
+    if spec is None:
+        return [img]
+    from brother_ql.labels import FormFactor
+
+    from .paper import _break_at
+    w, h = spec.dots_printable
+    work = img.convert("L" if img.mode in ("1", "L") else "RGB")
+
+    def page(piece: Image.Image | None, at: tuple[int, int] = (0, 0)) -> Image.Image:
+        out = Image.new(work.mode, (w, h), "white")
+        if piece is not None:
+            out.paste(piece, at)
+        return out.point(lambda p: 0 if p < 128 else 255, mode="1") if img.mode == "1" else out
+
+    box = _ink_box(work)
+    if spec.form_factor == FormFactor.ROUND_DIE_CUT:
+        if box is None:
+            return [page(None)]
+        work = work.crop(box)
+        side = int(min(w, h) / math.sqrt(2))  # the biggest square inside the circle
+        scale = min(1.0, side / work.width, side / work.height)
+        if scale < 1:
+            work = work.resize((max(1, round(work.width * scale)), max(1, round(work.height * scale))), Image.LANCZOS)
+        return [page(work, ((w - work.width) // 2, (h - work.height) // 2))]
+    if work.width != w:
+        work = work.resize((w, max(1, round(work.height * w / work.width))), Image.LANCZOS)
+        box = _ink_box(work)
+    if work.height > h:  # white below the last line doesn't need a label of its own
+        work = work.crop((0, 0, w, max(1, box[3]) if box else h))
+    if work.height <= h:
+        return [page(work)]
+    gray, pages, top = work.convert("L"), [], 0
+    while top < work.height:
+        end = _break_at(gray, top, h)
+        piece = work.crop((0, top, w, end))
+        if _ink_box(piece) is not None:
+            pages.append(page(piece))
+        top = end
+    return pages or [page(None)]
+
+
 def brother_bytes(img: Image.Image, cfg: PrinterConfig) -> bytes:
+    """One raster job. A die-cut roll gets one page per label (label_pages), so the printer feeds
+    to the next label (and cuts, if cutting is on) between them."""
     from brother_ql.conversion import convert
     from brother_ql.raster import BrotherQLRaster
 
     qlr = BrotherQLRaster(cfg.model)
     qlr.exception_on_warning = True
     red = cfg.ink == "black_red"
-    return convert(qlr=qlr, images=[img.convert("RGB")], label=cfg.label + ("red" if red and not cfg.label.endswith("red") else ""),
+    return convert(qlr=qlr, images=[p.convert("RGB") for p in label_pages(img, cfg)],
+                   label=cfg.label + ("red" if red and not cfg.label.endswith("red") else ""),
                    rotate="0", threshold=70.0, dither=False, compress=True, red=red, dpi_600=False,
                    hq=True, cut=cfg.cut)
+
+
+def trouble_hint(cfg: PrinterConfig) -> str:
+    """What else to check when a printer didn't take a job. A Brother QL whose roll doesn't match
+    its Label size stops with a flashing red light, and then doesn't answer until it's restarted.
+    Only names from BROTHER_LABELS are shown, never a typed value."""
+    if cfg.driver != "brother_ql":
+        return ""
+    name = next((n for i, n, _ in BROTHER_LABELS if i == cfg.label), "")
+    return (" If its light is flashing red, the label roll may not match the Label size in Admin → Printers"
+            + (f" (this printer: {name})" if name else "") + ". Switch it off and on to clear it.")
 
 
 def encode(img: Image.Image, cfg: PrinterConfig) -> bytes:

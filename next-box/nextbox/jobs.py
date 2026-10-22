@@ -209,7 +209,8 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
     with reading_font(bool(ctx.prefs.get("reading_mode"))):  # Easy-to-read text: the same font on the label
         drawn = draw(red)
     parts = [finalize(i, cfg.width_px, red=red) for i in (drawn if isinstance(drawn, list) else [drawn])]
-    img = parts[0] if len(parts) == 1 else stack_with_cuts([p.convert("RGB") for p in parts])
+    shown = [page for p in parts for page in printer.label_pages(p, cfg)]  # die-cut rolls: the real labels
+    img = shown[0] if len(shown) == 1 else stack_with_cuts([p.convert("RGB") for p in shown])
     record = {
         "id": label_id,
         "kind": kind,
@@ -245,7 +246,7 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
                   "error": type(exc).__name__,  # the kind of problem only: messages can hold addresses
                   "note": (f"{cfg.name} didn't answer"
                            + (f" after {sent_parts} of {len(parts)} stickers" if sent_parts else "")
-                           + ". Is it on? Tap Print on paper instead.")}
+                           + ". Is it on? Tap Print on paper instead." + printer.trouble_hint(cfg))}
         ctx.store.save_printed(failed, png=img, parts=keep)
         return {"status": "failed", **failed}
     if record["dry_run"] == bool(sent_parts):  # the printer module had the last word on dry runs

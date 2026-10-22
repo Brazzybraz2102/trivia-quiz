@@ -34,6 +34,7 @@ Each person's to-do app ↔ Brother QL-1110NWB label printer, running on Mike's 
 ## 2. Hardware
 - Brother QL-1110NWB on Wi-Fi, raw TCP port 9100.
 - 62 mm continuous tape (DK-22205), 696 px wide at 300 dpi. Labels are 1-bit and cut after each print.
+  Die-cut rolls (e.g. the 4x6 DK-1247, 1164 px wide) work too: see §14.
 
 ## 3. Print types
 | Type | CLI | API | Manifest |
@@ -153,6 +154,20 @@ Settings form.
 **How a ticket is printed:**
 - Tickets are drawn at 696 px, then `finalize()` fits them to each printer's dot width.
 - Two-color Brother rolls keep red pixels; everything else is 1-bit.
+- **Brother die-cut and round labels** (62 × 29, 102 × 152 "4x6", d24, ...) have one fixed size, and
+  brother_ql refuses an image of any other. `printer.label_pages` fits each ticket to the label's
+  printable dots from `brother_ql.labels` (never hardcoded): scaled to the label's width (aspect
+  kept); a short ticket is padded with white below it, content at the top; a long one is split over
+  several labels between rows of white (`paper._break_at`: just below a row's dotted line when there
+  is one), so a line of text or a checkbox is never cut in half, and white below the last line
+  never costs a label. A round label gets the whole ticket shrunk and centred inside its circle.
+  The labels go to `convert()` as one job, one page each, so the printer feeds (and cuts) between
+  them. The saved ticket image and the preview show the same labels, with cut marks between them.
+  Continuous rolls are byte-for-byte as before.
+- When a Brother printer doesn't take a job, the "didn't answer" note adds `printer.trouble_hint`:
+  a flashing red light usually means the roll doesn't match the Label size (it names the one set),
+  and switching the printer off and on clears it. Admin → Printers says where to find the roll:
+  the printer's own web page (Media Type) or the roll's sticker.
 - Every send goes through `_send_raster`, one job at a time.
 - Only the Brother path is hardware-tested. The others are tested at the byte level, plus a real
   TCP send and a stand-in `lp`.
