@@ -152,6 +152,26 @@ def _made(task: dict) -> dict:
 NO_PRINTER = "No label printer in your household yet. Tap Print on paper to print it on any printer."
 NO_PRINTER_ADMIN = ("No label printer in your household yet. Add one under Admin → Printers, "
                     "or tap Print on paper to print it on any printer.")
+# Next Box runs on one computer, so it can only reach printers on that home's network. A household
+# other than Home with no printer of its own prints from its own device for now (SPEC §19). The web
+# app shows the same words (app.js PRINT_AWAY); change both when remote printing arrives.
+PRINT_AWAY = ("In this test version, labels print straight to a printer only at the Next Box computer's home. "
+              "To print yours, tap Print on paper, or Save label image and open it in your label printer's app "
+              "(like Brother iPrint&Label).")
+
+
+def prints_here(household: str, printers: list) -> bool:
+    """Can this household's labels go straight to a label printer? Home always can (its messages stay
+    as they are); another household only once it has a printer of its own (one living at that house)."""
+    from .auth import DEFAULT_HOUSEHOLD
+    return household == DEFAULT_HOUSEHOLD or bool(printers)
+
+
+def _no_printer_note(ctx: Context) -> str:
+    """What a ticket says when no printer could take it (so the household has none at all)."""
+    if not prints_here(ctx.household, []):
+        return PRINT_AWAY
+    return NO_PRINTER_ADMIN if ctx.can_add_printer else NO_PRINTER
 # Always preview only, as the setup questions set it (prefs.print_with): say what to do next.
 PREVIEW_NOTES = {"paper": "You print on paper: tap Print on paper to print this on any printer.",
                  "none": "No printer yet, so this is a preview. Once you have one, Print on paper works with any printer."}
@@ -198,7 +218,7 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
         cfg = found or _fallback(ctx)
     no_printer = cfg is None
     if no_printer:  # nothing this person may print on: draw it at the usual size, as a preview
-        cfg, note, dry = legacy_config(ctx.settings), NO_PRINTER_ADMIN if ctx.can_add_printer else NO_PRINTER, True
+        cfg, note, dry = legacy_config(ctx.settings), _no_printer_note(ctx), True
     elif dry and not dry_run and not ctx.settings.dry_run:  # they asked for paper: say why it's a preview
         if ctx.printing_paused:
             note = "Printing is paused by an admin, so this is a preview."

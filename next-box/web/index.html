@@ -69,6 +69,8 @@
   #dryWhy:not(:empty)::before { content:"· "; }
   .paperrow select { padding:6px 8px; font-size:.875rem; }
   .paperrow a.go { display:inline-flex; background:var(--accent); color:var(--onAccent); border-radius:8px; padding:7px 12px; font-size:.875rem; }
+  .paperrow a.plain { padding:6px 11px; font-size:.875rem; }
+  .jticket .jtacts { display:flex; flex-wrap:wrap; gap:6px; }
   .pending { border-left:4px solid var(--warn); padding-left:10px; margin:10px 0; }
   .applied { color:var(--ok); }
   .hist .item { display:flex; justify-content:space-between; gap:8px; }
@@ -1135,8 +1137,10 @@
 
   <section id="admin">
     <div class="card"><h2>Printers</h2>
+      <p id="prAway" hidden></p>
       <div id="printerList" class="muted">…</div>
       <div id="prOut" aria-live="polite"></div>
+      <p class="muted" id="prSameNet" hidden>Only add a printer here if it's on the same network as the Next Box computer.</p>
       <details id="npForm" style="margin-top:10px"><summary><b id="npTitle">Add a printer</b></summary>
         <div class="field"><label for="npDriver">Kind of printer</label><select id="npDriver" style="max-width:100%"></select></div>
         <div class="field"><label for="npName">Name</label><input type="text" id="npName" maxlength="40" placeholder="Office, Kitchen, Red roll…"></div>

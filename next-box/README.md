@@ -74,6 +74,8 @@ link or code. It works once. Tick "their own household" if they should get their
 printers instead of joining yours. From the computer: `.venv/bin/nextbox invite --beta --note "Sam"`.
 People in other households can't print on your printer; they see previews until their household
 adds its own.
+For now, friends print from their own device: **Print on paper**, or **Save label image** for their label
+printer's app, since this computer can't reach a printer at their home.
 
 ### Move to PostgreSQL (recommended for learning databases)
 ```bash
@@ -331,6 +333,8 @@ Stickers keep their real label size in a grid with cut lines, so full-sheet stic
 5165 / L7167 or similar) becomes a sheet of stickers. Lists and cards print 3.5 inches wide and
 continue on the next page if they're long, breaking between tasks so each task stays with its box.
 Next Box never sends these to a printer itself: the person prints them.
+Next to it, **Save label image** downloads the label as a PNG (stickers: all of them in one tall
+image) to open in a label printer's own app, like Brother iPrint&Label. It never prints anything.
 
 ## The journal (the daily routine)
 Print today's label, stick it on the **left page** of a paper journal, work the list, and write
