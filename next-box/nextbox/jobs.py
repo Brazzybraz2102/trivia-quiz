@@ -209,6 +209,8 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
     with reading_font(bool(ctx.prefs.get("reading_mode"))):  # Easy-to-read text: the same font on the label
         drawn = draw(red)
     parts = [finalize(i, cfg.width_px, red=red) for i in (drawn if isinstance(drawn, list) else [drawn])]
+    for part in parts:  # a ticket split over die-cut labels prints its #code on every label
+        printer.with_code(part, label_id)
     shown = [page for p in parts for page in printer.label_pages(p, cfg)]  # die-cut rolls: the real labels
     img = shown[0] if len(shown) == 1 else stack_with_cuts([p.convert("RGB") for p in shown])
     record = {

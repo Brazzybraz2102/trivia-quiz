@@ -1,9 +1,11 @@
-"""Brother die-cut and round labels (DK-1247/DK-1241 4x6, 62 x 29 address labels, ...).
+"""Brother die-cut and round labels (the 4x6 DK-1241, 102 x 152 mm; 62 x 29 address labels, ...).
 
 brother_ql refuses a die-cut image that isn't exactly the label's printable size, and Next Box draws
-tickets of any height. So each ticket is fitted to the label: padded when it's short, split over
-several labels when it's long, shrunk into the circle on a round label. Everything here builds the
-raster bytes in memory; nothing is sent (the conftest fails any test that reaches the printer).
+tickets of any height. So each ticket is fitted to the label: padded when it's short, shrunk onto one
+label when it's a little too long, split over several labels (each saying "n/N  #code") when it's
+longer, shrunk into the circle on a round label. Everything here builds the raster bytes in memory;
+nothing is sent (the conftest fails any test that reaches the printer, and the tests that follow a
+send swap in a stand-in that only records it).
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import struct
 import pytest
 from brother_ql.labels import FormFactor
 from brother_ql.reader import chunker
+from conftest import FakeTodoist
 from PIL import Image, ImageDraw
 
 from nextbox import jobs, printer
@@ -31,15 +34,15 @@ def cfg_for(label: str, **kw) -> PrinterConfig:
                          width_px=WIDTHS.get(label, 696), model=model, label=label, **kw)
 
 
-def ticket(width: int, height: int, mode: str = "1") -> Image.Image:
+def ticket(width: int, height: int, mode: str = "1", rule: int = 1) -> Image.Image:
     """A stand-in ticket: blocks of "text" 30 rows tall with 20 white rows between them, and a full
-    width rule under every third block, like the dotted line under a list's rows."""
+    width rule (`rule` rows thick) under every third block, like the dotted line under a list's rows."""
     img = Image.new("L", (width, height), 255)
     d = ImageDraw.Draw(img)
     for n, y in enumerate(range(10, height - 40, 50)):
         d.rectangle((width // 10 + 4, y, width // 2, y + 29), fill=0)
         if n % 3 == 2:
-            d.line((0, y + 36, width - 1, y + 36), fill=0)
+            d.rectangle((0, y + 36, width - 1, y + 35 + rule), fill=0)
     return img.convert(mode) if mode != "L" else img
 
 
@@ -136,9 +139,10 @@ def test_a_long_ticket_splits_between_lines_never_through_one(label, mode):
     w, h = printer.brother_label(label).dots_printable
     img = ticket(w, h * 3 + 77, mode)
     whole = ink_runs(img)
-    pages = printer.label_pages(img, cfg_for(label))
+    pages = printer.label_pages(img, cfg_for(label), code="260928-DL28")
     assert len(pages) >= 3 and all(p.size == (w, h) for p in pages)
-    pieces = [run for p in pages for run in ink_runs(p)]
+    body = h - printer.stamp_height(w)  # below it, each label's "n/N  #code"
+    pieces = [run for p in pages for run in ink_runs(p.crop((0, 0, w, body)))]
     # Every block and rule of the ticket comes out whole, in order, on exactly one label.
     assert [rows for _, rows in pieces] == [rows for _, rows in whole]
 
@@ -190,6 +194,72 @@ def test_the_job_has_one_page_per_label():
     img = ticket(WIDTHS["62x29"], 1000)
     pages = printer.label_pages(img, cfg)
     assert len(decode(printer.brother_bytes(img, cfg))) == len(pages) >= 2
+
+
+# --- a split ticket: every label can be snapped and read back on its own ------------------------------
+def footer(page: Image.Image, side: str) -> Image.Image:
+    """The bottom strip a split ticket's label keeps for "n/N" (left half) and "#code" (right half)."""
+    w, h = page.size
+    top = h - printer.stamp_height(w)
+    return page.crop((0, top, w // 2, h) if side == "left" else (w // 2, top, w, h))
+
+
+def blank(img: Image.Image) -> bool:
+    return printer._ink_box(img) is None
+
+
+@pytest.mark.parametrize("label", [lab for lab in DIE_CUT if not lab.startswith("d")])
+def test_every_label_of_a_split_ticket_says_which_label_and_the_code(label):
+    w, h = printer.brother_label(label).dots_printable
+    img = printer.with_code(ticket(w, h * 3 + 77), "260928-DL28")
+    pages = printer.label_pages(img, cfg_for(label))  # the code comes with the image, as jobs sends it
+    assert len(pages) >= 3
+    plain = printer.label_pages(ticket(w, h * 3 + 77), cfg_for(label), code="")
+    other = printer.label_pages(img, cfg_for(label), code="261003-ZZ9Q")
+    for n, page in enumerate(pages):
+        assert not blank(footer(page, "left")) and not blank(footer(page, "right"))
+        # "#code" is the same on every label, and it's this ticket's code.
+        assert footer(page, "right").tobytes() == footer(pages[0], "right").tobytes()
+        assert footer(other[n], "right").tobytes() != footer(page, "right").tobytes()
+        # Without a code: only "n/N". The ticket itself is the same either way, above the footer.
+        assert blank(footer(plain[n], "right")) and not blank(footer(plain[n], "left"))
+        body = (0, 0, w, h - printer.stamp_height(w))
+        assert page.crop(body).tobytes() == plain[n].crop(body).tobytes()
+        # Nothing runs off the label: the stamp keeps clear of both edges.
+        left, _, right, bottom = printer._ink_box(page.crop((0, h - printer.stamp_height(w), w, h)))
+        assert left >= 2 and right <= w - 2 and bottom <= printer.stamp_height(w) - 2
+    # "1/N", "2/N", ...: each label's number is different.
+    assert len({footer(p, "left").tobytes() for p in pages}) == len(pages)
+
+
+def test_a_ticket_on_one_label_has_no_stamp():
+    w, h = printer.brother_label("102x152").dots_printable
+    for height in (h // 2, h, round(h * 1.2)):  # its own #code is on it already
+        img = ticket(w, height)
+        [page] = printer.label_pages(img, cfg_for("102x152"), code="260928-DL28")
+        assert page.tobytes() == printer.label_pages(img, cfg_for("102x152"), code="")[0].tobytes()
+
+
+@pytest.mark.parametrize("label", ["102x152", "62x29", "62x100", "17x54"])
+def test_a_ticket_a_little_too_long_is_shrunk_onto_one_label(label):
+    """As Print on paper does (paper.single_pages): up to 30% too long is shrunk, not split, so the
+    ticket stays whole, with its #code, on one label."""
+    w, h = printer.brother_label(label).dots_printable
+    img = ticket(w, round(h * 1.25), rule=2)  # tickets draw their lines 2 px or more
+    _, top, _, bottom = printer._ink_box(img)  # white below the last line isn't kept
+    assert h < bottom <= h * printer.SHRINK_ONTO_ONE
+    [page] = printer.label_pages(img, cfg_for(label), code="260928-DL28")
+    assert page.size == (w, h) and page.mode == "1"
+    left, ptop, right, pbottom = printer._ink_box(page)
+    assert h - 2 * 16 * w / 696 <= pbottom < h  # down to the bottom, less the ticket's own white edge
+    scale = pbottom / bottom
+    assert (ptop, pbottom - ptop) == pytest.approx((top * scale, (bottom - top) * scale), abs=4)  # aspect kept
+    assert abs((left + right) / 2 - w / 2) <= 3  # centred across the label
+    assert len(ink_runs(page)) == len(ink_runs(img))  # every line and rule, none cut or lost
+    longer = ticket(w, round(h * 1.5), rule=2)
+    assert printer._ink_box(longer)[3] > h * printer.SHRINK_ONTO_ONE
+    assert len(printer.label_pages(longer, cfg_for(label))) >= 2  # more than 30% too long: split
+    assert len(decode(printer.brother_bytes(img, cfg_for(label)))) == 1
 
 
 # --- continuous rolls: exactly the bytes they were before ------------------------------------------
@@ -272,6 +342,51 @@ def test_wide_stickers_preview_is_not_cropped(brother):
     c, _ = brother("102")
     r = jobs.print_stickers(c, task_ids=["1", "2"], dry_run=True)
     assert saved_image(c, r).width == 1164
+
+
+def busy_day(c, rows: int):
+    """`rows` tasks due today, all on the Today ticket."""
+    tasks = [{"id": str(n), "content": f"Task number {n} with some words", "priority": 1,
+              "due": {"date": "2026-09-28"}} for n in range(rows)]
+    todo = FakeTodoist(tasks)
+    return dataclasses.replace(c, tasks_factory=lambda: todo, prefs={**c.prefs, "max_rows": rows})
+
+
+def test_an_8_row_today_ticket_is_one_4x6_label_with_its_code(brother, monkeypatch):
+    """The checker's case: 8 rows drew 1771 rows, 4% too tall for a 4x6 label (1660), and came out on
+    two labels with the #code only on the second, so the label with the tick boxes couldn't be read back."""
+    c, _ = brother("102x152")
+    c = busy_day(c, 8)
+    drawn = []
+    real = printer.label_pages
+    monkeypatch.setattr(printer, "label_pages", lambda img, cfg, code=None: drawn.append(img.height) or real(img, cfg, code))
+    r = jobs.print_today(c, dry_run=True)
+    assert len(r["manifest"]) == 8
+    assert drawn and 1660 < drawn[0] <= 1660 * printer.SHRINK_ONTO_ONE
+    img = saved_image(c, r)
+    assert img.size == (1164, 1660)  # one label: the tick boxes and the #code together
+    assert printer._ink_box(img)[3] > 1600  # the ticket's last line (its code) is on it
+
+
+def test_every_label_of_a_split_ticket_has_its_code_in_the_preview_and_the_job(brother, monkeypatch):
+    c, cfg = brother("62x29")
+    c = busy_day(c, 8)
+    c.settings.dry_run = False
+    sent = []
+
+    def record(img, target):  # stands in for the printer: keeps the labels the job would print
+        sent.append(printer.label_pages(img, target))
+    monkeypatch.setattr(printer, "_send_raster", record)
+    r = jobs.print_today(c, dry_run=False)
+    assert r["status"] == "printed"
+    [labels] = sent
+    w, h = printer.brother_label("62x29").dots_printable
+    code = footer(printer.label_pages(ticket(w, h * 3), cfg, code=r["id"])[0], "right").tobytes()
+    assert len(labels) >= 4
+    assert all(footer(lab, "right").tobytes() == code for lab in labels)  # "#<this ticket's code>" on each
+    preview = saved_image(c, r).convert("1")
+    shown = [preview.crop((0, n * (h + 26), w, n * (h + 26) + h)) for n in range((preview.height + 26) // (h + 26))]
+    assert [p.tobytes() for p in shown] == [lab.tobytes() for lab in labels]  # the preview is what prints
 
 
 def test_a_brother_printer_that_did_not_answer_mentions_the_roll(brother, monkeypatch):

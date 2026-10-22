@@ -34,7 +34,8 @@ Each person's to-do app ↔ Brother QL-1110NWB label printer, running on Mike's 
 ## 2. Hardware
 - Brother QL-1110NWB on Wi-Fi, raw TCP port 9100.
 - 62 mm continuous tape (DK-22205), 696 px wide at 300 dpi. Labels are 1-bit and cut after each print.
-  Die-cut rolls (e.g. the 4x6 DK-1247, 1164 px wide) work too: see §14.
+  Die-cut rolls (e.g. the 4x6 DK-1241: 102 × 152 mm, 1164 px wide) work too: see §14. The DK-1247
+  (103 × 164 mm) is a different size that Next Box doesn't offer yet.
 
 ## 3. Print types
 | Type | CLI | API | Manifest |
@@ -157,10 +158,15 @@ Settings form.
 - **Brother die-cut and round labels** (62 × 29, 102 × 152 "4x6", d24, ...) have one fixed size, and
   brother_ql refuses an image of any other. `printer.label_pages` fits each ticket to the label's
   printable dots from `brother_ql.labels` (never hardcoded): scaled to the label's width (aspect
-  kept); a short ticket is padded with white below it, content at the top; a long one is split over
-  several labels between rows of white (`paper._break_at`: just below a row's dotted line when there
-  is one), so a line of text or a checkbox is never cut in half, and white below the last line
-  never costs a label. A round label gets the whole ticket shrunk and centred inside its circle.
+  kept); a short ticket is padded with white below it, content at the top; one up to 30% too long
+  (`SHRINK_ONTO_ONE`, as Print on paper does) is shrunk onto one label, centred, so its tick boxes
+  and its #code stay together (an 8-row Today ticket on 4x6). A longer one is split over several
+  labels between rows of white (`paper._break_at`: just below a row's dotted line when there is
+  one), so a line of text or a checkbox is never cut in half, and white below the last line never
+  costs a label. Each of those labels keeps a strip at its bottom edge for "n/N" (left) and the
+  ticket's "#code" (right), so any one label can be snapped and read back on its own: `jobs._finish`
+  tags each image with its code (`printer.with_code`), and it travels with the image to the preview
+  and the send. A round label gets the whole ticket shrunk and centred inside its circle.
   The labels go to `convert()` as one job, one page each, so the printer feeds (and cuts) between
   them. The saved ticket image and the preview show the same labels, with cut marks between them.
   Continuous rolls are byte-for-byte as before.

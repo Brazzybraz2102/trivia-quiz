@@ -183,8 +183,9 @@ scripts/hotkey.sh '<Super><Shift>t'             # then for real
   The sticker on the roll says it too. If the Label size doesn't match the roll, a Brother stops
   with a flashing red light and stops answering: switch it off and on, then fix the Label size.
   On die-cut labels (fixed-size labels like 4x6 or 62 × 29) a short ticket fills the top of one
-  label and a long one carries on onto the next labels, split between lines; the preview shows
-  the labels as they'll come out.
+  label, one a little too long is shrunk to fit, and a longer one carries on onto the next labels,
+  split between lines, each label marked "1/3", "2/3", ... with the ticket's #code, so you can snap
+  any of them. The preview shows the labels as they'll come out.
 - **Choosing colors (everyone):** **Settings → Printers & label colors** sets which color each
   kind of ticket uses: overdue, urgent, daily list, lists, single tasks, notes, new tasks.
   **Overdue tasks on their own ticket** splits today's list, so expired tasks come out on red.
