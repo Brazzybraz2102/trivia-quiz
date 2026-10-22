@@ -27,6 +27,11 @@ const OFFLINE = "Can't reach Next Box. Check your connection.";
 const BUSY = "Next Box didn't answer in time. Try again in a moment.";
 const errText = (e) => (e.status ? e.message : OFFLINE);  // a fetch that never got an answer has no status
 const png = (id) => `/printed/${encodeURIComponent(id)}/png`;  // a ticket never changes once made
+// Next Box can only reach printers at its own computer's home. A household with no printer of its own there
+// (server: prints_here false) prints from its own device for now. The same words as jobs.PRINT_AWAY.
+const PRINT_AWAY = "In this test version, labels print straight to a printer only at the Next Box computer's home. "
+  + "To print yours, tap Print on paper, or Save label image and open it in your label printer's app (like Brother iPrint&Label).";
+const printsHere = () => me?.prints_here !== false;  // Home, or a household with a printer: the messages as they always were
 const when = (ts) => ts ? new Date(ts * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "never";
 
 // A short message at the bottom. It stays long enough to read (4 s or more for longer ones), and it's
@@ -307,6 +312,7 @@ async function loadLabels() {
   for (const id of ["#defPrinterRow", "#ruleHead", "#colorRules"]) $(id).hidden = !ps.length;
   $("#printersLoaded").innerHTML = ps.length
     ? "Loaded right now: " + ps.map((p) => `${sw(p.stock_color)}${esc(p.name)} (${esc(p.stock_color)} labels${p.ink === "black_red" ? ", red ink" : ""})`).join(", ")
+    : !printsHere() ? PRINT_AWAY
     : "No label printers yet. Every ticket can still be printed on paper or previewed." + (me.role !== "user" ? " Add one under Admin → Printers." : "");
   if (!ps.length) return;
   // Your usual printer, and what happens when it was removed.
@@ -342,6 +348,7 @@ $("#defPrinter").onchange = async () => {
 };
 
 let printerStatus = {};  // printer id → answered (true/false), from the last check; null: couldn't check
+const printerAway = () => me?.role !== "superadmin" && me?.household_id !== "home";  // staff and Home see the card as always
 const labelName = (id) => printOpts.drivers.brother_ql?.labels?.find((l) => l.id === id)?.name || `${id} mm`;
 
 // The list shows straight away; whether each printer answers fills in when the (slower) check is back.
@@ -356,7 +363,11 @@ async function loadPrinters(check = true) {
     <div class="row">${sw(p.stock_color)}<select class="small" data-p="color" aria-label="Label color for ${esc(p.name)}">${printOpts.colors.map((c) => `<option ${c === p.stock_color ? "selected" : ""}>${c}</option>`).join("")}</select>
       <button class="plain small" data-p="edit">Edit</button>
       <button class="plain small" data-p="preview">Test (preview)</button><button class="plain small" data-p="print">Test print</button>
-      <button class="plain small" data-p="remove">Remove</button></div></div>`).join("") || "No printers yet. Add one below.";
+      <button class="plain small" data-p="remove">Remove</button></div></div>`).join("") || (printerAway() ? "No printers yet." : "No printers yet. Add one below.");
+  // A household admin outside Home: printers at their own home can't be reached from the Next Box computer.
+  $("#prAway").textContent = PRINT_AWAY;
+  $("#prAway").hidden = !printerAway() || ps.length > 0;
+  $("#prSameNet").hidden = !printerAway();
   showPrinterStatus();
   if (!$("#npDriver").options.length) {
     const bq = printOpts.drivers.brother_ql;
@@ -422,7 +433,7 @@ async function savePrinter() {
     await api(pid ? `/admin/printers/${encodeURIComponent(pid)}` : "/admin/printers", { method: pid ? "PATCH" : "POST", json: body });
     toast(pid ? "Printer saved" : "Printer added");
     resetPrinterForm(); if (pid) $("#npForm").open = false;
-    loadPrinters(); loadLabels();
+    loadPrinters(); loadLabels(); refreshStatus();
   } catch (e) { $("#npMsg").textContent = errText(e); }
 }
 $("#printerList").addEventListener("click", async (e) => {
@@ -437,6 +448,7 @@ $("#printerList").addEventListener("click", async (e) => {
       await api(`/admin/printers/${encodeURIComponent(pid)}`, { method: "DELETE" });
       toast(`Removed ${p.name}`);
       if ($("#npGo").dataset.pid === pid) { resetPrinterForm(); $("#npForm").open = false; }
+      refreshStatus();  // the header, and whether this household still prints here
     } else {
       const real = b.dataset.p === "print";
       if (real && !confirm(`Send a real test print to ${p.name}?`)) return;
@@ -654,7 +666,8 @@ async function refreshStatus() {
     const s = await api("/status");
     if (n !== refreshStatus.n) return;
     statusNow = s;
-    $("#status").textContent = !s.printer ? "Previews · print on paper"
+    if (me && typeof s.prints_here === "boolean") me.prints_here = s.prints_here;  // a printer was added or removed
+    $("#status").textContent = !s.printer ? (printsHere() ? "Previews · print on paper" : "Previews · print from your device")
       : `${s.printer} ${s.printer_reachable ? "online" : "offline"}${s.dry_run_forced ? " · preview only" : ""}`;
   } catch (e) { $("#status").textContent = `server: ${e.message}`; }
   applyDry();
@@ -663,6 +676,7 @@ async function refreshStatus() {
 // so nobody is asked "Send this to the printer?" for something that will only be a preview.
 function applyDry() {
   const why = statusNow?.printing_paused ? "Printing is paused by an admin."
+    : !printsHere() ? PRINT_AWAY
     : me?.prefs?.always_dry_run ? ({ paper: "You print on paper: make a preview, then tap Print on paper.",
                                     none: "No printer yet, so everything is a preview." }[me.prefs.print_with]
                                   || "Always preview only is on in Settings.")
@@ -3290,7 +3304,7 @@ $("#dry").addEventListener("change", () => { if (me && myListView() === "schedul
 // and where to change it later.
 const QUIZ = [
   { key: "print", q: "How will you print?", hint: "Pick the closest. You can change it any time.",
-    opts: [["label", "Label printer", "A Brother or other label printer"],
+    opts: [["label", "Label printer", () => (printsHere() ? "A Brother or other label printer" : "Save each label as an image for your label printer's app")],
            ["paper", "Regular printer", "Any home or office printer: you print previews on paper"],
            ["none", "No printer yet", "Use Next Box on screen and add a printer later"]],
     now: (p) => p.print_with || null },
@@ -3340,9 +3354,9 @@ function drawQuiz() {
       // shows the answer given, and a second run shows the setting as it is now).
       q.multi ? `<button type="button" class="quizopt" data-answer="${esc(v)}" aria-pressed="${on(v)}">
         <span class="tick" aria-hidden="true">${on(v) ? "✓" : ""}</span>
-        <span><b>${esc(name)}</b><span class="muted">${esc(sub)}</span></span></button>`
+        <span><b>${esc(name)}</b><span class="muted">${esc(val(sub))}</span></span></button>`
       : `<button type="button" class="quizopt${on(v) ? " chosen" : ""}" data-answer="${esc(v)}">
-        <span><b>${esc(name)}</b><span class="muted">${esc(sub)}</span></span>
+        <span><b>${esc(name)}</b><span class="muted">${esc(val(sub))}</span></span>
         ${on(v) ? `<span class="quiznow">Your answer</span>` : current === v && was === undefined ? `<span class="quiznow">Your setting now</span>` : ""}</button>`).join("")}</div>`;
   }
   $(".quiznav").hidden = false;
@@ -3459,7 +3473,7 @@ const PAPER_NAMES = { a5: "A5", half_letter: "half letter", letter: "letter", a4
 function quizSummary(c) {
   const out = [];
   if ("print_with" in c) {
-    out.push([{ label: "Printing on your label printer. “Preview only” starts ticked: untick it to really print.",
+    out.push([{ label: printsHere() ? "Printing on your label printer. “Preview only” starts ticked: untick it to really print." : PRINT_AWAY,
                 paper: "Printing on paper: make a preview, then tap Print on paper.",
                 none: "No printer yet: everything is a preview, so nothing prints by surprise." }[c.print_with], "Settings → Printing"]);
   }
@@ -3532,10 +3546,11 @@ const STEPS = {
          go: ["Link an app", () => goto("settings", "#appCard")], skip: true },
   calendar: { title: "Add your calendar (optional)", text: "Today's events show here and print at the top of your daily label. Google, Outlook and iCloud all work.",
               go: ["Add a calendar", () => goto("settings", "#calCard")], skip: true },
-  printer: { title: () => guide?.can_add_printer ? "Add your label printer" : "Your printer",
-             text: () => guide?.can_add_printer ? "Admin → Printers for a label printer. No label printer? Every ticket has Print on paper, which works with any printer."
-                                                : "No label printer? Every ticket has Print on paper, which works with any printer. A household admin can add a label printer later.",
-             go: () => guide?.can_add_printer ? ["Add printer", () => goto("admin", "#printerList")] : null, skip: true },
+  printer: { title: () => !printsHere() ? "Printing your labels" : guide?.can_add_printer ? "Add your label printer" : "Your printer",
+             text: () => !printsHere() ? PRINT_AWAY
+               : guide?.can_add_printer ? "Admin → Printers for a label printer. No label printer? Every ticket has Print on paper, which works with any printer."
+                                        : "No label printer? Every ticket has Print on paper, which works with any printer. A household admin can add a label printer later.",
+             go: () => printsHere() && guide?.can_add_printer ? ["Add printer", () => goto("admin", "#printerList")] : null, skip: true },
   preview: { title: "Make your first stickers", text: "Tick a task or two and tap Stickers. With “Preview only” on, nothing prints: you just see how it looks.",
              go: ["Show me", () => $(".printbar").scrollIntoView({ behavior: smooth(), block: "center" })] },
   today: { title: "Print today's label", text: "Today's tasks on one label, with the next tiny step under each. Tap Print today. With “Preview only” on, you just see it.",
@@ -3577,7 +3592,7 @@ function renderGuide() {
         ${isNext ? `<div class="muted">${esc(val(d.text))}</div>
           <div class="row">${go ? `<button class="go small" data-go>${esc(go[0])}</button>` : ""}
             ${d.mark ? `<button class="plain small" data-done>${esc(d.mark)}</button>` : ""}
-            ${d.skip ? `<button class="plain small" data-done>${s.key === "printer" && !guide.can_add_printer ? "OK" : "Skip for now"}</button>` : ""}</div>` : ""}
+            ${d.skip ? `<button class="plain small" data-done>${s.key === "printer" && (!guide.can_add_printer || !printsHere()) ? "OK" : "Skip for now"}</button>` : ""}</div>` : ""}
         ${skipped ? `<button class="linkish" data-undo>undo skip</button>` : ""}</div></div>`;
   }).join("");
 }
@@ -3728,8 +3743,9 @@ function ticketHtml(d) {
   return `<div class="jticket"><button type="button" data-jticket="${esc(t.id)}" aria-label="Open ${esc(what.toLowerCase())} #${esc(t.id)}">
       <img src="${png(t.id)}" alt="" loading="lazy"></button>
     <div><span class="muted">${esc(what)} #${esc(t.id)}${t.dry_run ? " (preview)" : ""}</span>
-      <a class="btnlink plain small" href="/printed/${encodeURIComponent(t.id)}/pdf?paper=${esc(size)}" target="_blank" rel="noopener"
-         aria-label="Print ticket #${esc(t.id)} on paper">Print on paper</a></div></div>`;
+      <span class="jtacts"><a class="btnlink plain small" href="/printed/${encodeURIComponent(t.id)}/pdf?paper=${esc(size)}" target="_blank" rel="noopener"
+         aria-label="Print ticket #${esc(t.id)} on paper">Print on paper</a>
+      ${saveImageLink(t.id, "btnlink plain small")}</span></div></div>`;
 }
 
 function fitText(t) { t.style.height = "auto"; t.style.height = (t.scrollHeight + 4) + "px"; }
@@ -4625,7 +4641,15 @@ function paperButton(id) {
   const size = me?.prefs?.paper_size || "letter";
   return `<div class="row paperrow"><a class="go small" style="text-decoration:none" data-paper-link href="/printed/${encodeURIComponent(id)}/pdf?paper=${size}" target="_blank" rel="noopener">Print on paper</a>
     <select data-paper aria-label="Paper size">${PAPERS.map(([v, n]) => `<option value="${v}"${v === size ? " selected" : ""}>${n}</option>`).join("")}</select>
+    ${saveImageLink(id, "plain small")}
     <span class="muted">Any printer: opens a page, then use your phone's or computer's Print.</span></div>`;
+}
+// Save label image: the ticket's picture as a file (stickers: all of them in one tall image), to open in a label
+// printer's own app (like Brother iPrint&Label) or print. Only a download: it never prints anything.
+function saveImageLink(id, cls) {
+  const name = `next-box-${id}.png`;
+  return `<a class="${cls}" data-save-png href="${png(id)}?download=1" download="${esc(name)}"
+    aria-label="Save ticket #${esc(id)} as an image">Save label image</a>`;
 }
 document.addEventListener("change", (e) => {
   if (!e.target.matches?.("select[data-paper]")) return;

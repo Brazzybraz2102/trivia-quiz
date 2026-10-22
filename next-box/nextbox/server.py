@@ -479,6 +479,11 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             return accounts.household_of(acting_as(caller)) or "home"
         return caller.household
 
+    def prints_here(household: str) -> bool:
+        """Labels go straight to a label printer: Home, or a household with a printer of its own. Anyone
+        else prints from their own device for now (jobs.PRINT_AWAY), and the app words things to match."""
+        return jobs.prints_here(household, registry.all(household))
+
     def rctx(caller: Caller) -> Context:
         s = server_settings.get()
         name = acting_as(caller)
@@ -688,6 +693,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return {"username": name, "role": user["role"], "beta": user["beta"], "debug": user["debug"],
                 "household_id": user["household_id"], "email": user.get("email"), "version": _version(),
                 "household": (accounts.household(user["household_id"]) or {}).get("name", ""),
+                "prints_here": prints_here(user["household_id"]),
                 "created": user.get("created"), "last_login": user.get("last_login"),
                 "protected": accounts.protected() == name,
                 "can_delete": accounts.removable(name),  # not the protected admin or the last superadmin
@@ -1014,6 +1020,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             "dry_run_forced": ctx.settings.dry_run or s["printing_paused"]
                               or bool(caller.prefs.get("always_dry_run")),
             "printing_paused": s["printing_paused"],
+            "prints_here": prints_here(household_of(caller)),
         }
 
     @app.get("/tasks")
@@ -1595,7 +1602,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return ctx.store.list_printed(limit, by=acting_as(caller), offset=offset, since=since)
 
     @app.get("/printed/{label_id}/png")
-    def printed_png(label_id: str, caller: Caller = Depends(auth)):
+    def printed_png(label_id: str, download: bool = False, caller: Caller = Depends(auth)):
+        """The ticket's picture (stickers: all of them in one tall image, with dashed cut lines between).
+        `download=1` is Save label image: the same picture as a file named after the ticket, to open in a
+        label printer's own app. Nothing is printed."""
         label_id = normalize_id(label_id)
         path = ctx.store.png_path(label_id)
         if not re.fullmatch(r"[A-Z0-9-]{4,16}", label_id) or not path.exists():
@@ -1604,7 +1614,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         # People see their own tickets; the superadmin sees everyone's (everyone agreed, see DATA_NOTICE).
         if not rec or (rec.get("by") != acting_as(caller) and caller.role != "superadmin"):
             raise HTTPException(404)
-        return FileResponse(path, media_type="image/png", headers=PRIVATE)
+        how = "attachment" if download else "inline"
+        return FileResponse(path, media_type="image/png",
+                            headers={"Content-Disposition": f'{how}; filename="next-box-{label_id}.png"', **PRIVATE})
 
     @app.get("/printed/{label_id}/pdf")
     def printed_pdf(label_id: str, paper: str = "", caller: Caller = Depends(auth)):

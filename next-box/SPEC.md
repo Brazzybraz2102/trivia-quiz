@@ -68,7 +68,7 @@ The API also takes `"dry_run": true` on every print endpoint.
 
 ## 5. Endpoints
 `GET /health` · `GET /status` · `GET /tasks?query=` · `POST /print/{today,list,task,text}` ·
-`GET /printed?limit=&offset=&since=` (`since`: local `YYYY-MM-DDTHH:MM[:SS]`) · `GET /printed/{id}/png` · `POST /scan` (multipart `photo`, optional `label_id`) ·
+`GET /printed?limit=&offset=&since=` (`since`: local `YYYY-MM-DDTHH:MM[:SS]`) · `GET /printed/{id}/png[?download=1]` · `POST /scan` (multipart `photo`, optional `label_id`) ·
 `GET /scans` · `GET /scan/{id}` · `POST /scan/{id}/confirm {decisions:{row:"confirm"|"skip"}}` ·
 `/app` (web app) · `/docs` (OpenAPI).
 
@@ -432,6 +432,15 @@ Endpoints: `GET /super/overview`, `GET /super/users`, `GET /super/users.csv`,
   only. Wrong codes count toward the same 5-tries-per-5-minutes lockout as sign-in.
 - **The .env printer is the Home household's.** People in other households get previews until
   their household adds a printer, so a tester can never print on Mike's printer by accident.
+- **Printing away from home (this test version).** Next Box runs on one computer, so it reaches only
+  printers on that home's network. `prints_here` (on `GET /auth/me` and `GET /status`) is true for Home,
+  and for any household with at least one printer (one living at that house); otherwise false. When it's
+  false, every printing message says the same thing, `jobs.PRINT_AWAY` (the app's `PRINT_AWAY` is a copy):
+  the ticket result's note, the Preview only line, Settings → Printers & label colors, the Get started
+  printer step, the setup questions' label-printer answer and the header ("Previews · print from your
+  device"). Household admins outside Home see it in Admin → Printers too, above the collapsed add-printer
+  form and "Only add a printer here if it's on the same network as the Next Box computer." Staff and Home
+  see the card as before. Who may add printers is unchanged (`_restricted`).
 - **Database server**: `scripts/setup-postgres.sh` installs PostgreSQL, makes a `nextbox` login
   and `nextbox` + `nextbox_practice` databases, copies the SQLite data (`nextbox db copy-to`, which
   refuses a non-empty target and resets id counters), and sets `DATABASE_URL`. New columns in
@@ -472,6 +481,12 @@ lines, as many pages as needed; any other ticket 3.5 in wide, split across pages
 at a blank line between lines of text (`paper._break_at`). Sticker
 images are kept per ticket in `tickets.parts` (a small zip of PNGs). Next Box never sends the PDF to
 a printer; the person prints it from their device.
+
+**Save label image**, next to every Print on paper (results, Printed, Journal): `GET /printed/{id}/png?download=1`,
+the same owner-or-superadmin rule and no-store headers, sent as `attachment; filename="next-box-<id>.png"` (without
+`download` it's `inline` with that filename). It's the ticket's stored picture: stickers are all of them in one
+tall image with dashed cut lines between (`render.stack_with_cuts`), tear-off strips are one image already. People
+open it in their label printer's own app (Brother iPrint&Label) or print it. It's a download only: nothing prints.
 
 ## 22. Your account (the round button, top right)
 Profile and email (`PATCH /auth/profile`; sign in with username or email), change password, signed-in

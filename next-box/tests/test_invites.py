@@ -117,7 +117,8 @@ def test_the_env_printer_is_only_for_home(site, tmp_path):
     c = dataclasses.replace(ctx, tasks_factory=lambda: mine, household=other, user="kim",
                             printers=Printers(ctx.settings.data_dir, ctx.settings))
     r = jobs.print_today(c)  # the no_real_printer fixture would fail this if it reached the printer
-    assert r["status"] == "dry_run" and r["note"] == jobs.NO_PRINTER
+    # A household away from the Next Box computer prints from its own device (test_print_at_home.py).
+    assert r["status"] == "dry_run" and r["note"] == jobs.PRINT_AWAY
 
 
 def test_cli_protect_owner_and_invite(site, monkeypatch, capsys):
