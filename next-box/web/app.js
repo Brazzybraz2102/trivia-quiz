@@ -4649,7 +4649,7 @@ function paperButton(id) {
 function saveImageLink(id, cls) {
   const name = `next-box-${id}.png`;
   return `<a class="${cls}" data-save-png href="${png(id)}?download=1" download="${esc(name)}"
-    aria-label="Save ticket #${esc(id)} as an image">Save label image</a>`;
+    aria-label="Save label image of ticket #${esc(id)}">Save label image</a>`;
 }
 document.addEventListener("change", (e) => {
   if (!e.target.matches?.("select[data-paper]")) return;

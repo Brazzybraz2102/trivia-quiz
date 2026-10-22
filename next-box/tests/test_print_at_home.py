@@ -225,6 +225,9 @@ def test_save_label_image_sits_next_to_every_print_on_paper():
     helper = helper[:helper.index("\n}\n")]
     assert '${png(id)}?download=1' in helper and 'download="${esc(name)}"' in helper and "next-box-${id}.png" in helper
     assert ">Save label image</a>" in helper
+    # Its spoken name starts with the visible words, so "click Save label image" works by voice (WCAG 2.5.3).
+    label = re.search(r'aria-label="([^"]*)"', helper)
+    assert label and label.group(1).startswith("Save label image"), helper
     assert "/print/" not in helper and "api(" not in helper and "onclick" not in helper  # a download, never a print
     # Shown for everyone, Home included: no household check around it.
     paper = js[js.index("function paperButton("):js.index("function saveImageLink(")]
