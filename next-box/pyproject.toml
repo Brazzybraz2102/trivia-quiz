@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nextbox"
-version = "0.14.7"
+version = "0.14.8"
 description = "Your to-do list on label printers and paper, with photo read-back and a private journal"
 requires-python = ">=3.10"
 dependencies = [
