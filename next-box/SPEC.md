@@ -50,7 +50,8 @@ Each person's to-do app ↔ Brother QL-1110NWB label printer, running on Mike's 
 The API also takes `"dry_run": true` on every print endpoint.
 
 ## 4. Label layout (today and list prints)
-- **Header:** the big day name and the date, then the legend `✓ done → move ✗ drop`.
+- **Header:** the big day name and the date, then the legend: the person's own marks (§32), which is
+  `✓ done → move ✗ drop` on Simple, everyone's default.
 - **Rows:** each row has a time column (a blank write-in line if the task has no time), the task
   text, and a checkbox on the right.
 - **Urgent tasks** (p1/p2) are bold with a leading `!`.
@@ -271,6 +272,7 @@ form asks people to leave personal details out, and a superadmin can hide any po
   times; default list filter.
 - **Read-back:** apply confident marks automatically, on or off; confidence needed (50–95%).
   Drops always wait for confirmation, whatever these say.
+- **How you mark your list:** a preset or their own symbols, meanings and actions (§32).
 - **Theme:** per device. **Feedback:** see §13.
 
 **Admin** (support):
@@ -309,17 +311,20 @@ tables. See §16.
 
 ## 8. Photo read-back (Phase 2)
 1. `POST /scan` with a photo. Claude vision (`NEXTBOX_VISION_MODEL`, default `claude-sonnet-5-5`)
-   returns structured output: the label code and, for each row, a mark (done, tomorrow, drop or
-   none) with a confidence score.
+   returns structured output: the label code and, for each row, a mark (done, tomorrow, drop, note or
+   none), which of the person's marks it was (`which`) and a confidence score. The prompt lists that
+   person's marks (§32); the person's mark decides what it does.
 2. The server finds the label by `label_id`, falling back to the code it read. If neither matches,
    nothing changes. With no code, the result offers the person's 5 latest tickets with tasks to pick
    from (`candidates`, today's daily label first; notes and other tickets without tasks are skipped,
    looking back up to 500 tickets), "We couldn't read the ticket code. Pick the ticket below." With no
    ticket with tasks at all it says so: "We saw ticked boxes, but…" only when a ✓ was read, else "We saw
    a to-do label, but…".
-3. Rows marked ✓ done or → tomorrow with confidence ≥ 0.7 are applied right away: `close`, or
-   `due_date` = tomorrow. It sets `due_date`, never `due_string`, so recurring rules survive.
-4. **Every ✗ drop and every row below 0.7** goes to `needs_confirmation`. The app shows
+3. Rows whose mark finishes the task (done, ✓ on Simple) or moves it (tomorrow, →) with confidence ≥ 0.7 are
+   applied right away: `close`, or `due_date` = tomorrow. It sets `due_date`, never `due_string`, so recurring
+   rules survive. A "note" mark changes nothing: the row is listed in `noted` with the person's symbol and words.
+4. **Every drop (✗ on Simple), every row below 0.7**, and every row whose `which` and mark disagree (or whose
+   action none of the person's marks has) goes to `needs_confirmation`. The app shows
    Confirm/Skip for each one, and `POST /scan/{id}/confirm` applies only rows still `pending`,
    so a double tap can't delete twice.
 5. Row numbers that aren't on the label are ignored and reported.
@@ -530,7 +535,7 @@ reads the published pyproject.toml at most every 6 hours).
 ## 23. Profile page and settings
 **Profile** tab (also from the account menu): name to show (`display_name` pref), email, password,
 signed-in devices, what the admin can see, download my data, delete my account. **Settings** has a
-jump bar (General, Tags, Focus, Calendars, Linked app, Label colors, Printing, Read-back, Help); General holds
+jump bar (General, Tags, Focus, Your marks, Calendars, Linked app, Label colors, Printing, Read-back, Help); General holds
 theme, text size (`text_size`), the screen it opens to (`start_tab`), 24-hour times, one-key
 shortcuts (`keyboard_shortcuts`, §30) and where new tasks go. The Jump to row sticks to the top, and
 whatever you Tab to in Settings scrolls clear of it (`--jumpH`, its height as it wraps with big text).
@@ -843,3 +848,33 @@ started now with a pid file in `~/.cache/nextbox-tray/`); `--remove` takes it aw
 - **Updates:** each minute it compares its own file's time; after an update (that compiles) it starts itself again
   with `os.execv`, so no logout is needed.
 
+## 32. How you mark your list (mark styles)
+`nextbox/marks.py`. Settings → **How you mark your list** (`mark_style`): one of the presets below, or `custom`, the
+person's own `marks` (up to 8; `marks_from` is the preset it started from, for "Start again from …"). Everyone,
+existing people included, is on `simple`, exactly as Next Box always printed and read. Picking a preset keeps their own
+list, so "Your own" brings it back; changing a preset's marks makes them their own.
+- **Presets** (`marks.PRESETS`, each with a 2-3 sentence "how to use it" shown in Settings and the guide):
+  Simple (✓ done, → move, ✗ drop, a line through counts as ✗), Bullet journal (× done, > migrate = tomorrow,
+  / started = note, a line through = drop), Paper planner (✓ done, → forwarded, X deleted, • in progress and
+  D delegated = note), Fill the box (● done, ◐ half done = note, → move, ✗ drop).
+- **A mark** is `{symbol, meaning, action}`: `symbol` 1-3 characters the label font can draw (`render.can_draw`
+  checks each one in DejaVu, so nothing prints as an empty box), `meaning` their own words (one line, 60 at most),
+  `action` done | tomorrow | drop | note. `look: "strike"` is a line struck through the task: alone (no symbol), or as
+  well as the symbol. Symbols are used once (case, and look-alikes written by hand like ✗ × X, count as the same),
+  one strike at most, and at least one mark finishes the task. `PATCH /settings` says what's wrong by mark
+  ("Mark 2: the label can't print “⭐”. Pick another symbol."), shown next to that mark. The event log says only how
+  many marks there are.
+- **Labels** print the person's legend (`render.draw_legend`): each symbol and its meaning, the meanings shortened
+  to fit, on two lines at most, never past the edge; a strike mark is its words with a line through them. Simple's
+  legend is pixel-identical to before (tests/golden). The daily, journal and list labels and one-task tickets have
+  it (stickers, strips and Just one thing have no legend); HA's auto print uses the owner's marks.
+- **Snap** (`scan.build_prompt`): the prompt lists the marks by number with what each looks like, the mark to report
+  and, in quotes, their meaning (one line, control characters removed, 60 at most: a hint, never an instruction).
+  An empty box is "none"; anything else is the closest mark below 0.5 confidence, as before. The scan keeps the
+  marks it was read with (`marks`), so changing them later never changes what an earlier photo meant. A "note" row
+  shows "Row 2: ◐ half done: <task>. Noted, nothing changed."; applied and waiting rows say which mark it was in
+  their words (not on Simple). Drops always wait for Confirm. The marks go to Anthropic only with a photo the person
+  sent (TERMS_VERSION 5; privacy.html says so). Handwriting never goes into notes.
+- `GET /settings/marks`: presets, actions, the symbols Settings offers (✓ ✗ → > < × • ○ ● ◐ ★ ! ? – /, and letters
+  can be typed) and the person's marks now. `GET /settings/marks/legend.png?style=|marks=` draws the legend as the
+  daily label prints it (in Easy-to-read text when that's on) for the previews; nothing prints.

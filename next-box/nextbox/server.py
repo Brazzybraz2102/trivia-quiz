@@ -31,7 +31,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import coach as coaching
-from . import jobs, printer, quiz, scan, upkeep
+from . import jobs, printer, quiz, render, scan, upkeep
+from . import marks as mark_styles
 from .auth import PREF_HINTS, ROLES, Accounts, AuthError, default_prefs, rank
 from .config import PROJECT_DIR, app_version
 from .connections import Builder, Connections, NotConnected
@@ -306,11 +307,12 @@ class SignupBody(BaseModel):
     agree: bool = False  # the Terms of Use and Privacy Policy
 
 
-TERMS_VERSION = 4  # bump when terms.html or privacy.html change in a way people should re-read
+TERMS_VERSION = 5  # bump when terms.html or privacy.html change in a way people should re-read
 #   2: the Privacy Policy covers the Journal (photos and handwriting kept, private to you) and says
 #      Claude (Anthropic) reads your handwriting as well as your marks.
 #   3: with Journal mode off, a photo with handwriting (notes or a win) is still kept as a journal page.
 #   4: it says what the AI helpers (Break it down, Look back on my week) send, only when tapped.
+#   5: Snap also sends the marks you use (each symbol, its action and your words for what it means).
 DB_NAMES = {"sqlite": "SQLite", "postgresql": "PostgreSQL"}  # for the About page
 
 
@@ -956,8 +958,38 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             prefs = accounts.set_prefs(caller.name, changes)
         except AuthError as exc:
             raise HTTPException(400, str(exc))
-        events.log(caller.name, "settings", detail={"changed": changes})
+        # Which marks they use is said by count only: what each one means to them stays in Settings.
+        logged = {k: (f"{len(v)} marks" if k == "marks" and isinstance(v, list) else v) for k, v in changes.items()}
+        events.log(caller.name, "settings", detail={"changed": logged})
         return prefs
+
+    @app.get("/settings/marks")
+    def get_mark_styles(caller: Caller = Depends(person)):
+        """The ways of marking a list (presets with how to use them, the actions, the symbols to pick
+        from) and the marks this person uses now."""
+        return {**mark_styles.public(), "style": caller.prefs.get("mark_style", mark_styles.DEFAULT_STYLE),
+                "marks": mark_styles.effective(caller.prefs)}
+
+    @app.get("/settings/marks/legend.png")
+    def mark_legend(style: str = "", marks: str = Query("", max_length=4000), caller: Caller = Depends(person)):
+        """The legend as the daily label prints it, for Settings' preview: a preset's (`style`) or a list
+        being edited (`marks`, as JSON). Drawn in the Easy-to-read font when that's on. Nothing prints."""
+        import io as _io
+        if marks:
+            try:
+                given = json.loads(marks)
+            except ValueError:
+                raise HTTPException(400, "That isn't a list of marks.") from None
+            bad = mark_styles.problem(given)
+            if bad:
+                raise HTTPException(400, bad)
+        else:
+            given = mark_styles.effective({"mark_style": style} if style else caller.prefs)
+        with render.reading_font(bool(caller.prefs.get("reading_mode"))):
+            img = render.legend_image(given)
+        out = _io.BytesIO()
+        img.convert("L").save(out, "PNG")
+        return Response(out.getvalue(), media_type="image/png", headers=PRIVATE)
 
     # ------------------------------------------------------------- feedback (anonymous)
     def optional_person(request: Request) -> Caller | None:
@@ -1669,8 +1701,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(415, str(exc)) from exc
         except ValueError as exc:  # something the person can fix: an empty list, a bad date
             raise HTTPException(400, str(exc)) from exc
-        fn = vision or scan.claude_vision(ctx.settings)
-        rec = run(caller, "scan", scan.scan_photo, rctx(caller), fn, data, media_type, label_id or None)
+        c = rctx(caller)
+        fn = vision or scan.claude_vision(ctx.settings, mark_styles.effective(c.prefs))  # their own marks
+        rec = run(caller, "scan", scan.scan_photo, c, fn, data, media_type, label_id or None)
         return _scan_reply(caller, rec)
 
     def _scan_reply(caller: Caller, rec: dict) -> dict:
@@ -1732,8 +1765,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(409, "That photo wasn't kept, so snap it again.")
         if not scan_window.allow(caller.name):
             raise HTTPException(429, "That's a lot of photos this hour. Try again in a bit.")
-        fn = vision or scan.claude_vision(ctx.settings)
-        return _scan_reply(caller, run(caller, "scan_retry", scan.retry, rctx(caller), fn, scan_id, image))
+        c = rctx(caller)
+        fn = vision or scan.claude_vision(ctx.settings, mark_styles.effective(c.prefs))
+        return _scan_reply(caller, run(caller, "scan_retry", scan.retry, c, fn, scan_id, image))
 
     @app.post("/scan/{scan_id}/undo")
     def undo_scan(scan_id: str, body: UndoBody, caller: Caller = Depends(person)):

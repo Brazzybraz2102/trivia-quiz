@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta
 
 from PIL import Image
 
+from . import marks as mark_styles
 from . import printer
 from .auth import default_prefs
 from .config import Settings
@@ -356,7 +357,8 @@ def _task_label(ctx: Context, *, kind: str, title: str, subtitle: str, tasks: li
         return render_day(title, subtitle, rows, code=label_id, footer=footer, waiting=waiting_names,
                           accent=accent, waiting_head=head,
                           win=footer_win, schedule=schedule,
-                          journal=kind == "today" and extras and bool(ctx.prefs.get("journal_mode", True)))
+                          journal=kind == "today" and extras and bool(ctx.prefs.get("journal_mode", True)),
+                          marks=mark_styles.effective(ctx.prefs))
     result = _finish(ctx, reason=reason, kind=kind, title=title, draw=draw, label_id=label_id,
                      manifest=manifest, source=source, dry_run=dry_run)
     if calendar_note:
@@ -587,7 +589,8 @@ def print_filter(ctx: Context, query: str, title: str | None = None,
 
 def print_task(ctx: Context, task_id: str, dry_run: bool | None = None, source: str = "manual",
                reason: str | None = None) -> dict:
-    """One task on its own ticket, with a numbered box and the ✓ → ✗ legend so it can be read back."""
+    """One task on its own ticket, with a numbered box and the person's legend (✓ → ✗ unless they chose
+    other marks) so it can be read back."""
     if not str(task_id or "").strip():
         raise ValueError("Pick a task from your list first.")
     task = ctx.tasks.get_task(task_id)
@@ -612,7 +615,7 @@ def print_task(ctx: Context, task_id: str, dry_run: bool | None = None, source: 
     def draw(accent: bool) -> Image.Image:
         return render_label("NEW TASK" if reason == "new_task" else "TASK", subtitle,
                             rows=[Row(1, text, meta=tag)], body=body, code=label_id,
-                            accent_subtitle=accent and late)
+                            accent_subtitle=accent and late, marks=mark_styles.effective(ctx.prefs))
     return _finish(ctx, reason=reason, kind="task", title=task["content"], draw=draw, label_id=label_id,
                    manifest=manifest, source=source, dry_run=dry_run)
 

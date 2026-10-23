@@ -198,6 +198,8 @@ function clearPerson() {
   forgetListExtras();
   todayCal = null; viewPick = "";
   conn = null; printOpts = null; update = null; editing = null; suRows = []; suPicked = new Set(); suOpen = null;
+  markDraft = null; $("#markRows").innerHTML = ""; $("#markUndoRow").hidden = true; $("#markPreview").hidden = true; delete $("#markPreview").dataset.want;  // their marks
+  $("#snapMarks").textContent = "✓ done, → move, ✗ drop";
   $("#lookOut").innerHTML = ""; $("#lookNotes").checked = false; lookText = ""; lookPrivacy();  // the AI helpers
   routineForget(); timerForget(); remindForget(); quickRoute = null; shareForget();  // FE: the card, timer, reminders, a share
   markTab("mylist");
@@ -249,6 +251,7 @@ async function boot() {
   for (const id of ["#peopleCard", "#addCard"]) $(id).hidden = me.role === "superadmin";
   $$("#nuRole option[data-min]").forEach((o) => o.disabled = RANK[me.role] < RANK[o.dataset.min]);
   loadPrefs(me.prefs);
+  loadMarkInfo();  // the Snap hint and Settings → How you mark your list
   refreshStatus();
   loadConnection();
   loadLabels();
@@ -261,9 +264,10 @@ async function boot() {
   if (!me.consented || me.terms_ok === false) {  // new, or the notice or Terms changed since they agreed
     $("#noticeBody").textContent = me.data_notice;
     $("#noticeChanged").hidden = !me.notice_changed;
-    // What's new in the Privacy Policy (TERMS_VERSION 3 and 4), when that's what changed.
+    // What's new in the Privacy Policy (TERMS_VERSION 3, 4 and 5), when that's what changed.
     $("#noticeChanged").textContent = "This changed since you last agreed. " + (me.terms_ok === false
-      ? "The Privacy Policy now says just what the AI helpers (Break it down and Look back on my week) send to Anthropic, and that they only do it when you tap them. "
+      ? "The Privacy Policy now says that Snap also sends the marks you use (each symbol and your own words for what it means) with your photo, so it can read them. "
+        + "It says just what the AI helpers (Break it down and Look back on my week) send to Anthropic, and that they only do it when you tap them. "
         + "It also says that with Journal mode off, a photo with handwriting on it is still kept as that day's journal page. " : "")
       + "Have a quick look before you carry on.";
     $("#noticeMsg").textContent = "";
@@ -638,7 +642,7 @@ $("#logout").onclick = () => signOut();
 // ---------------------------------------------------------------- tabs
 const loaders = { mylist: () => { loadList(); loadToday(); loadGuide(); loadRoutine(); }, printed: () => loadHistory(), profile: () => loadProfile(),
                   print: () => loadPrintTab(),
-                  settings: () => { loadLabels(); loadTags(); loadCalendars(); }, admin: () => { if (me.role !== "superadmin") loadAdmin(); loadPrinters(); loadInvites(); },
+                  settings: () => { loadLabels(); loadTags(); loadCalendars(); loadMarkInfo(); }, admin: () => { if (me.role !== "superadmin") loadAdmin(); loadPrinters(); loadInvites(); },
                   debug: loadDebug, board: () => loadBoard(), usage: () => loadUsage(), journal: () => loadJournal() };
 function markTab(tab) {  // which screen shows, without loading anything
   $$("#topnav button").forEach((x) => { x.classList.toggle("on", x.dataset.tab === tab); x.toggleAttribute("aria-current", x.dataset.tab === tab); if (x.dataset.tab === tab) x.setAttribute("aria-current", "page"); });
@@ -808,7 +812,7 @@ $("#filterTags").onclick = (e) => {
 };
 
 // ---------------------------------------------------------------- read back
-const VERB = { drop: "Delete", done: "Complete", tomorrow: "Move to tomorrow" };
+const VERB = { drop: "Delete", done: "Complete", tomorrow: "Move to tomorrow", note: "Noted" };
 const MARK_STATUS = { applied: "Done ✓", skipped: "Skipped", error: "Couldn't apply", undone: "Undone", already: "Already done",
                       applying: "Working on it…", undoing: "Undoing…" };
 const scanNotes = {};  // notes read from a photo, shown with it here (they're kept only in your journal)
@@ -823,6 +827,10 @@ function ignoredLine(i) {
            "read before": `Already read from this ticket: ${what}`,
            "deleted since printed": `${i.content} was deleted after this ticket printed, so nothing changed` }[i.reason] || `Row ${i.row}: ${i.reason}`;
 }
+
+// Which of their marks a row had, in their words ("× done"): not for the simple marks, which say what the verb says.
+const SIMPLE_MARKS = "✓done|→move|✗drop";
+const ownWords = (rec, x) => (rec.marks && rec.marks.map((m) => m.symbol + m.meaning).join("|") !== SIMPLE_MARKS && markWords(x)) || "";
 
 function scanCard(rec) {
   if (rec.notes !== undefined) scanNotes[rec.id] = { notes: rec.notes, win: rec.win || "" };
@@ -848,26 +856,29 @@ function scanCard(rec) {
         <div class="row"><input type="text" data-code-input aria-label="Ticket code" autocapitalize="characters" spellcheck="false" placeholder="e.g. 260930-P9AM or P9AM" style="max-width:240px">
         <button class="plain" data-code-go>Use this code</button></div></details>`;
   }
+  const said = (x) => ownWords(rec, x) ? `<span class="muted"> · ${esc(ownWords(rec, x))}</span>` : "";
   rec.applied.forEach((a) => h += a.status === "undone"
     ? `<p class="muted">Undone: ${esc(VERB[a.mark])} ${esc(a.content)}</p>`
-    : `<div class="done-row"><span class="applied">✓ ${esc(VERB[a.mark])}: ${esc(a.content)}</span>${a.status === "undoing" ? `<span class="muted">Undoing…</span>`
+    : `<div class="done-row"><span class="applied">✓ ${esc(VERB[a.mark])}: ${esc(a.content)}${said(a)}</span>${a.status === "undoing" ? `<span class="muted">Undoing…</span>`
         : `<button class="linkish" data-undo="${a.row}" aria-label="Undo: ${esc(VERB[a.mark])} ${esc(a.content)}">Undo</button>`}</div>`);
   rec.needs_confirmation.filter((p) => p.status !== "pending").forEach((p) => h += p.status === "applied" && p.mark !== "drop"
-    ? `<div class="done-row"><span class="applied">✓ ${esc(VERB[p.mark])}: ${esc(p.content)}</span><button class="linkish" data-undo="${p.row}" aria-label="Undo: ${esc(VERB[p.mark])} ${esc(p.content)}">Undo</button></div>`
+    ? `<div class="done-row"><span class="applied">✓ ${esc(VERB[p.mark])}: ${esc(p.content)}${said(p)}</span><button class="linkish" data-undo="${p.row}" aria-label="Undo: ${esc(VERB[p.mark])} ${esc(p.content)}">Undo</button></div>`
     : p.reason === "deleted since printed" ? `<p class="muted">${esc(ignoredLine(p))}</p>`
     : `<p class="${p.status === "error" ? "err" : "muted"}">${esc(p.reason === "already moved" ? "Already moved" : MARK_STATUS[p.status] || p.status)}: ${esc(VERB[p.mark])} ${esc(p.content)}${p.status === "error" && p.error ? ` (${esc(p.error)})` : ""}</p>`);
   pend.forEach((p) => h += `<div class="pending"><b>${esc(VERB[p.mark])}?</b> ${esc(p.content)}
-      <div class="muted">row ${p.row} · ${Math.round(p.confidence * 100)}% sure${p.note ? " · " + esc(p.note) : ""}</div>
+      <div class="muted">row ${p.row}${ownWords(rec, p) ? ` · you marked ${esc(ownWords(rec, p))}` : ""} · ${Math.round(p.confidence * 100)}% sure${p.note ? " · " + esc(p.note) : ""}</div>
       ${conflict ? "" : `<div class="row"><button class="go ${p.mark === "drop" ? "warn" : ""}" data-row="${p.row}" data-d="confirm" aria-label="Confirm: ${esc(VERB[p.mark])} ${esc(p.content)}">Confirm</button>
       <button class="plain" data-row="${p.row}" data-d="skip" aria-label="Skip ${esc(p.content)}">Skip</button></div>`}</div>`);
   if (pend.length > 1 && !conflict) h += `<div class="row"><button class="linkish" data-skip-all>Skip all ${pend.length}</button></div>`;
+  // A "just note it" mark (started, waiting on someone): what it means to them, and that nothing changed.
+  (rec.noted || []).forEach((n) => h += `<p class="noted">Row ${n.row}: <span class="mk">${esc(markWords(n) || "a mark")}</span>: ${esc(n.content)}. Noted, nothing changed.</p>`);
   (rec.ignored || []).forEach((i) => h += `<p class="ignored">${esc(ignoredLine(i))}</p>`);
   if (rec.message) h += `<p class="applied">${esc(rec.message)}</p>`;
   if (kept.win) h += `<p class="jwin"><b>Your win:</b> ${esc(kept.win)}</p>`;
   if (kept.notes) h += `<h3>Your notes</h3><p style="white-space:pre-wrap">${esc(kept.notes)}</p>
       <div class="row"><button class="plain small" data-lines>Add lines to my list</button></div>`;
   if (rec.journal_id) h += `<p class="muted">Saved to your journal. <button class="linkish" data-go-tab="journal">Open Journal</button></p>`;
-  if (!rec.applied.length && !rec.needs_confirmation.length && !rec.errors.length && !rec.journal_id && !(rec.ignored || []).length) h += `<p class="muted">No marks found.</p>`;
+  if (!rec.applied.length && !rec.needs_confirmation.length && !(rec.noted || []).length && !rec.errors.length && !rec.journal_id && !(rec.ignored || []).length) h += `<p class="muted">No marks found.</p>`;
   return h + `<p class="err" data-msg role="alert"></p></div>`;
 }
 
@@ -944,7 +955,8 @@ async function loadRecent() {
   $("#scanRecentList").innerHTML = recs.map((r) => {
     const applied = r.applied.filter((a) => a.status !== "undone").length + r.needs_confirmation.filter((p) => p.status === "applied").length;
     const bits = [r.label_id ? `ticket #${r.label_id}` : "no ticket", `${applied} applied`,
-                  waitingIn(r).length ? `${waitingIn(r).length} waiting` : "", r.status === "failed" ? "couldn't read it" : ""].filter(Boolean);
+                  waitingIn(r).length ? `${waitingIn(r).length} waiting` : "", (r.noted || []).length ? `${r.noted.length} noted` : "",
+                  r.status === "failed" ? "couldn't read it" : ""].filter(Boolean);
     return `<button class="recent" data-open-scan="${esc(r.id)}"><b>${esc(shortTime(r.created_at))}</b><span class="muted">${esc(bits.join(" · "))}</span></button>`;
   }).join("");
 }
@@ -1089,6 +1101,7 @@ function loadPrefs(prefs) {
   const q = $("#query");
   if (!q.value || q.value === loadPrefs.lastFilter) q.value = prefs.default_filter || "";
   loadPrefs.lastFilter = prefs.default_filter || "";
+  markSync();
 }
 
 // A typed setting that wasn't saved: say why next to it, in red, and keep what they typed.
@@ -1140,6 +1153,294 @@ async function savePref(el, k, v, typed) {
   } finally { prefPending--; }
 }
 $("[data-pref=confidence]").oninput = (e) => confText(e.target.value);
+
+// ---------------------------------------------------------------- how you mark your list (marks.py, SPEC §32)
+// A style is a preset or "custom": their own list. Changing a preset's marks makes them their own. Each change
+// saves through the settings queue above (one save at a time). A list that isn't right yet isn't sent: why shows
+// next to that mark, as the server's answers do ("Mark 2: …"). A mark just added waits until it's filled in.
+let markInfo = null, markDraft = null, markSent = [];
+const MARK_ALIKE = [["✗", "✘", "×", "x", "X"], ["✓", "✔", "√"], ["→", "->", "➔", "➜"]];  // the same, written by hand
+const SYMBOL_NAMES = { "✓": "check mark", "✗": "cross", "→": "arrow", ">": "greater-than sign", "<": "less-than sign",
+  "×": "times sign", "•": "dot", "○": "circle", "●": "filled circle", "◐": "half-filled circle", "★": "star",
+  "!": "exclamation mark", "?": "question mark", "–": "dash", "/": "slash" };
+const MARK_NEW = "Pick a symbol and say what it means. It saves when both are filled in.";
+const presetOf = (id) => markInfo?.presets.find((p) => p.id === id);
+const copyMarks = (list) => (list || []).map(({ symbol, meaning, action, look }) => ({ symbol, meaning, action, ...(look ? { look } : {}) }));
+// The marks they use now (marks.effective): their preset's, or their own list.
+function marksFor(prefs) {
+  const style = prefs?.mark_style || "simple";
+  if (style === "custom" && prefs.marks?.length) return copyMarks(prefs.marks);
+  return copyMarks((presetOf(style) || presetOf("simple"))?.marks);
+}
+// "✓ done", or "line through: drop" for a line struck through the task
+const markWords = (m) => m.symbol ? `${m.symbol} ${m.meaning}` : m.look ? `line through: ${m.meaning}` : "";
+const legendWords = (list) => list.map(markWords).join(", ");
+const legendSrc = (list) => `/settings/marks/legend.png?marks=${encodeURIComponent(JSON.stringify(list))}`;
+
+async function loadMarkInfo() {
+  if (!markInfo) {
+    try { markInfo = await api("/settings/marks"); } catch { return; }
+    markStylesDraw();
+  }
+  markSync();
+}
+
+function markStylesDraw() {
+  const own = { id: "custom", name: "Your own", blurb: "" };
+  $("#markStyles").innerHTML = `<legend class="sr-only">How you mark your list</legend>` + [...markInfo.presets, own].map((p) => {
+    const id = esc(p.id);
+    return `<label class="markstyle"><input type="radio" name="markStyle" value="${id}" aria-labelledby="msn-${id}" aria-describedby="msb-${id} msp-${id}">
+      <span class="msbody"><b id="msn-${id}">${esc(p.name)}</b><span class="muted" id="msb-${id}">${esc(p.blurb)}</span>
+        <span class="sr-only" id="msp-${id}">${p.marks ? esc(`Prints ${legendWords(p.marks)}.`) : ""}</span>
+        <img class="legendprev" alt="" ${p.marks ? `src="${legendSrc(p.marks)}"` : "hidden"}></span></label>`;
+  }).join("");
+  $("#markStyles input[value=custom]").closest("label").querySelector("img").onerror = (e) => { e.target.hidden = true; };
+}
+
+// Settings (and the Snap tab's hint) as the saved settings say. The mark rows are drawn again only when
+// nothing is being changed in them (a style picked, Start again, or the first time).
+function markSync() {
+  if (!markInfo || !me) return;
+  const prefs = me.prefs, style = prefs.mark_style || "simple", own = prefs.marks?.length ? copyMarks(prefs.marks) : null;
+  $("#snapMarks").textContent = legendWords(marksFor(prefs));
+  $$("#markStyles input").forEach((r) => { r.checked = r.value === style; });
+  const ownCard = $("#markStyles input[value=custom]")?.closest("label");  // "Your own": their list, if they have one
+  if (ownCard) {
+    const img = ownCard.querySelector("img");
+    img.hidden = !own;
+    if (own) img.src = legendSrc(own);
+    ownCard.querySelector(".muted").textContent = own ? "Your own marks, with your words for each." : "Change any mark below and it becomes your own.";
+    ownCard.querySelector(".sr-only").textContent = own ? `Prints ${legendWords(own)}.` : "";
+  }
+  const from = presetOf(prefs.marks_from) || presetOf("simple");
+  $("#markReset").hidden = style !== "custom";
+  $("#markReset").textContent = `Start again from ${from.name}`;
+  $("#markNote").textContent = style === "custom" ? "These are your own. Each change saves as you make it."
+    : `${presetOf(style)?.name || "Simple"}'s marks. Change any of them and they become your own`
+      + (own ? ", in place of your own ones saved before." : ".");
+  if (!markDraft) markRowsDraw();
+  else markPreview(markReady());
+}
+
+const markReady = () => markDraft.filter((m) => !m._new);
+
+// The legend as it prints. The new picture takes the old one's place only once it has loaded, so a list the
+// server refuses (a symbol the label can't print) leaves the last good preview showing.
+function markPreview(list) {
+  if (!list || markProblem(list)) return;
+  const url = legendSrc(list), shown = $("#markPreview");
+  if (shown.dataset.want === url) return;
+  shown.dataset.want = url;
+  const next = new Image();
+  next.onload = () => {
+    const now = $("#markPreview");
+    if (now.dataset.want !== url) return;  // a newer change is on its way
+    Object.assign(next, { id: "markPreview", className: "legendprev", alt: `Your labels print: ${legendWords(list)}` });
+    next.dataset.want = url;
+    now.replaceWith(next);
+  };
+  next.src = url;
+}
+
+function markRowsDraw(focusSel) {
+  if (!markDraft) markDraft = marksFor(me.prefs);
+  const acts = markInfo.actions;
+  $("#markRows").innerHTML = markDraft.map((m, i) => `<div class="markrow" role="group" aria-labelledby="mName${i}" data-i="${i}">
+      <span class="sr-only" id="mName${i}">Mark ${i + 1}</span>
+      <div class="msym"><label for="mSym${i}">Symbol</label>
+        <div class="msymrow"><input type="text" id="mSym${i}" data-f="symbol" value="${esc(m.symbol)}" maxlength="${markInfo.max_symbol}"
+            autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="mLook${i} mErr${i}">
+          <button type="button" class="plain small" data-pick="${i}" aria-expanded="false" aria-controls="mPick${i}">Pick<span class="sr-only"> a symbol for mark ${i + 1}</span></button></div></div>
+      <div class="mmean"><label for="mMean${i}">What it means to you</label>
+        <input type="text" id="mMean${i}" data-f="meaning" value="${esc(m.meaning)}" maxlength="${markInfo.max_meaning}" aria-describedby="mErr${i}"></div>
+      <div class="mact"><label for="mAct${i}">What Next Box does</label>
+        <select id="mAct${i}" data-f="action" aria-describedby="mErr${i}">${acts.map((a) =>
+          `<option value="${esc(a.id)}"${a.id === m.action ? " selected" : ""}>${esc(a.name)}</option>`).join("")}</select></div>
+      <button type="button" class="plain small mrm" data-rm="${i}">Remove<span class="sr-only"> mark ${i + 1}</span></button>
+      <p class="muted mlook" id="mLook${i}">${m.look ? (m.symbol ? "Or a line through the task." : "A line through the task.") : ""}</p>
+      <div class="mpick" id="mPick${i}" role="group" aria-label="Symbols for mark ${i + 1}" hidden>
+        ${markInfo.picker.map((sym) => `<button type="button" data-sym="${esc(sym)}" aria-label="${esc(SYMBOL_NAMES[sym] || sym)}">${esc(sym)}</button>`).join("")}
+        <button type="button" class="mstrike" data-strike aria-pressed="${m.look ? "true" : "false"}">A line through the task</button>
+        <p class="muted mpicknote">Or type your own in the box, like a letter: D for delegated.</p></div>
+      <p class="muted mhint" id="mHint${i}">${m._new ? MARK_NEW : ""}</p>
+      <p class="err merr" id="mErr${i}" role="alert"></p>
+    </div>`).join("");
+  $("#markAdd").disabled = markDraft.length >= markInfo.max_marks;
+  markPreview(markReady());
+  if (focusSel) $(focusSel)?.focus();
+}
+
+// What's wrong with a list, as marks.problem says it (the server also checks the label can print each symbol).
+// `at` maps a mark's place in the list to its row on screen.
+function markProblem(list, at = (n) => n) {
+  if (!list.length) return { msg: "Add at least one mark." };
+  if (list.length > markInfo.max_marks) return { msg: `Keep it to ${markInfo.max_marks} marks or fewer.` };
+  const seen = new Map();
+  let struck = 0;
+  for (const [n, m] of list.entries()) {
+    const row = at(n), say = (field, words) => ({ row, field, msg: `Mark ${row + 1}: ${words}` });
+    const sym = m.symbol || "", mean = m.meaning || "";
+    if (!sym && !m.look) return say("symbol", "pick a symbol.");
+    if (/\s/.test(sym)) return say("symbol", "type the symbol without spaces around it.");
+    if ([...sym].length > markInfo.max_symbol) return say("symbol", `a symbol is 1 to ${markInfo.max_symbol} characters.`);
+    if (!mean.trim()) return say("meaning", "say what it means to you.");
+    if ([...mean].length > markInfo.max_meaning) return say("meaning", `keep what it means to ${markInfo.max_meaning} characters or fewer.`);
+    if (!m.action) return say("action", "pick what Next Box does.");
+    if (m.look) struck++;
+    if (sym) {
+      const group = MARK_ALIKE.find((g) => g.includes(sym)), key = group ? group[0] : sym.toLowerCase();
+      if (seen.has(key)) {
+        const first = seen.get(key);
+        return { row, field: "symbol", msg: first.toLowerCase() === sym.toLowerCase() ? `“${sym}” is in the list twice. Use each symbol once.`
+          : `“${first}” and “${sym}” look the same when you write them. Change one of them.` };
+      }
+      seen.set(key, sym);
+    }
+  }
+  if (struck > 1) return { msg: "Only one mark can be a line through the task." };
+  if (!list.some((m) => m.action === "done")) return { msg: "One mark needs to finish the task: pick “Finish it” for it." };
+  return null;
+}
+
+const MARK_FIELD = { symbol: "mSym", meaning: "mMean", action: "mAct" };
+function markShowErr(bad) {
+  $$("#markRows .merr").forEach((p) => { p.textContent = ""; });
+  $$("#markRows [aria-invalid]").forEach((el) => el.removeAttribute("aria-invalid"));
+  $("#markMsg").textContent = "";
+  if (!bad) return;
+  const box = bad.row !== undefined && $(`#mErr${bad.row}`);
+  if (box) {
+    box.textContent = bad.msg;
+    $(`#${MARK_FIELD[bad.field] || "mSym"}${bad.row}`)?.setAttribute("aria-invalid", "true");
+  } else $("#markMsg").textContent = bad.msg;
+}
+
+// The server said no ("Mark 2: the label can't print “⭐”…"): next to that mark, numbered as on screen.
+function markServerErr(msg) {
+  const named = /^Mark (\d+): (.*)$/.exec(msg);
+  if (named) {
+    const row = markSent[Number(named[1]) - 1] ?? Number(named[1]) - 1;
+    const field = /means/.test(named[2]) ? "meaning" : /Next Box does/.test(named[2]) ? "action" : "symbol";
+    return markShowErr({ row, field, msg: `Mark ${row + 1}: ${named[2]}` });
+  }
+  const sym = /“([^”]+)” (?:is in the list twice|look the same)/.exec(msg.replace(/^“[^”]+” and /, ""))?.[1];
+  const row = sym && markDraft ? markDraft.map((m) => m.symbol).lastIndexOf(sym) : -1;
+  markShowErr(row >= 0 ? { row, field: "symbol", msg } : { msg });
+}
+
+function saveMarks(changes, after) {
+  prefPending++;
+  return (prefQueue = prefQueue.then(async () => {
+    const newest = () => prefPending === 1;
+    try {
+      const prefs = await api("/settings", { method: "PATCH", json: changes });
+      if (me) me.prefs = prefs;
+      if (newest()) loadPrefs(prefs); else markSync();
+      after?.();
+      toast("Saved");
+    } catch (e) {
+      if (e.status) markServerErr(errText(e)); else markShowErr({ msg: `${errText(e)} Change it again to try again.` });
+      if (newest() && me) loadPrefs(me.prefs);
+    } finally { prefPending--; }
+  }));
+}
+
+// A change to one mark: checked here first, then saved as their own list (the style becomes "custom").
+function markCommit() {
+  $("#markUndoRow").hidden = true;  // a new change: "Back to …'s marks. Undo" no longer fits
+  const ready = markReady(), at = markDraft.map((m, j) => (m._new ? -1 : j)).filter((j) => j >= 0);
+  markDraft.forEach((m, j) => { const h = $(`#mHint${j}`); if (h) h.textContent = m._new ? MARK_NEW : ""; });
+  const bad = markProblem(ready, (n) => at[n]);
+  markShowErr(bad);
+  if (bad) return;
+  markPreview(ready);
+  markSent = at;
+  const style = me.prefs.mark_style || "simple";
+  saveMarks({ mark_style: "custom", marks: ready, marks_from: style === "custom" ? (me.prefs.marks_from || "simple") : style });
+}
+
+function markEdit(i, field, value) {
+  const m = markDraft[i];
+  if (!m) return;
+  if (field === "look") { if (value) m.look = value; else delete m.look; }
+  else m[field] = field === "action" ? value : value.normalize("NFC").trim();
+  if (m._new && (m.symbol || m.look) && m.meaning && m.action) delete m._new;
+  const look = $(`#mLook${i}`);
+  if (look) look.textContent = m.look ? (m.symbol ? "Or a line through the task." : "A line through the task.") : "";
+  markCommit();
+}
+
+$("#markStyles").onchange = (e) => {
+  const v = e.target.value;
+  if (!v || !me) return;
+  markDraft = null;
+  $("#markUndoRow").hidden = true;
+  if (v !== "custom") return saveMarks({ mark_style: v });
+  if (me.prefs.marks?.length) return saveMarks({ mark_style: "custom" });
+  saveMarks({ mark_style: "custom", marks: marksFor(me.prefs), marks_from: me.prefs.mark_style || "simple" });
+};
+$("#markRows").addEventListener("change", (e) => {
+  const el = e.target.closest("[data-f]"), row = e.target.closest(".markrow");
+  if (!el || !row || !markDraft) return;
+  markEdit(Number(row.dataset.i), el.dataset.f, el.value);
+  if (el.dataset.f !== "action") el.value = markDraft[Number(row.dataset.i)]?.[el.dataset.f] ?? el.value;  // as saved: trimmed
+});
+$("#markRows").addEventListener("click", (e) => {
+  const row = e.target.closest(".markrow");
+  if (!row || !markDraft) return;
+  const i = Number(row.dataset.i), pick = $(`#mPick${i}`), opener = row.querySelector("[data-pick]");
+  const close = () => { pick.hidden = true; opener.setAttribute("aria-expanded", "false"); };
+  if (e.target.closest("[data-pick]")) {
+    pick.hidden = !pick.hidden;
+    opener.setAttribute("aria-expanded", String(!pick.hidden));
+    if (!pick.hidden) pick.querySelector("button").focus();
+  } else if (e.target.closest("[data-sym]")) {
+    const sym = e.target.closest("[data-sym]").dataset.sym;
+    $(`#mSym${i}`).value = sym;
+    close();
+    $(`#mSym${i}`).focus();
+    markEdit(i, "symbol", sym);
+  } else if (e.target.closest("[data-strike]")) {
+    const b = e.target.closest("[data-strike]"), on = b.getAttribute("aria-pressed") !== "true";
+    b.setAttribute("aria-pressed", String(on));
+    markEdit(i, "look", on ? "strike" : "");
+  } else if (e.target.closest("[data-rm]")) {
+    const gone = markDraft.splice(i, 1)[0];
+    markRowsDraw(markDraft.length ? `#mSym${Math.min(i, markDraft.length - 1)}` : "#markAdd");
+    if (!gone._new) markCommit();
+  }
+});
+$("#markRows").addEventListener("keydown", (e) => {  // Esc closes the symbols, back on their Pick button
+  const pick = e.target.closest(".mpick");
+  if (e.key !== "Escape" || !pick || pick.hidden) return;
+  e.preventDefault(); e.stopPropagation();
+  pick.hidden = true;
+  const opener = pick.closest(".markrow").querySelector("[data-pick]");
+  opener.setAttribute("aria-expanded", "false");
+  opener.focus();
+});
+$("#markAdd").onclick = () => {
+  if (!markInfo || !me) return;
+  markDraft = markDraft || marksFor(me.prefs);
+  if (markDraft.length >= markInfo.max_marks) return;
+  markDraft.push({ symbol: "", meaning: "", action: "note", _new: true });
+  markRowsDraw(`#mSym${markDraft.length - 1}`);
+};
+$("#markReset").onclick = () => {
+  const from = presetOf(me.prefs.marks_from) || presetOf("simple"), before = { marks: copyMarks(me.prefs.marks), marks_from: from.id };
+  markDraft = null;
+  saveMarks({ mark_style: from.id, marks: copyMarks(from.marks), marks_from: from.id }, () => {
+    // Their own list is gone now: Undo, right here (the Undo message at the bottom belongs to My list).
+    $("#markUndoText").textContent = `Back to ${from.name}'s marks.`;
+    $("#markUndoRow").hidden = false;
+    $("#markUndo").focus();
+    $("#markUndo").onclick = () => {
+      $("#markUndoRow").hidden = true;
+      markDraft = null;
+      saveMarks({ mark_style: "custom", ...before }, () => $("#markStyles input[value=custom]")?.focus());
+    };
+  });
+};
 
 $("#pwForm").onsubmit = async (e) => {
   e.preventDefault();

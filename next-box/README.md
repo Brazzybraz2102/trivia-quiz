@@ -393,6 +393,7 @@ Closing the loop:
 | A note | `nextbox text "Call Sam back"` |
 | Clipboard → to-do app + ticket | your hotkey |
 | Read back | Mark ✓ done, → tomorrow or ✗ drop, then web app → Snap → Take a photo → Read back. Deletes and anything uncertain wait for Confirm/Skip. CLI: `nextbox scan photo.jpg`, then `nextbox confirm <scan-id>` |
+| Mark it your way | Settings → How you mark your list: Simple, Bullet journal, Paper planner, Fill the box, or your own symbols with your own words (labels print them, Snap reads them) |
 | Notes → tasks | Snap result or a journal page → Add lines to my list → tick → Add |
 | Add one task with a day, tags and steps | My list → + Add task (Brain dump shows what it understood as you type) |
 | Not today | → on the task (or Just one thing → Tomorrow). Undo is in the message |

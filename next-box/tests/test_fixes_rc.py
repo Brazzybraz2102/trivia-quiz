@@ -106,7 +106,7 @@ def test_list_says_whether_the_person_ever_had_a_task(site, js):
 # ------------------------------------------------------------------ R-C16: the AI disclosure comes first, and says it all
 def test_terms_version_went_up_for_the_ai_text(site):
     a, anon, login = site
-    assert server.TERMS_VERSION == 4
+    assert server.TERMS_VERSION == 5  # 5: Snap also sends the marks you use (test_mark_styles.py)
     a.record_consent("sam", server.DATA_NOTICE_VERSION, terms=3)  # agreed before the AI paragraph
     sam = login("sam", "sam password")
     me = sam.get("/auth/me").json()
