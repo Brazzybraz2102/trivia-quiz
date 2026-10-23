@@ -692,10 +692,16 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         user = accounts.get(name)
         s = server_settings.get()
         consent = user.get("consent") or {}
+        printers = registry.all(user["household_id"])
         return {"username": name, "role": user["role"], "beta": user["beta"], "debug": user["debug"],
                 "household_id": user["household_id"], "email": user.get("email"), "version": _version(),
                 "household": (accounts.household(user["household_id"]) or {}).get("name", ""),
-                "prints_here": prints_here(user["household_id"]),
+                "prints_here": jobs.prints_here(user["household_id"], printers),
+                # The same printing flags as GET /status, so the app's Preview only box is right as soon as
+                # this answers, before /status (which waits up to 2 s on whether the printer is online).
+                "printers": len(printers),
+                "dry_run_forced": ctx.settings.dry_run or s["printing_paused"]
+                                  or bool(user["prefs"].get("always_dry_run")),
                 "created": user.get("created"), "last_login": user.get("last_login"),
                 "protected": accounts.protected() == name,
                 "can_delete": accounts.removable(name),  # not the protected admin or the last superadmin
@@ -1053,6 +1059,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                               or bool(caller.prefs.get("always_dry_run")),
             "printing_paused": s["printing_paused"],
             "prints_here": prints_here(household_of(caller)),
+            # How many printers this household has (0: "No printer added"), and whether this person can
+            # add one in Admin → Printers. Who may add printers is unchanged: admins and staff.
+            "printers": len(everyone),
+            "can_add_printer": rank(caller.role) >= rank("admin"),
         }
 
     @app.get("/tasks")
@@ -1194,6 +1204,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                  for k in SETUP_STEPS]
         return {"steps": steps, "hidden": bool(caller.prefs.get("setup_hidden")),
                 "can_add_printer": rank(caller.role) >= rank("admin"),
+                "printers": len(registry.all(caller.household)),  # 0: the printer step says "No printer added."
                 "all_done": all(s["done"] for s in steps)}
 
     @app.post("/setup/{step}/{action}")

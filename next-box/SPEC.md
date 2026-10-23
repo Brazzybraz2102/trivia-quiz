@@ -201,6 +201,39 @@ to their usual printer with a note.
 separate "Overdue" ticket. One auto print can therefore produce two tickets; it's still one
 guarded auto print.
 
+**Printing or a preview (the app's "Preview only" box):** printing is the default. The box starts
+unticked on every device and for every person (no `checked` in index.html, no tick in `loadPrefs`;
+signing in, or signing in as someone else, starts from unticked). `applyDry()` ticks and locks it,
+with the reason next to it, whenever a real print can't happen anyway:
+- printing paused by an admin;
+- a household outside Home with no printer (`PRINT_AWAY`, §19);
+- the person's own **Always preview only** (Settings → Printing): "Always preview only is on in Settings."
+  (the ticket's note says the same, `jobs.ALWAYS_PREVIEW_NOTE`);
+- `NEXTBOX_DRY_RUN=1` (a superadmin is told how to leave it);
+- **no printer in the household** (`GET /status` `printer` null, `printers` 0): "No printer added: print
+  previews on paper.", plus " Add one in Admin → Printers." for admins and staff (`can_add_printer`).
+
+`GET /auth/me` carries the same flags as `GET /status` (`printing_paused`, `prints_here`, `dry_run_forced`,
+`printers`), so the box is ticked and locked from the moment someone signs in or the page loads; `/status`,
+which waits up to 2 s on whether the printer is online, is the newer source once it answers. There's no
+moment where the box is unticked and a print would only be a preview.
+
+When the reason goes away (a printer is added, the setting is turned off) the box is unticked again; a tick
+the person made themselves stays. A real print always asks "Send this to the printer?" first, on every
+print button. Nothing about this prints by itself.
+
+**No printer added:** with no printer in a household that prints here (Home), the header says "No printer
+added · print on paper" (a household outside Home keeps "Previews · print from your device"), and Settings
+→ Printers & label colors says **No printer added.** with the next step: "Add one in Admin → Printers." and
+an **Add a printer** button (admins and staff), or "Ask your Next Box admin to add one." (everyone else).
+Outside Home the next step is `PRINT_AWAY`, once. Your usual printer and the color rules are hidden until
+there's a printer. The Get started printer step (`GET /setup` `printers`) and a ticket's note (`jobs.NO_PRINTER`,
+`NO_PRINTER_ADMIN`) say the same.
+
+The setup questions never turn on Always preview only (§29). They used to, for "Regular printer" and "No
+printer yet", so `upkeep.preview_default` (startup, once: `_upkeep:preview-default-v1`) turns it off for
+everyone whose `always_dry_run` is on with `print_with` paper or none. Anyone else's own choice stays.
+
 ## 15. Admin visibility (everyone agreed)
 - **The notice:** at first sign-in everyone sees `DATA_NOTICE` and taps "I understand". It's
   recorded as `consent: {version, at}`. Bump `DATA_NOTICE_VERSION` if what's visible changes.
@@ -742,8 +775,8 @@ ClickUp and Trello are listed under Settings → Linked app → Other apps as "n
 ## 29. FC: setup questions, Easy-to-read text and Same words every time
 - **Setup questions** (`nextbox/quiz.py`, `POST /setup/quiz`): after the data notice, a new account (no tasks of its
   own, no tickets, no linked app, `setup_quiz_done` off; `GET /auth/me` says `setup_quiz`) gets five one-question
-  screens with big buttons: how you'll print (label printer / regular printer / no printer yet → `print_with`,
-  `always_dry_run`), a paper journal (A5 / half letter / letter / A4 / no → `paper_size`, `journal_mode`), how many tasks
+  screens with big buttons: how you'll print (label printer / regular printer / no printer yet → `print_with`;
+  a label printer also turns `always_dry_run` off; none of the answers turns it on, §14), a paper journal (A5 / half letter / letter / A4 / no → `paper_size`, `journal_mode`), how many tasks
   a day (3 / 5 / 8 → `max_rows`), what helps (any of: short lists and gentle words → `gentle_words`; easy-to-read text →
   `reading_mode`; same routine every day → `routine_mode`; or "just the basics", which turns all three off) and when you
   plan and look back (`routine_morning`, `routine_evening`, default 08:00 and 18:00). Any question, or the rest, can be
@@ -753,8 +786,10 @@ ClickUp and Trello are listed under Settings → Linked app → Other apps as "n
   many tasks or what helps ticks that step; a regular printer or no printer puts the printer step away.
 - **What helps is never kept as such.** Only the ordinary settings it changes are saved (anyone can switch them in
   Settings); the event log records which settings changed, never the answers.
-- **Paper hints**: with `print_with` paper or none, the Preview box and each preview's note say what to do next
-  ("tap Print on paper") instead of "Always preview only is on".
+- **Printing is the default** (§14): a regular printer or no printer yet doesn't make everything a preview. With no
+  printer in the household every ticket is a preview anyway, and the Preview only line says "No printer added".
+  Always preview only is only ever the person's own switch, so its note always says "Always preview only is on in
+  Settings". The last screen's printing line says a real print asks "Send this to the printer?" first.
 - **Easy-to-read text** (`reading_mode`, Settings → General): Atkinson Hyperlegible (SIL OFL; `web/fonts/` with
   OFL.txt), line height 1.6, letter spacing .03em, no all-capitals headers, bigger and darker small print, in light and
   dark. The Help, Privacy, Terms and About pages follow it, and Text size, on that device (§24). Labels drawn for that person use the same font (`render.reading_font`, set in `jobs._finish`), take the symbols

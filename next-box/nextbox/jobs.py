@@ -150,9 +150,10 @@ def _made(task: dict) -> dict:
     return {"created": task["created"]} if str(task.get("id")).startswith("nb:") and task.get("created") else {}
 
 
-NO_PRINTER = "No label printer in your household yet. Tap Print on paper to print it on any printer."
-NO_PRINTER_ADMIN = ("No label printer in your household yet. Add one under Admin → Printers, "
-                    "or tap Print on paper to print it on any printer.")
+# A ticket made in Home (or a household that prints here) with no printer. "No printer added", as the app's
+# header, Preview only line, Settings and Get started say it.
+NO_PRINTER = "No printer added. Tap Print on paper to print it on any printer."
+NO_PRINTER_ADMIN = "No printer added. Add one in Admin → Printers, or tap Print on paper to print it on any printer."
 # Next Box runs on one computer, so it can only reach printers on that home's network. A household
 # other than Home with no printer of its own prints from its own device for now (SPEC §19). The web
 # app shows the same words (app.js PRINT_AWAY); change both when remote printing arrives.
@@ -173,9 +174,11 @@ def _no_printer_note(ctx: Context) -> str:
     if not prints_here(ctx.household, []):
         return PRINT_AWAY
     return NO_PRINTER_ADMIN if ctx.can_add_printer else NO_PRINTER
-# Always preview only, as the setup questions set it (prefs.print_with): say what to do next.
-PREVIEW_NOTES = {"paper": "You print on paper: tap Print on paper to print this on any printer.",
-                 "none": "No printer yet, so this is a preview. Once you have one, Print on paper works with any printer."}
+
+
+# "Always preview only" is only ever the person's own switch in Settings (the setup questions no longer
+# turn it on), so a preview it made says where to turn it off. The app's Preview only line says the same.
+ALWAYS_PREVIEW_NOTE = "Always preview only is on in Settings, so this is a preview."
 
 
 def _available(ctx: Context) -> list[PrinterConfig]:
@@ -224,8 +227,7 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
         if ctx.printing_paused:
             note = "Printing is paused by an admin, so this is a preview."
         elif ctx.prefs.get("always_dry_run"):
-            note = PREVIEW_NOTES.get(ctx.prefs.get("print_with"),
-                                     "Always preview only is on in Settings, so this is a preview.")
+            note = ALWAYS_PREVIEW_NOTE
     red = cfg.ink == "black_red"
     with reading_font(bool(ctx.prefs.get("reading_mode"))):  # Easy-to-read text: the same font on the label
         drawn = draw(red)

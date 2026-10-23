@@ -13,6 +13,7 @@ journal or activity.
 - tasks-autoincrement: SQLite reused a deleted task's id; older tasks tables are rebuilt so it can't
 - vision-errors: a failed read-back's error could quote the journal notes it read; only its type stays
 - invites-unnamed: invites made or used by an account an older version deleted still named it
+- preview-default: the setup questions turned on "Always preview only" for a regular printer or none
 """
 from __future__ import annotations
 
@@ -266,6 +267,25 @@ def unname_invites(engine: Engine) -> int:
     return changed
 
 
+QUIZ_PREVIEW = ("paper", "none")  # the setup answers that used to turn on "Always preview only"
+
+
+def preview_default(engine: Engine) -> list[str]:
+    """Printing is the default. The setup questions used to turn on "Always preview only" for "Regular
+    printer" and "No printer yet", so those people stayed on previews even after a printer was added.
+    Turn it off for them (always_dry_run on, print_with paper or none); everyone else's own choice
+    stays. Returns the usernames changed."""
+    changed = []
+    with engine.begin() as conn:
+        for name, prefs in conn.execute(select(db.users.c.username, db.users.c.prefs)).all():
+            if (isinstance(prefs, dict) and prefs.get("always_dry_run") is True
+                    and prefs.get("print_with") in QUIZ_PREVIEW):
+                conn.execute(update(db.users).where(db.users.c.username == name)
+                             .values(prefs={**prefs, "always_dry_run": False}))
+                changed.append(name)
+    return changed
+
+
 def run_startup_fixes(engine: Engine, store) -> None:
     _once(engine, "orphans-v1", lambda: sweep_orphans(engine, store))
     _once(engine, "debug-details-v1", lambda: scrub_debug_details(engine))
@@ -274,3 +294,4 @@ def run_startup_fixes(engine: Engine, store) -> None:
     _once(engine, "tasks-autoincrement-v1", lambda: tasks_autoincrement(engine, store))
     _once(engine, "vision-errors-v1", lambda: scrub_vision_errors(engine))
     _once(engine, "invites-unnamed-v1", lambda: unname_invites(engine))
+    _once(engine, "preview-default-v1", lambda: preview_default(engine))

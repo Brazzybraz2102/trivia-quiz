@@ -193,6 +193,8 @@ scripts/hotkey.sh '<Super><Shift>t'             # then for real
   **Overdue tasks on their own ticket** splits today's list, so expired tasks come out on red.
 - **No printer with that color loaded?** The ticket goes to your usual printer and the app tells
   you why.
+- **Printing is the default:** "Preview only" starts unticked and every real print asks "Send this to the
+  printer?" first; with no printer, Settings says **No printer added** and who can add one.
 - **Brother QL with a black+red roll (DK-22251):** tick "Black + red roll" and overdue tags print
   in red ink.
 - **Hardware testing so far:** only the Brother QL path has been used with a real printer. The

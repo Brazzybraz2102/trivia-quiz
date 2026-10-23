@@ -801,7 +801,7 @@
   <button data-tab="debug" data-min="superadmin" hidden>Debug</button>
 </nav>
 <main>
-  <label class="dry" id="dryRow"><input type="checkbox" id="dry" checked> Preview only (don't send to the printer)
+  <label class="dry" id="dryRow"><input type="checkbox" id="dry" autocomplete="off"> Preview only (don't send to the printer)
     <span class="muted" id="dryWhy"></span></label>
   <section id="mylist" class="on">
     <div class="card waitnote" id="waitingNote" hidden><span id="waitingText"></span>
@@ -1161,6 +1161,8 @@
     </div>
 
     <div class="card" id="labelCard"><h2>Printers &amp; label colors</h2>
+      <div id="noPrinter" hidden><p><b>No printer added.</b> <span id="noPrinterNext"></span></p>
+        <button type="button" class="go small" id="noPrinterGo" hidden>Add a printer</button></div>
       <p class="muted" id="printersLoaded">…</p>
       <label class="setting" id="defPrinterRow"><div class="label"><b>My usual printer</b><span id="defPrinterNote">Used whenever a color below isn't loaded anywhere.</span></div><select id="defPrinter" aria-label="My usual printer"></select></label>
       <h3 id="ruleHead">Which labels for what</h3>
