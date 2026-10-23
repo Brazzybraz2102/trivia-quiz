@@ -100,9 +100,10 @@ def test_the_words_are_plain_and_home_keeps_its_own():
         "To print yours, tap Print on paper, or Save label image and open it in your label printer's app "
         "(like Brother iPrint&Label).")
     assert "dev mode" not in jobs.PRINT_AWAY.lower()
-    # Home's messages, exactly as they were
-    assert jobs.NO_PRINTER == "No label printer in your household yet. Tap Print on paper to print it on any printer."
-    assert jobs.NO_PRINTER_ADMIN == ("No label printer in your household yet. Add one under Admin → Printers, "
+    # Home's messages. They said "No label printer in your household yet"; now "No printer added", the words the
+    # app uses everywhere for a household without a printer (test_print_default.py).
+    assert jobs.NO_PRINTER == "No printer added. Tap Print on paper to print it on any printer."
+    assert jobs.NO_PRINTER_ADMIN == ("No printer added. Add one in Admin → Printers, "
                                      "or tap Print on paper to print it on any printer.")
 
 
@@ -197,13 +198,16 @@ def test_the_app_says_the_same_words_from_one_constant():
     assert js.count("In this test version") == 1  # the words live in the constant only
     # Every place that talks about printing picks the constant when this household doesn't print here.
     for where, marker in (("Preview only note", 'const why = statusNow?.printing_paused'),
-                          ("Settings printers", '$("#printersLoaded").innerHTML'),
+                          # The card now says "No printer added." and then the next step, which is PRINT_AWAY here.
+                          ("Settings printers", '$("#noPrinterNext").textContent'),
                           ("Get started", "  printer: { title:"),
                           ("setup answer", "function quizSummary"),
                           ("Admin printers", '$("#prAway").textContent = PRINT_AWAY')):
         chunk = js[js.index(marker):js.index(marker) + 900]
         assert "PRINT_AWAY" in chunk and ("printsHere()" in chunk or "printerAway()" in chunk), where
-    assert '"Previews · print from your device"' in js and '"Previews · print on paper"' in js  # the header
+    # The header. Home without a printer said "Previews · print on paper"; it says "No printer added" now
+    # (test_print_default.py). Friends keep their words.
+    assert '"Previews · print from your device"' in js and '"No printer added · print on paper"' in js
     assert "me.prints_here = s.prints_here" in js  # /status keeps it fresh after a printer is added or removed
     # Admin → Printers: staff and Home see the card as always; the form stays (collapsed), with one line.
     assert 'const printerAway = () => me?.role !== "superadmin" && me?.household_id !== "home";' in js

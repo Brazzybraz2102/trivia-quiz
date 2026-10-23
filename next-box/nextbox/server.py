@@ -1021,6 +1021,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                               or bool(caller.prefs.get("always_dry_run")),
             "printing_paused": s["printing_paused"],
             "prints_here": prints_here(household_of(caller)),
+            # How many printers this household has (0: "No printer added"), and whether this person can
+            # add one in Admin → Printers. Who may add printers is unchanged: admins and staff.
+            "printers": len(everyone),
+            "can_add_printer": rank(caller.role) >= rank("admin"),
         }
 
     @app.get("/tasks")
@@ -1162,6 +1166,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                  for k in SETUP_STEPS]
         return {"steps": steps, "hidden": bool(caller.prefs.get("setup_hidden")),
                 "can_add_printer": rank(caller.role) >= rank("admin"),
+                "printers": len(registry.all(caller.household)),  # 0: the printer step says "No printer added."
                 "all_done": all(s["done"] for s in steps)}
 
     @app.post("/setup/{step}/{action}")

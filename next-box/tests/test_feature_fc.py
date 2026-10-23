@@ -96,7 +96,8 @@ def test_every_answer_sets_its_settings(ctx):
     assert r.status_code == 200, r.text
     changed, prefs = r.json()["changed"], r.json()["prefs"]
     # Only what really changed: Journal mode was on already (it's on for everyone), so it isn't listed.
-    assert changed == {"print_with": "paper", "always_dry_run": True, "paper_size": "a5",
+    # "Regular printer" no longer turns on Always preview only: printing is the default (test_print_default.py).
+    assert changed == {"print_with": "paper", "paper_size": "a5",
                        "max_rows": 3, "reading_mode": True, "routine_mode": True,
                        "routine_morning": "07:30", "routine_evening": "20:00"}
     assert all(prefs[k] == v for k, v in changed.items()) and prefs["journal_mode"] is True
@@ -107,7 +108,9 @@ def test_every_answer_sets_its_settings(ctx):
 
 def test_the_print_and_journal_answers():
     assert quiz.changes_for({"print": "label"}) == {"print_with": "label", "always_dry_run": False}
-    assert quiz.changes_for({"print": "none"}) == {"print_with": "none", "always_dry_run": True}
+    # "No printer yet" used to turn on Always preview only too, which kept people on previews after a printer
+    # was added. With no printer every ticket is a preview anyway, so it leaves that setting alone now.
+    assert quiz.changes_for({"print": "none"}) == {"print_with": "none"}
     assert quiz.changes_for({"journal": "none"}) == {"journal_mode": False}  # paper size left as it was
     assert quiz.changes_for({"journal": "half_letter"}) == {"paper_size": "half_letter", "journal_mode": True}
     assert quiz.changes_for({}) == {} and quiz.changes_for({"print": None, "helps": []}) == {}
@@ -176,16 +179,19 @@ def test_the_setup_questions_need_a_signed_in_person(ctx):
 
 
 # --- previews say what to do next ------------------------------------------------------------------
-def test_preview_note_follows_how_they_print(ctx):
+def test_preview_note_says_always_preview_only_is_on(ctx):
+    """The notes used to follow print_with ("You print on paper…", "No printer yet…") because the setup questions
+    turned Always preview only on. They don't any more, so it's only ever the person's own switch: every answer
+    gets the one note that says where to turn it off."""
     ctx = dataclasses.replace(ctx, prefs={**default_prefs(), "always_dry_run": True, "print_with": "paper"})
     ctx.settings.dry_run = False
     ctx.settings.printer_ip = "192.0.2.10"  # a printer exists, but this person always previews
     r = jobs.print_text(ctx, "hello")
-    assert r["status"] == "dry_run" and r["note"] == jobs.PREVIEW_NOTES["paper"]
-    ctx = dataclasses.replace(ctx, prefs={**ctx.prefs, "print_with": "none"})
-    assert jobs.print_text(ctx, "hello")["note"] == jobs.PREVIEW_NOTES["none"]
-    ctx = dataclasses.replace(ctx, prefs={**ctx.prefs, "print_with": ""})
-    assert jobs.print_text(ctx, "hello")["note"] == "Always preview only is on in Settings, so this is a preview."
+    assert r["status"] == "dry_run" and r["note"] == jobs.ALWAYS_PREVIEW_NOTE
+    for how in ("none", "", "label"):
+        ctx = dataclasses.replace(ctx, prefs={**ctx.prefs, "print_with": how})
+        assert jobs.print_text(ctx, "hello")["note"] == "Always preview only is on in Settings, so this is a preview."
+    assert not hasattr(jobs, "PREVIEW_NOTES")
 
 
 # --- Easy-to-read text on labels -------------------------------------------------------------------

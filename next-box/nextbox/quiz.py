@@ -8,10 +8,14 @@ from __future__ import annotations
 
 from .auth import PREFS
 
-PRINT = {  # How will you print?
+# How will you print? Printing is the default: none of the answers turns on "Always preview only".
+# With no printer in the household, every ticket is a preview anyway (jobs._finish), so a regular printer
+# or no printer yet leaves that setting as the person has it. upkeep.preview_default turns it off once
+# for people whose answer turned it on in older versions.
+PRINT = {
     "label": {"print_with": "label", "always_dry_run": False},
-    "paper": {"print_with": "paper", "always_dry_run": True},   # previews, then Print on paper
-    "none": {"print_with": "none", "always_dry_run": True},
+    "paper": {"print_with": "paper"},   # previews come from having no label printer, then Print on paper
+    "none": {"print_with": "none"},
 }
 PAPERS = ("a5", "half_letter", "letter", "a4")  # Do you keep a paper journal or planner? (or "none")
 HELPS = ("gentle", "reading", "routine", "basics")  # neutral words, never a diagnosis
