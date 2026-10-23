@@ -219,7 +219,10 @@ def test_add_to_my_list_from_a_waiting_task_starts_today(js):
 def test_schedule_rows_follow_the_setup_answers(js):
     row = body_of(js, "function schedRow(")
     assert 'p.print_with !== "none"' in row and "p.journal_mode !== false" in row
-    assert "Preview today's label" in row and '"Snap your pages"' in row and "data-sched-look" in row
+    # "Preview" or "Print" today's label now follows the Preview only box, in the line and on the button alike
+    # (printing is the default; test_print_default.py runs every case).
+    assert '`${$("#dry").checked ? "Preview" : "Print"} today\'s label`' in row
+    assert '"Snap your pages"' in row and "data-sched-look" in row
     assert '"Look back"' not in row
 
 

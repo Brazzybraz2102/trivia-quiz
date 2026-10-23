@@ -690,10 +690,16 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         user = accounts.get(name)
         s = server_settings.get()
         consent = user.get("consent") or {}
+        printers = registry.all(user["household_id"])
         return {"username": name, "role": user["role"], "beta": user["beta"], "debug": user["debug"],
                 "household_id": user["household_id"], "email": user.get("email"), "version": _version(),
                 "household": (accounts.household(user["household_id"]) or {}).get("name", ""),
-                "prints_here": prints_here(user["household_id"]),
+                "prints_here": jobs.prints_here(user["household_id"], printers),
+                # The same printing flags as GET /status, so the app's Preview only box is right as soon as
+                # this answers, before /status (which waits up to 2 s on whether the printer is online).
+                "printers": len(printers),
+                "dry_run_forced": ctx.settings.dry_run or s["printing_paused"]
+                                  or bool(user["prefs"].get("always_dry_run")),
                 "created": user.get("created"), "last_login": user.get("last_login"),
                 "protected": accounts.protected() == name,
                 "can_delete": accounts.removable(name),  # not the protected admin or the last superadmin

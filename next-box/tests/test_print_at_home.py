@@ -197,7 +197,9 @@ def test_the_app_says_the_same_words_from_one_constant():
     assert "const printsHere = () => me?.prints_here !== false;" in js  # unknown yet: Home's words
     assert js.count("In this test version") == 1  # the words live in the constant only
     # Every place that talks about printing picks the constant when this household doesn't print here.
-    for where, marker in (("Preview only note", 'const why = statusNow?.printing_paused'),
+    # applyDry reads its flags through printNow() (/status, or /auth/me before /status answers), so its first
+    # line says st.printing_paused now (test_print_default.py).
+    for where, marker in (("Preview only note", 'const why = st.printing_paused'),
                           # The card now says "No printer added." and then the next step, which is PRINT_AWAY here.
                           ("Settings printers", '$("#noPrinterNext").textContent'),
                           ("Get started", "  printer: { title:"),

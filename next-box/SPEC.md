@@ -212,6 +212,11 @@ with the reason next to it, whenever a real print can't happen anyway:
 - **no printer in the household** (`GET /status` `printer` null, `printers` 0): "No printer added: print
   previews on paper.", plus " Add one in Admin → Printers." for admins and staff (`can_add_printer`).
 
+`GET /auth/me` carries the same flags as `GET /status` (`printing_paused`, `prints_here`, `dry_run_forced`,
+`printers`), so the box is ticked and locked from the moment someone signs in or the page loads; `/status`,
+which waits up to 2 s on whether the printer is online, is the newer source once it answers. There's no
+moment where the box is unticked and a print would only be a preview.
+
 When the reason goes away (a printer is added, the setting is turned off) the box is unticked again; a tick
 the person made themselves stays. A real print always asks "Send this to the printer?" first, on every
 print button. Nothing about this prints by itself.
@@ -761,7 +766,7 @@ ClickUp and Trello are listed under Settings → Linked app → Other apps as "n
 - **Setup questions** (`nextbox/quiz.py`, `POST /setup/quiz`): after the data notice, a new account (no tasks of its
   own, no tickets, no linked app, `setup_quiz_done` off; `GET /auth/me` says `setup_quiz`) gets five one-question
   screens with big buttons: how you'll print (label printer / regular printer / no printer yet → `print_with`;
-  a label printer also turns `always_dry_run` off, and no answer turns it on, §14), a paper journal (A5 / half letter / letter / A4 / no → `paper_size`, `journal_mode`), how many tasks
+  a label printer also turns `always_dry_run` off; none of the answers turns it on, §14), a paper journal (A5 / half letter / letter / A4 / no → `paper_size`, `journal_mode`), how many tasks
   a day (3 / 5 / 8 → `max_rows`), what helps (any of: short lists and gentle words → `gentle_words`; easy-to-read text →
   `reading_mode`; same routine every day → `routine_mode`; or "just the basics", which turns all three off) and when you
   plan and look back (`routine_morning`, `routine_evening`, default 08:00 and 18:00). Any question, or the rest, can be

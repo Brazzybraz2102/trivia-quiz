@@ -221,6 +221,7 @@ async function boot() {
     if (me) return e.status === 401 ? showLogin("Your session ended. Sign in again.") : toast(errText(e), 4000);
     return showLogin(note || (e.message === "sign in required" ? "" : e.message));
   }
+  statusNow = null;  // /auth/me is newer than the last /status: Preview only follows it until /status answers
   if (me.must_change) { showOnly("mustChange"); $("#mcCur").focus(); return; }
   showOnly("appShell");
   $("#who").textContent = me.username;
@@ -228,7 +229,7 @@ async function boot() {
   if (!boot.started) {  // just signed in: open where they asked to
     boot.started = true;
     forgetOthersHere(me.username);  // a shared phone: nobody else's draft or search words stay behind
-    resetDry();  // nor their Preview only box: this person's state shows once their /status is back
+    resetDry();  // nor their Preview only box: loadPrefs below shows this person's own state
     const start = me.prefs.start_tab || "mylist";
     if (signinMsg) { toast(signinMsg, 4000); signinMsg = ""; goto("settings"); }
     else if (start === "mylist") markTab("mylist");
@@ -686,19 +687,24 @@ const canAddPrinter = () => !!me && RANK[me.role] >= RANK.admin;
 // Home (or a household that prints here) with no printer: "No printer added", then the next step for them.
 const NO_PRINTER = "No printer added.";
 const noPrinterNext = () => (canAddPrinter() ? "Add one in Admin → Printers." : "Ask your Next Box admin to add one.");
+// Whether a real print can happen: /auth/me carries the same flags as /status (printing paused, previews
+// only, how many printers), so the answer is there the moment someone signs in or the page loads, without
+// waiting for /status (up to 2 s on whether the printer is online). Once /status answers, it's the newer one.
+const printNow = () => statusNow || me || {};
 // Printing is the default: "Preview only" starts unticked. It's ticked and locked, with the reason, whenever
 // a real print can't happen anyway, so nobody is asked "Send this to the printer?" for something that will
 // only be a preview. When that reason goes away (a printer added, the setting turned off) it's unticked
 // again; a tick the person made themselves stays. A real print always asks "Send this to the printer?" first.
 function applyDry() {
-  const why = statusNow?.printing_paused ? "Printing is paused by an admin."
+  const st = printNow();
+  const why = st.printing_paused ? "Printing is paused by an admin."
     : !printsHere() ? PRINT_AWAY
     : me?.prefs?.always_dry_run ? "Always preview only is on in Settings."
-    : statusNow?.dry_run_forced ? (me?.role !== "superadmin" ? "This Next Box makes previews only for now."
+    : st.dry_run_forced ? (me?.role !== "superadmin" ? "This Next Box makes previews only for now."
       // The owner can change it: say how.
-      : statusNow.printer ? "Previews only: NEXTBOX_DRY_RUN=1 is in .env. Delete that line and run: systemctl --user restart nextbox"
+      : st.printers ? "Previews only: NEXTBOX_DRY_RUN=1 is in .env. Delete that line and run: systemctl --user restart nextbox"
       : "Previews only: NEXTBOX_DRY_RUN=1 is in .env. Add a printer in Admin → Printers (or set PRINTER_IP), then delete that line and run: systemctl --user restart nextbox")
-    : statusNow && !statusNow.printer ? "No printer added: print previews on paper." + (canAddPrinter() ? " Add one in Admin → Printers." : "")
+    : st.printers === 0 ? "No printer added: print previews on paper." + (canAddPrinter() ? " Add one in Admin → Printers." : "")
     : "";
   const box = $("#dry"), was = box.checked;
   if (why) { box.checked = true; box.dataset.forced = "1"; }
@@ -3256,12 +3262,13 @@ function schedRow(x) {
     // Its time is in the column, so the row doesn't say "today 9:00a" again (the buttons act on the task by its id).
     return `<li class="srow" data-start="${x.start}" data-end="${x.end ?? ""}"><div class="stime">${time}</div>${taskRow({ ...x.t, due: null })}</li>`;
   }
-  // The words follow their setup answers: no printer yet (a preview), no journal (nothing to write in).
+  // The words follow their setup answers: no printer yet (the label is optional), no journal (nothing to write in).
   const p = me?.prefs || {}, paper = p.print_with !== "none", journal = p.journal_mode !== false;
-  const preview = $("#dry").checked;  // the button's words follow Preview only, as the print does
+  // Print or Preview follows the Preview only box, in the line and on its button, as the print itself does.
+  const label = `${$("#dry").checked ? "Preview" : "Print"} today's label`;
   const [name, what, action] = x.kind === "plan"
-    ? ["Plan your day", paper ? "Print today's label and pick your one thing." : "Pick your one thing. Preview today's label if you like.",
-       `<button class="linkish" data-sched-print>${preview ? "Preview today's label" : "Print today's label"}</button>`]
+    ? ["Plan your day", paper ? `${label} and pick your one thing.` : `Pick your one thing. ${label} if you like.`,
+       `<button class="linkish" data-sched-print>${label}</button>`]
     : journal || paper
       ? ["Snap your pages", journal ? (paper ? "Tick your label, write a few notes, snap both pages." : "Write a few notes, then snap your journal page.")
           : "Tick your label with a pen, then snap it.", `<button class="linkish" data-go-tab="scan">Open Snap</button>`]
@@ -3497,7 +3504,7 @@ function quizSummary(c) {
   const out = [];
   if ("print_with" in c) {
     // Printing is the default, and a real print always asks "Send this to the printer?" first.
-    const none = c.print_with === "label" && printsHere() && statusNow && !statusNow.printer;  // a label printer, none added yet
+    const none = c.print_with === "label" && printsHere() && printNow().printers === 0;  // a label printer, none added yet
     out.push([none ? `Label printer: ${NO_PRINTER.toLowerCase()} ${noPrinterNext()}`
       : { label: printsHere() ? "Printing on your label printer. Next Box asks “Send this to the printer?” before each print." : PRINT_AWAY,
           paper: "Printing on paper: under each ticket, tap Print on paper.",

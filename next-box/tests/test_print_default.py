@@ -196,6 +196,35 @@ def test_status_says_how_many_printers_and_who_can_add_one(site):
     assert p["lee"].post("/admin/printers", json=PRINTER).status_code == 403
 
 
+PRINT_FLAGS = ("printing_paused", "prints_here", "dry_run_forced", "printers")
+
+
+def test_auth_me_has_the_same_printing_flags_as_status(site):
+    """Preview only is decided as soon as /auth/me answers. /status waits up to 2 s on whether the printer is
+    online, and until it answered the box was unticked and unlocked, so a tap on Print asked "Send this to the
+    printer?" for what could only be a preview (NEXTBOX_DRY_RUN, printing paused)."""
+    ctx, _, p = site
+
+    def flags(name):
+        me, st = p[name].get("/auth/me").json(), p[name].get("/status").json()
+        assert {k: me[k] for k in PRINT_FLAGS} == {k: st[k] for k in PRINT_FLAGS}, name
+        return {k: me[k] for k in PRINT_FLAGS}
+
+    # NEXTBOX_DRY_RUN=1 (the test settings), no printer anywhere.
+    assert flags("mike") == {"printing_paused": False, "prints_here": True, "dry_run_forced": True, "printers": 0}
+    assert flags("lee") == {"printing_paused": False, "prints_here": False, "dry_run_forced": True, "printers": 0}
+    ctx.settings.dry_run = False
+    assert flags("mike")["dry_run_forced"] is False
+    assert p["boss"].post("/admin/printers", json=PRINTER).status_code == 200  # Home gets a printer
+    assert flags("mike")["printers"] == flags("boss")["printers"] == 1
+    assert flags("kim")["printers"] == 0  # another household's printers are never counted
+    assert p["mike"].patch("/settings", json={"always_dry_run": True}).status_code == 200  # their own switch
+    assert flags("mike")["dry_run_forced"] is True and flags("boss")["dry_run_forced"] is False
+    assert p["boss"].patch("/super/settings", json={"printing_paused": True}).status_code == 200
+    for name in ("mike", "boss", "kim", "lee"):
+        assert flags(name)["printing_paused"] is True and flags(name)["dry_run_forced"] is True
+
+
 # --- the app: Preview only ---------------------------------------------------------------------------------------------
 def test_preview_only_starts_unticked(js, html):
     box = re.search(r'<input type="checkbox" id="dry"[^>]*>', html)
@@ -208,6 +237,16 @@ def test_preview_only_starts_unticked(js, html):
     first = fn(js, "boot")
     first = first[first.index("if (!boot.started)"):first.index("loadPrefs(me.prefs)")]
     assert "resetDry();" in first
+
+
+def test_boot_decides_preview_only_from_auth_me_before_status(js):
+    """/auth/me is the newer answer when boot runs, so applyDry (in loadPrefs) reads it, not a /status from
+    before (or none at all, just after signing in)."""
+    body = fn(js, "boot")
+    got, cleared = body.index('me = await api("/auth/me")'), body.index("statusNow = null;")
+    assert got < cleared < body.index("loadPrefs(me.prefs);") < body.index("refreshStatus();")
+    assert "const printNow = () => statusNow || me || {};" in js
+    assert "statusNow" not in fn(js, "applyDry")  # every flag through printNow(): /status, or /auth/me before it
 
 
 def test_every_real_print_still_asks_first(js):
@@ -226,7 +265,8 @@ const els = {{}};
 const $ = (id) => (els[id] ||= {{ checked: false, disabled: false, dataset: {{}}, textContent: "", changes: 0,
                                   dispatchEvent(e) {{ if (e.type === "change") this.changes++; }} }});
 const printsHere = () => me?.prints_here !== false;
-{const(js, "canAddPrinter")}{const(js, "NO_PRINTER")}{const(js, "noPrinterNext")}{fn(js, "applyDry")}{fn(js, "resetDry")}
+{const(js, "canAddPrinter")}{const(js, "NO_PRINTER")}{const(js, "noPrinterNext")}{const(js, "printNow")}
+{fn(js, "applyDry")}{fn(js, "resetDry")}
 const state = () => ({{ ticked: $("#dry").checked, locked: $("#dry").disabled, why: $("#dryWhy").textContent }});
 const home = {{ printer: null, printers: 0, prints_here: true, dry_run_forced: false, printing_paused: false }};
 const out = {{}};
@@ -237,8 +277,8 @@ console.log(JSON.stringify(out));
 
 def test_preview_only_is_ticked_only_when_a_real_print_cant_happen(js):
     out = run(dry_script(js, """
-me = { role: "user", prints_here: true, prefs: {} };
-applyDry(); out.before_status = state();                      // signed in, /status not back yet: printing
+me = { role: "user", prints_here: true, prefs: {}, printers: 1, dry_run_forced: false, printing_paused: false };
+applyDry(); out.before_status = state();                      // signed in, a printer, /status not back yet: printing
 statusNow = home; applyDry(); out.user_none = state();
 me.role = "admin"; applyDry(); out.admin_none = state();
 me.role = "superadmin"; applyDry(); out.super_none = state();
@@ -268,6 +308,54 @@ resetDry(); out.reset = { ...state(), status: statusNow };
     assert out["env_dry"]["why"] == "This Next Box makes previews only for now." and out["env_dry"]["ticked"]
     assert out["away"]["why"].startswith("In this test version") and out["away"]["locked"]
     assert out["reset"] == {**printing, "status": None}  # the next person starts from printing
+
+
+def test_preview_only_is_ticked_and_locked_before_status_answers(js):
+    """The checker's case: NEXTBOX_DRY_RUN=1 (or printing paused) with an offline printer. /status took 2 s, and
+    the box stayed unticked and unlocked until then, on every sign-in and page load. /auth/me has the reasons."""
+    out = run(dry_script(js, """
+const signedIn = { role: "user", prints_here: true, prefs: {}, printers: 1, dry_run_forced: false, printing_paused: false };
+const signIn = (m) => { resetDry(); me = m; applyDry(); return state(); };   // boot: resetDry, then loadPrefs
+out.env_dry = signIn({ ...signedIn, dry_run_forced: true });
+out.paused = signIn({ ...signedIn, dry_run_forced: true, printing_paused: true });
+out.none = signIn({ ...signedIn, printers: 0 });
+out.always = signIn({ ...signedIn, dry_run_forced: true, prefs: { always_dry_run: true } });
+out.boss_env_dry = signIn({ ...signedIn, role: "superadmin", dry_run_forced: true });
+out.boss_env_dry_none = signIn({ ...signedIn, role: "superadmin", dry_run_forced: true, printers: 0 });
+out.printing = signIn({ ...signedIn });
+statusNow = { ...home, printer: "Kitchen", printers: 1 };                  // /status is newer once it answers
+me = { ...signedIn, printers: 0 }; applyDry(); out.status_newer = state();
+"""))
+    assert out["env_dry"] == {"ticked": True, "locked": True, "why": "This Next Box makes previews only for now."}
+    assert out["paused"] == {"ticked": True, "locked": True, "why": "Printing is paused by an admin."}
+    assert out["none"] == {"ticked": True, "locked": True, "why": NO_PRINTER_WHY}
+    assert out["always"]["why"] == "Always preview only is on in Settings." and out["always"]["locked"]
+    assert out["boss_env_dry"]["why"].startswith("Previews only: NEXTBOX_DRY_RUN=1 is in .env. Delete that line")
+    assert out["boss_env_dry_none"]["why"].startswith("Previews only: NEXTBOX_DRY_RUN=1 is in .env. Add a printer")
+    assert out["printing"] == out["status_newer"] == {"ticked": False, "locked": False, "why": ""}
+
+
+def test_the_schedule_plan_row_says_print_or_preview_as_its_button_does(js):
+    """'No printer yet' said "Preview today's label if you like." above a Print today's label button."""
+    out = run(f"""
+let me = null;
+const els = {{ "#dry": {{ checked: false }} }};
+const $ = (id) => els[id];
+const esc = (s) => String(s), fmtClock = (s) => s, schedClock = (s) => s, aiOn = () => false;
+{fn(js, "schedRow")}
+const out = {{}};
+for (const pw of ["label", "paper", "none"]) for (const dry of [false, true]) {{
+  me = {{ prefs: {{ print_with: pw }} }}; els["#dry"].checked = dry;
+  const html = schedRow({{ kind: "plan", start: "08:00" }});
+  out[pw + (dry ? "_preview" : "_print")] = {{
+    what: html.match(/<div class="meta">(.*?) <button/s)[1], button: html.match(/data-sched-print>(.*?)<\\/button>/)[1] }};
+}}
+console.log(JSON.stringify(out));
+""")
+    printer = "{} today's label and pick your one thing."
+    for pw, what in (("label", printer), ("paper", printer), ("none", "Pick your one thing. {} today's label if you like.")):
+        for verb, key in (("Print", "_print"), ("Preview", "_preview")):
+            assert out[pw + key] == {"what": what.format(verb), "button": f"{verb} today's label"}, (pw, key)
 
 
 def test_the_header_says_no_printer_added(js):
