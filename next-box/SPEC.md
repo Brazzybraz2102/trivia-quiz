@@ -313,7 +313,9 @@ tables. See §16.
 1. `POST /scan` with a photo. Claude vision (`NEXTBOX_VISION_MODEL`, default `claude-sonnet-5-5`)
    returns structured output: the label code and, for each row, a mark (done, tomorrow, drop, note or
    none), which of the person's marks it was (`which`) and a confidence score. The prompt lists that
-   person's marks (§32); the person's mark decides what it does.
+   person's marks (§32); the person's mark decides what it does. Simple is asked exactly as before mark
+   styles (`scan.PROMPT` and the same output format: no `which`, no "note"); other marks may only report
+   the actions their marks have (`scan.reply_format`).
 2. The server finds the label by `label_id`, falling back to the code it read. If neither matches,
    nothing changes. With no code, the result offers the person's 5 latest tickets with tasks to pick
    from (`candidates`, today's daily label first; notes and other tickets without tasks are skipped,
@@ -324,7 +326,10 @@ tables. See §16.
    applied right away: `close`, or `due_date` = tomorrow. It sets `due_date`, never `due_string`, so recurring
    rules survive. A "note" mark changes nothing: the row is listed in `noted` with the person's symbol and words.
 4. **Every drop (✗ on Simple), every row below 0.7**, and every row whose `which` and mark disagree (or whose
-   action none of the person's marks has) goes to `needs_confirmation`. The app shows
+   action none of the person's marks has) goes to `needs_confirmation`. A disagreement waits under whichever
+   of the two finishes or moves the task (the number's first), noted "unclear mark": it never becomes a drop,
+   or quietly a note, that only one of them said. A note and a drop that disagree, or a note that isn't one of
+   their marks (any "note" on Simple), change nothing: `ignored` with reason "unclear mark". The app shows
    Confirm/Skip for each one, and `POST /scan/{id}/confirm` applies only rows still `pending`,
    so a double tap can't delete twice.
 5. Row numbers that aren't on the label are ignored and reported.
@@ -860,21 +865,31 @@ list, so "Your own" brings it back; changing a preset's marks makes them their o
 - **A mark** is `{symbol, meaning, action}`: `symbol` 1-3 characters the label font can draw (`render.can_draw`
   checks each one in DejaVu, so nothing prints as an empty box), `meaning` their own words (one line, 60 at most),
   `action` done | tomorrow | drop | note. `look: "strike"` is a line struck through the task: alone (no symbol), or as
-  well as the symbol. Symbols are used once (case, and look-alikes written by hand like ✗ × X, count as the same),
-  one strike at most, and at least one mark finishes the task. `PATCH /settings` says what's wrong by mark
-  ("Mark 2: the label can't print “⭐”. Pick another symbol."), shown next to that mark. The event log says only how
-  many marks there are.
-- **Labels** print the person's legend (`render.draw_legend`): each symbol and its meaning, the meanings shortened
-  to fit, on two lines at most, never past the edge; a strike mark is its words with a line through them. Simple's
+  well as the symbol. Symbols are used once (case, and look-alikes written by hand count as the same: ✗ × X,
+  ✓ ✔ √, → ->, the dashes - – —, • ●, and ○ O 0; `marks.LOOK_ALIKE` = app.js `MARK_ALIKE`), one strike at most, and
+  at least one mark finishes the task. A meaning has no control, private-use or unassigned characters (nor half of
+  one). `PATCH /settings` says what's wrong by mark ("Mark 2: the label can't print “⭐”. Pick another symbol."),
+  shown next to that mark; a message about the whole list shows by the box just changed. Any odd shape (a `look`
+  that isn't text, a style that isn't a name) is a 400 with a message, never a 500. The event log says only how many
+  marks there are.
+- **Labels** print the person's legend (`render.draw_legend`): each symbol and its meaning, never past the edge; a
+  strike mark is its words with a line through them. Only the longest meanings are shortened, a letter at a time,
+  so short ones stay whole: on two lines while every meaning keeps 7 letters, then on three, then down to 4. Simple's
   legend is pixel-identical to before (tests/golden). The daily, journal and list labels and one-task tickets have
   it (stickers, strips and Just one thing have no legend); HA's auto print uses the owner's marks.
-- **Snap** (`scan.build_prompt`): the prompt lists the marks by number with what each looks like, the mark to report
-  and, in quotes, their meaning (one line, control characters removed, 60 at most: a hint, never an instruction).
-  An empty box is "none"; anything else is the closest mark below 0.5 confidence, as before. The scan keeps the
+- **Snap** (`scan.build_prompt`): Simple sends `scan.PROMPT`, word for word what Next Box always sent. Other marks:
+  the prompt lists them by number with what each looks like, the mark to report and, in quotes, their meaning (one
+  line, control characters removed, 60 at most: a hint, never an instruction), and the output format offers only
+  the actions their marks have. An empty box is "none"; anything else is the closest mark below 0.5 confidence, as
+  before. The scan keeps the
   marks it was read with (`marks`), so changing them later never changes what an earlier photo meant. A "note" row
   shows "Row 2: ◐ half done: <task>. Noted, nothing changed."; applied and waiting rows say which mark it was in
   their words (not on Simple). Drops always wait for Confirm. The marks go to Anthropic only with a photo the person
   sent (TERMS_VERSION 5; privacy.html says so). Handwriting never goes into notes.
 - `GET /settings/marks`: presets, actions, the symbols Settings offers (✓ ✗ → > < × • ○ ● ◐ ★ ! ? – /, and letters
   can be typed) and the person's marks now. `GET /settings/marks/legend.png?style=|marks=` draws the legend as the
-  daily label prints it (in Easy-to-read text when that's on) for the previews; nothing prints.
+  daily label prints it (in Easy-to-read text when that's on) for the "On your labels" preview; nothing prints.
+- **Settings**: each style's card shows its legend as text (a line through a strike mark's words). Each mark row
+  wraps at any text size, and "What it means to you" is never narrower than 14rem. "Delete it" has "Next Box always
+  asks you before it deletes." under it. Changes save one at a time; a style picked (or Start again, or Undo)
+  redraws the rows at once as they will be saved, and an older answer never redraws them.

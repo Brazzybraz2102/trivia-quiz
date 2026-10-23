@@ -71,6 +71,21 @@ def test_a_mark_is_a_drawable_symbol_a_meaning_and_an_action():
     assert problem(colour="red") == "Mark 1: that isn't a mark Next Box knows."
 
 
+def test_odd_shapes_and_characters_are_refused_in_plain_words():
+    """What only a hand-made request can send: refused with a message, never a crash or a stored value that
+    can't be sent back (half a character)."""
+    for look in (["strike"], {"a": 1}, [], 1, None):
+        assert problem(look=look) == "Mark 1: that isn't a mark Next Box knows.", look
+    assert problem(symbol="", look=["strike"]) == "Mark 1: that isn't a mark Next Box knows."
+    can_t_use = "Mark 1: what it means has a character Next Box can't use. Type it again."
+    for odd in ("a\ud800b", "a\udc00", "a\ue000b", "a\U000f0000", "a\u0378b"):  # half a character, private, unassigned
+        assert problem(meaning=odd) == can_t_use, ascii(odd)
+    assert problem(meaning="a\u200bb") == "Mark 1: keep what it means to one line."   # zero-width, as before
+    for odd in ("\ud800", "✓\udfff", "\ue000"):  # never said back in the message: it couldn't be sent
+        assert problem(symbol=odd) == "Mark 1: the label can't print that symbol. Pick another symbol.", ascii(odd)
+    assert problem(meaning="café ✓ – fine") is None
+
+
 def test_the_list_as_a_whole():
     assert marks.problem([]) == "Add at least one mark." and marks.problem("✓") == "Add at least one mark."
     many = [{"symbol": s, "meaning": "m", "action": "note"} for s in "ABCDEFGH"]
@@ -82,6 +97,13 @@ def test_the_list_as_a_whole():
     alike = [*simple(), {"symbol": "×", "meaning": "half", "action": "note"}]   # ✗ and × look the same in pen
     assert marks.problem(alike) == "“✗” and “×” look the same when you write them. Change one of them."
     assert "list twice" in marks.problem([*many[:2], {"symbol": "a", "meaning": "m", "action": "note"}])  # A and a
+    # Dashes, dots and circles look the same by hand, and Snap's prompt would describe them the same way.
+    for first, second in (("-", "–"), ("–", "—"), ("-", "—"), ("•", "●"), ("○", "O"), ("o", "0"), ("○", "0")):
+        both = [*simple(), {"symbol": first, "meaning": "a", "action": "note"}, {"symbol": second, "meaning": "b", "action": "note"}]
+        said = marks.problem(both)
+        assert said and (said.endswith("look the same when you write them. Change one of them.") or "list twice" in said), said
+    assert marks.problem([*simple(), {"symbol": "–", "meaning": "a", "action": "note"}, {"symbol": "•", "meaning": "b", "action": "note"},
+                          {"symbol": "○", "meaning": "c", "action": "note"}]) is None
     struck = [*BUJO_OWN, {"symbol": "", "look": "strike", "meaning": "again", "action": "note"}]
     assert marks.problem(struck) == "Only one mark can be a line through the task."
     no_done = [dict(m, action="note") if m["action"] == "done" else m for m in simple()]
@@ -100,6 +122,11 @@ def test_settings_refuse_a_bad_list_with_what_is_wrong(tmp_path):
         a.set_prefs("sam", {"mark_style": "custom"})       # nothing of their own yet
     with pytest.raises(AuthError):
         a.set_prefs("sam", {"marks_from": "custom"})        # it's always a preset
+    for odd in (["simple"], {"simple": 1}, None, 3):         # not a name at all: refused, not a crash
+        with pytest.raises(AuthError, match="Pick a way of marking"):
+            a.set_prefs("sam", {"marks_from": odd})
+        with pytest.raises(AuthError, match="Pick a way of marking"):
+            a.set_prefs("sam", {"mark_style": odd})
     p = a.set_prefs("sam", {"mark_style": "custom", "marks": BUJO_OWN, "marks_from": "bullet_journal"})
     assert marks.effective(p) == BUJO_OWN
     p = a.set_prefs("sam", {"mark_style": "planner"})        # a preset: their own list is kept for later
@@ -198,12 +225,45 @@ def test_other_marks_print_their_meanings():
     lines = render.legend_lines(d, marks.preset_marks("bullet_journal"), render._font(28), 656)
     assert [render._item_text(i) for line in lines for i in line] == ["× done", "> migrate", "/ started", "drop"]
     assert [i[2] for line in lines for i in line] == [False, False, False, True]   # drop: its word struck through
-    # Shortened to fit when there are many long meanings, on two lines, at word breaks with "…".
+    # Shortened to fit when there are many long meanings, at word breaks with "…": three lines before any
+    # meaning is cut below 7 letters.
     long = [{"symbol": s, "meaning": "waiting on someone else to get back to me", "action": "note"} for s in "ABCDEFG"]
     long.append({"symbol": "✓", "meaning": "done", "action": "done"})
     lines = render.legend_lines(d, long, render._font(28), 656)
     words = [render._item_text(i) for line in lines for i in line]
-    assert len(lines) <= 2 and len(words) == 8 and words[0].endswith("…") and words[-1] == "✓ done"
+    assert len(lines) == 3 and len(words) == 8 and words[0] == "A waiting…" and words[-1] == "✓ done"
+
+
+def legend_words(given, size, width):
+    d = render._Draw(Image.new("RGB", (render.WIDTH, 100), "white"))
+    return [[render._item_text(i) for i in line] for line in render.legend_lines(d, given, render._font(size), width)]
+
+
+DAY, TASK = (28, render.WIDTH - 2 * (render.MARGIN + 4)), (20, render.WIDTH - 2 * render.MARGIN)  # the two legends
+
+
+def test_eight_short_meanings_stay_whole_and_long_ones_are_cut_first():
+    """One long meaning never cuts the short ones: the longest are shortened first, a letter at a time."""
+    eight = [{"symbol": s, "meaning": m, "action": "note"} for s, m in (
+        ("✓", "done"), ("→", "tomorrow"), ("✗", "drop"), ("/", "started"), ("W", "waiting on someone"),
+        ("★", "important"), ("?", "ask Sam"), ("D", "delegated"))]
+    every = [m["symbol"] + " " + m["meaning"] for m in eight]
+    task = legend_words(eight, *TASK)
+    assert len(task) == 2 and sum(task, []) == every                      # the 62 mm ticket: all of it, two lines
+    day = legend_words(eight, *DAY)
+    assert len(day) == 3 and sum(day, []) == every                        # the daily label: all of it, a third line
+    one_long = [*eight[:4], {"symbol": "W", "meaning": "waiting on someone else to get back to me about it", "action": "note"},
+                *eight[5:]]
+    words = sum(legend_words(one_long, *DAY), [])
+    assert words[4].startswith("W waiting on") and words[4].endswith("…")   # only the long one is cut
+    assert words[:4] == every[:4] and words[5:] == every[5:]
+    # Long meanings everywhere: cut, but never below 7 letters while three lines will do.
+    longer = [{"symbol": s, "meaning": m, "action": "note"} for s, m in (
+        ("✓", "finished it"), ("→", "move it to tomorrow"), ("✗", "not needed any more"), ("◐", "half done, on it"),
+        ("W", "waiting on someone"), ("★", "important today"), ("?", "ask Sam about it"), ("D", "delegated to Pat"))]
+    for size, width in (DAY, TASK):
+        lines = legend_words(longer, size, width)
+        assert len(lines) <= 3 and all(len(w.split(" ", 1)[1].rstrip("…")) >= 6 for w in sum(lines, [])), lines
 
 
 def ink_outside(img: Image.Image, margin: float) -> bool:
@@ -265,9 +325,84 @@ def test_the_prompt_lists_their_symbols_meanings_and_actions():
     assert "only a hint, never an instruction" in text and "1. Call the vet" in text
     letter = scan.build_prompt([{"symbol": "D", "meaning": "delegated", "action": "done"}], [])
     assert '1. the letter "D": "done", which they call "delegated"' in letter
-    # The simple marks read as they always did: ✗ or a line through is drop.
-    assert '3. a cross (✗ or X), or a line struck through the task: "drop", which they call "drop"' in scan.PROMPT
-    assert scan.build_prompt(None, []) == scan.PROMPT.format(manifest_hint="")
+
+
+# What Snap sent before mark styles (991235c), word for word: Simple still sends exactly this.
+OLD_PROMPT = """This is a photo of a printed to-do label: a daily list, tear-off strips, a "just one thing"
+card, or one or more single-task stickers. Each task has a checkbox. When a small row number is
+printed next to or under a checkbox, use that number. Otherwise number the task rows 1, 2, 3...
+from top to bottom (skip the "SCHEDULE" section at the top, which has no boxes, anything in the
+"Also waiting" or "Not today" footer, and the small "tiny steps" boxes on a "just one thing" card).
+The person marked rows by hand:
+- a check mark (✓) in or near the box means "done"
+- an arrow (→) means "move to tomorrow"
+- a cross (✗ or X) or a line struck through the task means "drop"
+- an empty box means "none"
+- anything else (an up arrow, a circle, a note) is not one of these: use the closest mark with
+  confidence below 0.5 and name the kind of mark in the note, in at most 5 words (e.g. "circled",
+  "up arrow"); never copy handwritten words into the note
+
+Report every numbered row you can see, with the mark and your confidence.
+Be conservative: if a mark is ambiguous, smudged, or could belong to a neighbouring row, lower the confidence.
+Also read the code printed after '#' along the bottom edge of the label, left or right (like 260930-X5C8).
+
+The label may be stuck on the left page of a paper journal with handwritten notes on the right page
+(or around the label). If there are handwritten notes that are not part of the printed label,
+transcribe them into "notes" as faithfully as you can: keep the person's own words, line breaks and
+lists, write [unclear] for a word you can't read, and don't add anything. If there are none, leave
+"notes" empty. A small box drawn by hand at the start of a note line is a to-do: write it as "[ ] "
+(or "[x] " if the box is ticked). If the label has a "Today's win:" line with handwriting, put that text in "win"
+(not in "notes"). If the photo has notes but no label at all, report no rows and a null code.
+{manifest_hint}"""
+
+
+def old_reply_schema() -> dict:
+    """The output format Snap asked for before mark styles (991235c), as the SDK sends it."""
+    from typing import Literal
+
+    from anthropic.lib._parse._transform import transform_schema
+    from pydantic import BaseModel, Field, TypeAdapter
+
+    class RowMark(BaseModel):
+        row: int = Field(description="Task row number, counting from 1 at the top")
+        mark: Literal["done", "tomorrow", "drop", "none"]
+        confidence: float = Field(description="0.0-1.0: how sure you are about this row's mark")
+        note: str = Field(default="", description="The kind of odd mark, in at most 5 words, e.g. 'circled' or "
+                                                  "'up arrow'. Never copy handwritten words")
+
+    class ReadBack(BaseModel):
+        label_code: str | None = Field(description="The code printed after '#' along the bottom edge of the label "
+                                                   "(left or right), without '#', or null if unreadable")
+        rows: list[RowMark]
+        notes: str = Field(default="", description="Handwritten notes outside the label, transcribed; '' if none")
+        win: str = Field(default="", description="What's handwritten after 'Today's win:' on the label, or ''")
+    return transform_schema(TypeAdapter(ReadBack).json_schema())
+
+
+def sent_schema(model) -> dict:
+    from anthropic.lib._parse._transform import transform_schema
+    from pydantic import TypeAdapter
+    return transform_schema(TypeAdapter(model).json_schema())
+
+
+def test_simple_sends_exactly_the_request_it_always_did():
+    """The prompt and the output format, word for word: no mark numbers and no "note" for Simple."""
+    manifest = [{"row": 1, "content": "Call the vet"}, {"row": 2, "content": "Fold laundry"}]
+    hint = "\nThe label should list these task rows, in this order:\n1. Call the vet\n2. Fold laundry"
+    assert scan.PROMPT == OLD_PROMPT
+    for given in (None, [], simple(), marks.effective({"mark_style": "custom", "marks": simple()})):
+        assert scan.build_prompt(given, manifest) == OLD_PROMPT.format(manifest_hint=hint)
+        assert scan.build_prompt(given, []) == OLD_PROMPT.format(manifest_hint="")
+        assert sent_schema(scan.reply_format(given)) == old_reply_schema()
+    # Their own marks: numbered, and only the actions their marks have (a set with no "tomorrow" can't say it).
+    own = sent_schema(scan.reply_format(BUJO_OWN))
+    row = own["$defs"]["RowMark"]
+    assert row["properties"]["mark"]["enum"] == ["done", "tomorrow", "drop", "note", "none"] and "which" in row["properties"]
+    two = [{"symbol": "✓", "meaning": "done", "action": "done"}, {"symbol": "◐", "meaning": "on it", "action": "note"}]
+    assert sent_schema(scan.reply_format(two))["$defs"]["RowMark"]["properties"]["mark"]["enum"] == ["done", "note", "none"]
+    planner = sent_schema(scan.reply_format(marks.preset_marks("planner")))["$defs"]["RowMark"]["properties"]["mark"]
+    assert planner["enum"] == ["done", "tomorrow", "drop", "note", "none"]
+    assert '("which")' in scan.build_prompt(BUJO_OWN, []) and '"which"' not in scan.build_prompt(None, [])
 
 
 def test_the_prompt_strips_control_characters_and_caps_meanings():
@@ -286,20 +421,28 @@ def test_claude_vision_sends_the_persons_prompt(monkeypatch):
     import anthropic
 
     from nextbox.config import Settings
-    sent = []
+    sent, formats = [], []
 
     class Messages:
         def parse(self, **kwargs):
             sent.append(kwargs["messages"][0]["content"][1]["text"])
-            return type("R", (), {"stop_reason": "end_turn", "parsed_output": ReadBack(label_code=None, rows=[])})()
+            fmt = kwargs["output_format"]
+            formats.append(sent_schema(fmt))
+            row = fmt.model_fields["rows"].annotation.__args__[0]  # what the model may say for a row
+            rows = [row(row=1, mark="done", confidence=0.9, **({"which": 1} if "which" in row.model_fields else {}))]
+            return type("R", (), {"stop_reason": "end_turn", "parsed_output": fmt(label_code="X", rows=rows)})()
 
     class Client:
         def __init__(self, **kwargs):
             self.messages = Messages()
     monkeypatch.setattr(anthropic, "Anthropic", Client)
-    scan.claude_vision(Settings(anthropic_api_key="sk-test-not-real"), BUJO_OWN)(tiny_jpeg(), "image/jpeg", [])
-    scan.claude_vision(Settings(anthropic_api_key="sk-test-not-real"))(tiny_jpeg(), "image/jpeg", [])
+    got = [scan.claude_vision(Settings(anthropic_api_key="sk-test-not-real"), BUJO_OWN)(tiny_jpeg(), "image/jpeg", []),
+           scan.claude_vision(Settings(anthropic_api_key="sk-test-not-real"))(tiny_jpeg(), "image/jpeg", [])]
     assert sent == [scan.build_prompt(BUJO_OWN, []), scan.build_prompt(None, [])]
+    assert formats == [sent_schema(scan.reply_format(BUJO_OWN)), old_reply_schema()]
+    # Either way it's read as a ReadBack: a Simple row has no number (0).
+    assert all(type(r) is ReadBack for r in got)
+    assert [(r.rows[0].mark, r.rows[0].which) for r in got] == [("done", 1), ("done", 0)]
 
 
 # ------------------------------------------------------------------ read-back with their own marks
@@ -374,6 +517,54 @@ def test_simple_reads_back_exactly_as_before(ctx, todo):
     assert [(a["symbol"], a["meaning"]) for a in rec["applied"]] == [("✓", "done"), ("→", "move")]
 
 
+def changed(todo):
+    return [c for c in todo.calls if c[0] != "filter"]
+
+
+def test_a_mark_and_its_number_that_disagree_never_become_a_delete_or_a_note(ctx, todo):
+    """Snap's mark and its number for a row disagree: it waits, under whichever of the two finishes or moves
+    the task. Never "Delete?" for a tick, never a tick quietly noted; a note and a delete that disagree change nothing."""
+    label = jobs.print_today(ctx)   # Simple: 1 ✓ done, 2 → move, 3 ✗ drop
+    rec = scan.scan_photo(ctx, fake_vision([{"row": 1, "mark": "done", "which": 3, "confidence": 0.97},
+                                            {"row": 3, "mark": "drop", "which": 1, "confidence": 0.97}],
+                                           code=label["id"]), b"img", "image/jpeg")
+    assert [(p["row"], p["mark"], p["status"], p["note"]) for p in rec["needs_confirmation"]] == [
+        (1, "done", "pending", "unclear mark"), (3, "done", "pending", "unclear mark")]
+    assert rec["applied"] == [] and rec["noted"] == [] and changed(todo) == []
+    # Their own marks: 1 × finished, 2 > later, 3 ◐ half done (note), 4 a line through: not needed (drop).
+    c = own(ctx)
+    label = jobs.print_today(c)
+    rec = scan.scan_photo(c, fake_vision([
+        {"row": 1, "mark": "done", "which": 3, "confidence": 0.99},   # a tick numbered ◐: asks, never just noted
+        {"row": 2, "mark": "note", "which": 1, "confidence": 0.99},   # a note numbered ×: asks "Complete?"
+        {"row": 3, "mark": "note", "which": 4, "confidence": 0.99},   # a note numbered "not needed": nothing
+        {"row": 4, "mark": "drop", "which": 3, "confidence": 0.99},   # a delete numbered ◐: nothing
+    ], code=label["id"]), b"img", "image/jpeg")
+    assert [(p["row"], p["mark"], p.get("symbol")) for p in rec["needs_confirmation"]] == [(1, "done", None), (2, "done", "×")]
+    assert rec["applied"] == [] and rec["noted"] == [] and changed(todo) == []
+    assert [(i["row"], i["reason"]) for i in rec["ignored"]] == [(3, scan.UNCLEAR), (4, scan.UNCLEAR)]
+    scan.confirm(c, rec["id"], {1: "confirm"})
+    assert changed(todo) == [("close", "1")]   # what they said yes to, and nothing else
+
+
+def test_a_note_that_isnt_one_of_their_marks_is_left_alone(ctx, todo):
+    """On Simple (no note marks) a "note" changes nothing and isn't shown as one of their marks; with two note
+    marks and no number it's noted without guessing which."""
+    label = jobs.print_today(ctx)
+    rec = scan.scan_photo(ctx, fake_vision([{"row": 1, "mark": "note", "confidence": 0.4, "note": "circled"},
+                                            {"row": 2, "mark": "note", "which": 0, "confidence": 0.95}],
+                                           code=label["id"]), b"img", "image/jpeg")
+    assert rec["noted"] == [] and rec["needs_confirmation"] == [] and rec["applied"] == [] and changed(todo) == []
+    assert [(i["row"], i["reason"], i["note"]) for i in rec["ignored"]] == [(1, "unclear mark", "circled"),
+                                                                         (2, "unclear mark", "unclear mark")]
+    planner = dataclasses.replace(ctx, prefs={**default_prefs(), "mark_style": "planner"})  # • in progress, D delegated
+    label = jobs.print_today(planner)
+    rec = scan.scan_photo(planner, fake_vision([{"row": 1, "mark": "note", "confidence": 0.9},
+                                                {"row": 2, "mark": "note", "which": 5, "confidence": 0.9}],
+                                               code=label["id"]), b"img", "image/jpeg")
+    assert [(n["row"], n.get("meaning")) for n in rec["noted"]] == [(1, None), (2, "delegated")] and changed(todo) == []
+
+
 def test_changing_marks_later_never_changes_an_earlier_photo(ctx, todo):
     c = own(ctx)
     label = jobs.print_today(c)
@@ -411,7 +602,8 @@ def test_settings_api_saves_marks_and_says_whats_wrong(site):
     info = sam.get("/settings/marks").json()
     assert [p["id"] for p in info["presets"]] == list(marks.PRESETS) and info["style"] == "simple"
     assert info["marks"] == simple() and info["max_marks"] == 8 and info["max_meaning"] == 60
-    assert [x["name"] for x in info["actions"]] == ["Finish it", "Move to tomorrow", "Delete it (always asks first)", "Just note it"]
+    # Short enough for a phone with Extra large text; "Delete it" has "always asks" written out under it (app.js).
+    assert [x["name"] for x in info["actions"]] == ["Finish it", "Move to tomorrow", "Delete it", "Just note it"]
     r = sam.patch("/settings", json={"mark_style": "custom", "marks": [*BUJO_OWN[:3], {"symbol": "⭐", "meaning": "big", "action": "note"}]})
     assert r.status_code == 400 and r.json()["detail"] == "Mark 4: the label can't print “⭐”. Pick another symbol."
     r = sam.patch("/settings", json={"mark_style": "custom", "marks": BUJO_OWN, "marks_from": "bullet_journal"})
@@ -436,6 +628,31 @@ def test_legend_preview_draws_without_printing(site):
     assert sam.get("/settings/marks/legend.png", params={"marks": "{nope"}).status_code == 400
     assert anon.get("/settings/marks/legend.png").status_code == 401
     assert sam.get("/printed").json() == []  # a preview of the legend is not a ticket
+
+
+def test_odd_requests_get_a_plain_no_never_a_crash(site):
+    """Shapes and characters only a hand-made request sends: a 400 that says why, and nothing is stored."""
+    a, anon, login, _, data = site
+    sam = login("sam", "sam password")
+    mark = {"symbol": "✓", "meaning": "m", "action": "done"}
+    for change in ({"mark_style": "custom", "marks": [{**mark, "symbol": "", "look": ["strike"]}]},
+                   {"mark_style": "custom", "marks": [{**mark, "look": {"a": 1}}]},
+                   {"marks_from": ["simple"]}, {"marks_from": {"simple": 1}}, {"mark_style": ["simple"]},
+                   {"mark_style": {"custom": 1}}):
+        r = sam.patch("/settings", json=change)
+        assert r.status_code == 400 and r.json()["detail"], change
+    for odd in ([{**mark, "look": ["strike"]}], [{**mark, "look": {"a": 1}}]):
+        r = sam.get("/settings/marks/legend.png", params={"marks": json.dumps(odd)})
+        assert r.status_code == 400 and r.json()["detail"] == "Mark 1: that isn't a mark Next Box knows."
+    # Half a character (a lone surrogate) in what it means, or as the symbol, sent as raw JSON.
+    for body in ('{"mark_style":"custom","marks":[{"symbol":"✓","meaning":"a\\ud800b","action":"done"}]}',
+                 '{"mark_style":"custom","marks":[{"symbol":"\\udfff","meaning":"done","action":"done"}]}'):
+        r = sam.patch("/settings", content=body.encode(), headers={"content-type": "application/json"})
+        assert r.status_code == 400 and "Mark 1:" in r.json()["detail"], r.text
+    r = sam.get("/settings/marks/legend.png", params={"marks": '[{"symbol":"✓","meaning":"a\\ud800","action":"done"}]'})
+    assert r.status_code == 400
+    assert sam.get("/settings").status_code == 200 and sam.get("/settings/marks").json()["marks"] == simple()
+    assert a.get("sam")["prefs"]["marks"] == [] and a.get("sam")["prefs"]["mark_style"] == "simple"
 
 
 def test_snap_in_the_app_notes_holds_and_applies(site):
@@ -516,7 +733,12 @@ def test_settings_card_and_read_back_screens_are_wired():
     assert '<div class="card" id="markCard"><h2>How you mark your list</h2>' in page
     assert '<fieldset class="markstyles" id="markStyles"><legend class="sr-only">' in page
     assert 'id="markAdd" type="button">Add a mark</button>' in page and 'id="markReset"' in page
-    assert '<span id="snapMarks">✓ done, → move, ✗ drop</span>' in page  # then the person's own (markSync)
+    # Then the person's own (markSync), with " · " between marks: their words may have a comma in them.
+    assert '<span id="snapMarks">✓ done · → move · ✗ drop</span>' in page and 'textContent = "✓ done · → move · ✗ drop"' in js
+    assert 'const legendWords = (list, sep = " · ") => list.map(markWords).join(sep);' in js
+    assert "legendWords(list, \"; \")" in js  # the preview's alt text: what a screen reader pauses on
+    # Each style's card shows its legend as text, at the size of the words around it (no small picture).
+    assert '<span class="mslegend" id="msp-${id}"' in js and "legendHtml(p.marks)" in js and ".mslegend {" in page
     # Every control has a label; the picker can be reached and left with the keyboard.
     for wired in ('<label for="mSym${i}">Symbol</label>', '<label for="mMean${i}">What it means to you</label>',
                   '<label for="mAct${i}">What Next Box does</label>', 'aria-controls="mPick${i}"', 'data-strike aria-pressed',
@@ -529,7 +751,114 @@ def test_settings_card_and_read_back_screens_are_wired():
     commit = js[js.index("function markCommit("):js.index("function markEdit(")]
     assert 'saveMarks({ mark_style: "custom", marks: ready' in commit
     assert "`Start again from ${from.name}`" in js and "markInfo.max_marks" in js
-    # Read-back: each row's mark in their words; a noted row says nothing changed.
+    # A message about the whole list shows by the box just changed (or by the mark next to one removed).
+    assert "markCommit({ row: i, field });" in js and 'markCommit(markDraft.length ? { row: next, field: "action" } : null)' in js
+    assert "markShowErr(bad && bad.row === undefined ? { ...markNear, msg: bad.msg } : bad);" in commit
+    # Read-back: each row's mark in their words; a noted row says nothing changed; an unclear one says so.
     assert "Noted, nothing changed." in js and "ownWords(rec, p)" in js and 'const SIMPLE_MARKS = "✓done|→move|✗drop"' in js
-    # Phones and big text: the rows stack, everything tappable is 44px.
-    assert ".markrow { grid-template-columns:1fr; }" in page and "#markAdd, #markReset" in page
+    assert '"unclear mark": `Row ${i.row}: not sure which of your marks this is' in js
+    # Any text size: what it means never gets narrower than 14rem (the rest wraps); phones stack; 44px to tap.
+    assert ".markrow { display:flex; flex-wrap:wrap;" in page and ".markrow .mmean { flex:1 1 14rem; }" in page
+    assert ".markrow .msym, .markrow .mmean, .markrow .mact { flex:1 1 100%; }" in page and "#markAdd, #markReset" in page
+    assert "grid-template-columns:minmax(0, 9rem)" not in page and ".markrow .mact { flex:0 1 auto; }" in page
+    # "Delete it" says, whole and under the choice, that it always asks first.
+    assert 'const MARK_DROP = "Next Box always asks you before it deletes.";' in js
+    assert '<p class="muted mdrop" id="mDrop${i}">${m.action === "drop" ? MARK_DROP : ""}</p>' in js
+    assert 'aria-describedby="mDrop${i} mErr${i}"' in js and 'drop.textContent = m.action === "drop" ? MARK_DROP : "";' in js
+
+
+def test_the_guide_links_are_in_the_order_of_its_sections():
+    guide = (WEB / "guide.html").read_text()
+    nav = guide[guide.index("<nav>"):guide.index("</nav>")]
+    links = re.findall(r'href="#(\w+)"', nav)
+    places = [guide.index(f'id="{x}"') for x in links]
+    assert places == sorted(places), links
+    assert links.index("journal") < links.index("marks")
+
+
+def node_or_skip() -> str:
+    import shutil
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node isn't installed")
+    return node
+
+
+def run_js(script: str):
+    import subprocess
+    out = subprocess.run([node_or_skip(), "-e", script], capture_output=True, text=True, timeout=30, check=True).stdout
+    return json.loads(out)
+
+
+def js_part(js: str, pattern: str) -> str:
+    return re.search(pattern, js, re.S)[0]
+
+
+def test_the_app_and_the_server_agree_on_look_alikes():
+    """web/app.js checks a list before sending it (markProblem); its look-alikes are marks.LOOK_ALIKE."""
+    js = (WEB / "app.js").read_text()
+    alike = json.loads(js_part(js, r"(?<=const MARK_ALIKE = )\[.*?\]\];"
+                               ).rstrip(";"))
+    assert sorted(map(sorted, alike)) == sorted(map(sorted, marks.LOOK_ALIKE))
+    cases = [[*simple(), {"symbol": a, "meaning": "x", "action": "note"}, {"symbol": b, "meaning": "y", "action": "note"}]
+             for a, b in (("-", "–"), ("—", "-"), ("•", "●"), ("○", "0"), ("O", "o"), ("D", "d"), ("D", "!"), ("/", "–"))]
+    script = ("const markInfo = { max_marks: 8, max_meaning: 60, max_symbol: 3 };\n" + js_part(js, r"const MARK_ALIKE = .*?;\n")
+              + js_part(js, r"function markProblem\(.*?\n}\n")
+              + f"console.log(JSON.stringify({json.dumps(cases)}.map((l) => markProblem(l)?.msg ?? null)));")
+    assert run_js(script) == [marks.problem(c) for c in cases]
+
+
+def test_quick_mark_changes_leave_the_rows_on_the_style_that_is_saved():
+    """saveMarks (web/app.js), with the server's answers held back: a meaning changed and then a style picked,
+    or two styles picked in a row, leave the rows drawn from the style picked last. An older answer redraws
+    nothing; a style change that fails goes back to what's saved."""
+    js = (WEB / "app.js").read_text()
+    harness = """
+let prefQueue = Promise.resolve(), prefPending = 0, me = { prefs: { mark_style: "simple", marks: [] } };
+let markQueued = [], markDraft = ["simple"], markNear = null, server = { ...me.prefs }, waiting = [], failNext = false;
+const log = [];
+const api = (path, opts) => new Promise((ok, no) => waiting.push(() => {
+  if (failNext) { failNext = false; return no(Object.assign(new Error("Next Box isn't answering."), { status: 0 })); }
+  Object.assign(server, opts.json); ok({ ...server });
+}));
+const rowsFor = (p) => p.mark_style === "custom" ? p.marks.map((m) => m.meaning).join("|") : p.mark_style;
+function markSync() { log.push(["sync", markPrefs().mark_style]); if (!markDraft) markDraft = [rowsFor(markPrefs())]; }
+function loadPrefs(p) { log.push(["load", p.mark_style]); markSync(); }
+const toast = () => {}, errText = (e) => e.message, markServerErr = (m) => log.push(["err", m]);
+const markShowErr = (b) => log.push(["show", b && b.msg]);
+const answer = async () => { waiting.shift()(); for (let i = 0; i < 5; i++) await null; await new Promise((r) => setTimeout(r)); };
+const settle = async () => { while (waiting.length || prefPending) { if (waiting.length) await answer(); else await new Promise((r) => setTimeout(r)); } };
+"""
+    script = harness + js_part(js, r"const markPrefs = .*?;\n") + js_part(js, r"function saveMarks\(.*?\n}\n") + """
+(async () => {
+  const out = {};
+  // A meaning typed, then Paper planner picked before the first answer comes back.
+  saveMarks({ mark_style: "custom", marks: [{ meaning: "finished!" }], marks_from: "simple" });
+  saveMarks({ mark_style: "planner" }, null, true);
+  out.drawnAtOnce = markDraft[0];
+  await new Promise((r) => setTimeout(r)); await answer();
+  out.afterOlder = [markDraft[0], log.filter((l) => l[0] === "load").length];
+  await settle();
+  out.a = [server.mark_style, markDraft[0], markQueued.length];
+  // Two styles in a row (arrow keys): Bullet journal, then Fill the box.
+  saveMarks({ mark_style: "bullet_journal" }, null, true);
+  saveMarks({ mark_style: "progress" }, null, true);
+  out.queued = markPrefs().mark_style;
+  await settle();
+  out.b = [server.mark_style, markDraft[0]];
+  // A style that can't be saved: the rows go back to the saved one.
+  failNext = true;
+  saveMarks({ mark_style: "simple" }, null, true);
+  out.tried = markDraft[0];
+  await settle();
+  out.c = [server.mark_style, markDraft[0], log.at(-1)];
+  console.log(JSON.stringify(out));
+})();
+"""
+    out = run_js(script)
+    assert out["drawnAtOnce"] == "planner"                # drawn as it will be saved, straight away
+    assert out["afterOlder"] == ["planner", 0]            # the older answer redraws nothing
+    assert out["a"] == ["planner", "planner", 0]
+    assert out["queued"] == "progress" and out["b"] == ["progress", "progress"]
+    assert out["tried"] == "simple" and out["c"][:2] == ["progress", "progress"]
+    assert out["c"][2] == ["show", "Next Box isn't answering. Change it again to try again."]

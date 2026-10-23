@@ -18,10 +18,10 @@ import unicodedata
 from .render import can_draw
 
 ACTIONS = ("done", "tomorrow", "drop", "note")
-ACTION_NAMES = {  # what the Settings select says
+ACTION_NAMES = {  # what the Settings select says: short enough for a phone with Extra large text
     "done": "Finish it",
     "tomorrow": "Move to tomorrow",
-    "drop": "Delete it (always asks first)",
+    "drop": "Delete it",  # with "Next Box always asks you before it deletes." under it (web/app.js MARK_DROP)
     "note": "Just note it",
 }
 LOOKS = {"strike": "a line struck through the task"}  # marks that aren't a typed symbol
@@ -30,8 +30,9 @@ MAX_SYMBOL = 3
 MAX_MEANING = 60
 CUSTOM = "custom"
 
-# Hand-drawn, these look the same: two of them in one list can't be told apart on paper.
-LOOK_ALIKE = [set("✗✘×xX"), set("✓✔√"), {"→", "->", "➔", "➜"}]
+# Hand-drawn, these look the same: two of them in one list can't be told apart on paper (and Snap's prompt
+# describes them in the same words). web/app.js MARK_ALIKE is the same list.
+LOOK_ALIKE = [set("✗✘×xX"), set("✓✔√"), {"→", "->", "➔", "➜"}, {"-", "–", "—"}, {"•", "●"}, {"○", "O", "o", "0"}]
 
 # Symbols Settings offers to pick from (all drawn by the label's font; letters are typed).
 PICKER = ["✓", "✗", "→", ">", "<", "×", "•", "○", "●", "◐", "★", "!", "?", "–", "/"]
@@ -112,6 +113,8 @@ def _what(i: int) -> str:
 def _sym_problem(i: int, symbol, look: str) -> str | None:
     if not isinstance(symbol, str):
         return f"{_what(i)} pick a symbol."
+    if any(unicodedata.category(ch)[0] == "C" for ch in symbol):  # not said back: it may not even be whole text
+        return f"{_what(i)} the label can't print that symbol. Pick another symbol."
     if symbol != symbol.strip():
         return f"{_what(i)} type the symbol without spaces around it."
     if unicodedata.normalize("NFC", symbol) != symbol:  # the app always sends one form of each character
@@ -125,6 +128,14 @@ def _sym_problem(i: int, symbol, look: str) -> str | None:
     return None
 
 
+def _look_key(symbol: str) -> str:
+    """The same for two symbols that can't be told apart written by hand, or that differ only in case."""
+    for group in LOOK_ALIKE:
+        if symbol in group:
+            return min(group)
+    return symbol.casefold()
+
+
 def problem(marks) -> str | None:
     """What's wrong with a list of marks, in plain words (with which mark: "Mark 2: …"), or None."""
     if not isinstance(marks, list) or not marks:
@@ -136,8 +147,8 @@ def problem(marks) -> str | None:
     for i, m in enumerate(marks, start=1):
         if not isinstance(m, dict) or set(m) - {"symbol", "meaning", "action", "look"}:
             return f"{_what(i)} that isn't a mark Next Box knows."
-        look = m.get("look") or ""
-        if look and look not in LOOKS:
+        look = m.get("look", "")
+        if not isinstance(look, str) or (look and look not in LOOKS):
             return f"{_what(i)} that isn't a mark Next Box knows."
         symbol = m.get("symbol", "")
         bad = _sym_problem(i, symbol, look)
@@ -148,6 +159,8 @@ def problem(marks) -> str | None:
             return f"{_what(i)} say what it means to you."
         if any(unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") for ch in meaning):
             return f"{_what(i)} keep what it means to one line."
+        if any(unicodedata.category(ch)[0] == "C" for ch in meaning):  # half a character, private or unassigned
+            return f"{_what(i)} what it means has a character Next Box can't use. Type it again."
         if meaning != meaning.strip():
             return f"{_what(i)} take the spaces off the ends of what it means."
         if len(meaning) > MAX_MEANING:
@@ -157,10 +170,7 @@ def problem(marks) -> str | None:
         if look:
             struck += 1
         if symbol:
-            key = symbol.casefold()
-            for group in LOOK_ALIKE:
-                if symbol in group:
-                    key = min(group)
+            key = _look_key(symbol)
             if key in seen:
                 first = seen[key]
                 return (f"“{symbol}” is in the list twice. Use each symbol once." if first.casefold() == symbol.casefold()

@@ -199,7 +199,7 @@ function clearPerson() {
   todayCal = null; viewPick = "";
   conn = null; printOpts = null; update = null; editing = null; suRows = []; suPicked = new Set(); suOpen = null;
   markDraft = null; $("#markRows").innerHTML = ""; $("#markUndoRow").hidden = true; $("#markPreview").hidden = true; delete $("#markPreview").dataset.want;  // their marks
-  $("#snapMarks").textContent = "✓ done, → move, ✗ drop";
+  $("#snapMarks").textContent = "✓ done · → move · ✗ drop";
   $("#lookOut").innerHTML = ""; $("#lookNotes").checked = false; lookText = ""; lookPrivacy();  // the AI helpers
   routineForget(); timerForget(); remindForget(); quickRoute = null; shareForget();  // FE: the card, timer, reminders, a share
   markTab("mylist");
@@ -825,6 +825,7 @@ function ignoredLine(i) {
   return { "not on this label": `Row ${i.row} isn't on this ticket`, "duplicate row": `Row ${i.row} was read twice`,
            "already done": `Already done: ${i.content}`, "already moved": `Already moved: ${i.content}`,
            "read before": `Already read from this ticket: ${what}`,
+           "unclear mark": `Row ${i.row}: not sure which of your marks this is${i.note && i.note !== "unclear mark" ? ` (${i.note})` : ""}. Nothing changed: ${i.content}`,
            "deleted since printed": `${i.content} was deleted after this ticket printed, so nothing changed` }[i.reason] || `Row ${i.row}: ${i.reason}`;
 }
 
@@ -1158,14 +1159,20 @@ $("[data-pref=confidence]").oninput = (e) => confText(e.target.value);
 // A style is a preset or "custom": their own list. Changing a preset's marks makes them their own. Each change
 // saves through the settings queue above (one save at a time). A list that isn't right yet isn't sent: why shows
 // next to that mark, as the server's answers do ("Mark 2: …"). A mark just added waits until it's filled in.
-let markInfo = null, markDraft = null, markSent = [];
-const MARK_ALIKE = [["✗", "✘", "×", "x", "X"], ["✓", "✔", "√"], ["→", "->", "➔", "➜"]];  // the same, written by hand
+// markQueued: the mark changes on their way (oldest first), so a change made before an answer comes back
+// builds on the ones before it. markNear: the mark and box last changed, where a message about the list shows.
+let markInfo = null, markDraft = null, markSent = [], markQueued = [], markNear = null;
+// The same, written by hand (marks.LOOK_ALIKE): two of them in one list can't be told apart.
+const MARK_ALIKE = [["✗", "✘", "×", "x", "X"], ["✓", "✔", "√"], ["→", "->", "➔", "➜"], ["–", "-", "—"], ["•", "●"], ["○", "O", "o", "0"]];
 const SYMBOL_NAMES = { "✓": "check mark", "✗": "cross", "→": "arrow", ">": "greater-than sign", "<": "less-than sign",
   "×": "times sign", "•": "dot", "○": "circle", "●": "filled circle", "◐": "half-filled circle", "★": "star",
   "!": "exclamation mark", "?": "question mark", "–": "dash", "/": "slash" };
 const MARK_NEW = "Pick a symbol and say what it means. It saves when both are filled in.";
+const MARK_DROP = "Next Box always asks you before it deletes.";  // under "Delete it", whole at any text size
 const presetOf = (id) => markInfo?.presets.find((p) => p.id === id);
 const copyMarks = (list) => (list || []).map(({ symbol, meaning, action, look }) => ({ symbol, meaning, action, ...(look ? { look } : {}) }));
+// Their settings as they will be once the mark changes on their way are saved.
+const markPrefs = () => Object.assign({}, me?.prefs, ...markQueued);
 // The marks they use now (marks.effective): their preset's, or their own list.
 function marksFor(prefs) {
   const style = prefs?.mark_style || "simple";
@@ -1174,8 +1181,14 @@ function marksFor(prefs) {
 }
 // "✓ done", or "line through: drop" for a line struck through the task
 const markWords = (m) => m.symbol ? `${m.symbol} ${m.meaning}` : m.look ? `line through: ${m.meaning}` : "";
-const legendWords = (list) => list.map(markWords).join(", ");
+// " · " between marks, never a comma: their words may have one ("half done, on it"). "; " for screen readers.
+const legendWords = (list, sep = " · ") => list.map(markWords).join(sep);
 const legendSrc = (list) => `/settings/marks/legend.png?marks=${encodeURIComponent(JSON.stringify(list))}`;
+// A legend as text, in a style's card: each mark on its own (it wraps between marks), a line struck through the
+// words of a mark that is a line through the task, as the label prints it.
+const legendHtml = (list) => `<span class="sr-only">Prints: </span>` + list.map((m) => `<span class="mslegi">${m.symbol
+  ? `${esc(m.symbol)} ${esc(m.meaning)}` : `<s>${esc(m.meaning)}</s><span class="sr-only"> (a line through the task)</span>`}</span>`)
+  .join(`<span class="sr-only">;</span> `);
 
 async function loadMarkInfo() {
   if (!markInfo) {
@@ -1191,26 +1204,23 @@ function markStylesDraw() {
     const id = esc(p.id);
     return `<label class="markstyle"><input type="radio" name="markStyle" value="${id}" aria-labelledby="msn-${id}" aria-describedby="msb-${id} msp-${id}">
       <span class="msbody"><b id="msn-${id}">${esc(p.name)}</b><span class="muted" id="msb-${id}">${esc(p.blurb)}</span>
-        <span class="sr-only" id="msp-${id}">${p.marks ? esc(`Prints ${legendWords(p.marks)}.`) : ""}</span>
-        <img class="legendprev" alt="" ${p.marks ? `src="${legendSrc(p.marks)}"` : "hidden"}></span></label>`;
+        <span class="mslegend" id="msp-${id}"${p.marks ? "" : " hidden"}>${p.marks ? legendHtml(p.marks) : ""}</span></span></label>`;
   }).join("");
-  $("#markStyles input[value=custom]").closest("label").querySelector("img").onerror = (e) => { e.target.hidden = true; };
 }
 
-// Settings (and the Snap tab's hint) as the saved settings say. The mark rows are drawn again only when
-// nothing is being changed in them (a style picked, Start again, or the first time).
+// Settings (and the Snap tab's hint) as the settings will be once the changes on their way are saved. The mark
+// rows are drawn again only when nothing is being changed in them (a style picked, Start again, or the first time).
 function markSync() {
   if (!markInfo || !me) return;
-  const prefs = me.prefs, style = prefs.mark_style || "simple", own = prefs.marks?.length ? copyMarks(prefs.marks) : null;
+  const prefs = markPrefs(), style = prefs.mark_style || "simple", own = prefs.marks?.length ? copyMarks(prefs.marks) : null;
   $("#snapMarks").textContent = legendWords(marksFor(prefs));
   $$("#markStyles input").forEach((r) => { r.checked = r.value === style; });
   const ownCard = $("#markStyles input[value=custom]")?.closest("label");  // "Your own": their list, if they have one
   if (ownCard) {
-    const img = ownCard.querySelector("img");
-    img.hidden = !own;
-    if (own) img.src = legendSrc(own);
+    const shown = ownCard.querySelector(".mslegend");
+    shown.hidden = !own;
+    shown.innerHTML = own ? legendHtml(own) : "";
     ownCard.querySelector(".muted").textContent = own ? "Your own marks, with your words for each." : "Change any mark below and it becomes your own.";
-    ownCard.querySelector(".sr-only").textContent = own ? `Prints ${legendWords(own)}.` : "";
   }
   const from = presetOf(prefs.marks_from) || presetOf("simple");
   $("#markReset").hidden = style !== "custom";
@@ -1235,7 +1245,7 @@ function markPreview(list) {
   next.onload = () => {
     const now = $("#markPreview");
     if (now.dataset.want !== url) return;  // a newer change is on its way
-    Object.assign(next, { id: "markPreview", className: "legendprev", alt: `Your labels print: ${legendWords(list)}` });
+    Object.assign(next, { id: "markPreview", className: "legendprev", alt: `Your labels print: ${legendWords(list, "; ")}` });
     next.dataset.want = url;
     now.replaceWith(next);
   };
@@ -1243,7 +1253,7 @@ function markPreview(list) {
 }
 
 function markRowsDraw(focusSel) {
-  if (!markDraft) markDraft = marksFor(me.prefs);
+  if (!markDraft) markDraft = marksFor(markPrefs());
   const acts = markInfo.actions;
   $("#markRows").innerHTML = markDraft.map((m, i) => `<div class="markrow" role="group" aria-labelledby="mName${i}" data-i="${i}">
       <span class="sr-only" id="mName${i}">Mark ${i + 1}</span>
@@ -1254,10 +1264,11 @@ function markRowsDraw(focusSel) {
       <div class="mmean"><label for="mMean${i}">What it means to you</label>
         <input type="text" id="mMean${i}" data-f="meaning" value="${esc(m.meaning)}" maxlength="${markInfo.max_meaning}" aria-describedby="mErr${i}"></div>
       <div class="mact"><label for="mAct${i}">What Next Box does</label>
-        <select id="mAct${i}" data-f="action" aria-describedby="mErr${i}">${acts.map((a) =>
+        <select id="mAct${i}" data-f="action" aria-describedby="mDrop${i} mErr${i}">${acts.map((a) =>
           `<option value="${esc(a.id)}"${a.id === m.action ? " selected" : ""}>${esc(a.name)}</option>`).join("")}</select></div>
       <button type="button" class="plain small mrm" data-rm="${i}">Remove<span class="sr-only"> mark ${i + 1}</span></button>
       <p class="muted mlook" id="mLook${i}">${m.look ? (m.symbol ? "Or a line through the task." : "A line through the task.") : ""}</p>
+      <p class="muted mdrop" id="mDrop${i}">${m.action === "drop" ? MARK_DROP : ""}</p>
       <div class="mpick" id="mPick${i}" role="group" aria-label="Symbols for mark ${i + 1}" hidden>
         ${markInfo.picker.map((sym) => `<button type="button" data-sym="${esc(sym)}" aria-label="${esc(SYMBOL_NAMES[sym] || sym)}">${esc(sym)}</button>`).join("")}
         <button type="button" class="mstrike" data-strike aria-pressed="${m.look ? "true" : "false"}">A line through the task</button>
@@ -1325,38 +1336,49 @@ function markServerErr(msg) {
   }
   const sym = /“([^”]+)” (?:is in the list twice|look the same)/.exec(msg.replace(/^“[^”]+” and /, ""))?.[1];
   const row = sym && markDraft ? markDraft.map((m) => m.symbol).lastIndexOf(sym) : -1;
-  markShowErr(row >= 0 ? { row, field: "symbol", msg } : { msg });
+  markShowErr(row >= 0 ? { row, field: "symbol", msg } : { ...markNear, msg });  // about the list: by the box just changed
 }
 
-function saveMarks(changes, after) {
+// One change to their marks, through the settings queue. `redraw` (a style picked, Start again, Undo): the rows
+// are drawn now as they will be saved, so a mark changed before the answer comes is one of the right marks, and
+// from what's saved if it isn't saved. An older answer changes nothing on screen: a newer change is on its way.
+function saveMarks(changes, after, redraw = false) {
+  markQueued.push(changes);
+  if (redraw) { markDraft = null; markSync(); }
   prefPending++;
   return (prefQueue = prefQueue.then(async () => {
     const newest = () => prefPending === 1;
     try {
       const prefs = await api("/settings", { method: "PATCH", json: changes });
+      markQueued.shift();
       if (me) me.prefs = prefs;
-      if (newest()) loadPrefs(prefs); else markSync();
+      if (newest()) loadPrefs(prefs);
       after?.();
       toast("Saved");
     } catch (e) {
-      if (e.status) markServerErr(errText(e)); else markShowErr({ msg: `${errText(e)} Change it again to try again.` });
-      if (newest() && me) loadPrefs(me.prefs);
+      markQueued.shift();
+      const msg = e.status ? errText(e) : `${errText(e)} Change it again to try again.`;
+      if (redraw) markDraft = null;  // back to the marks that are saved
+      if (newest() && me) loadPrefs(me.prefs); else if (redraw) markSync();
+      if (redraw) markShowErr({ msg }); else if (e.status) markServerErr(msg); else markShowErr({ ...markNear, msg });
     } finally { prefPending--; }
   }));
 }
 
 // A change to one mark: checked here first, then saved as their own list (the style becomes "custom").
-function markCommit() {
+// near: the mark and box just changed ({row, field}), where a message about the whole list shows.
+function markCommit(near) {
   $("#markUndoRow").hidden = true;  // a new change: "Back to …'s marks. Undo" no longer fits
+  markNear = near || null;
   const ready = markReady(), at = markDraft.map((m, j) => (m._new ? -1 : j)).filter((j) => j >= 0);
   markDraft.forEach((m, j) => { const h = $(`#mHint${j}`); if (h) h.textContent = m._new ? MARK_NEW : ""; });
   const bad = markProblem(ready, (n) => at[n]);
-  markShowErr(bad);
+  markShowErr(bad && bad.row === undefined ? { ...markNear, msg: bad.msg } : bad);
   if (bad) return;
   markPreview(ready);
   markSent = at;
-  const style = me.prefs.mark_style || "simple";
-  saveMarks({ mark_style: "custom", marks: ready, marks_from: style === "custom" ? (me.prefs.marks_from || "simple") : style });
+  const prefs = markPrefs(), style = prefs.mark_style || "simple";
+  saveMarks({ mark_style: "custom", marks: ready, marks_from: style === "custom" ? (prefs.marks_from || "simple") : style });
 }
 
 function markEdit(i, field, value) {
@@ -1365,19 +1387,20 @@ function markEdit(i, field, value) {
   if (field === "look") { if (value) m.look = value; else delete m.look; }
   else m[field] = field === "action" ? value : value.normalize("NFC").trim();
   if (m._new && (m.symbol || m.look) && m.meaning && m.action) delete m._new;
-  const look = $(`#mLook${i}`);
+  const look = $(`#mLook${i}`), drop = $(`#mDrop${i}`);
   if (look) look.textContent = m.look ? (m.symbol ? "Or a line through the task." : "A line through the task.") : "";
-  markCommit();
+  if (drop) drop.textContent = m.action === "drop" ? MARK_DROP : "";
+  markCommit({ row: i, field });
 }
 
 $("#markStyles").onchange = (e) => {
   const v = e.target.value;
   if (!v || !me) return;
-  markDraft = null;
   $("#markUndoRow").hidden = true;
-  if (v !== "custom") return saveMarks({ mark_style: v });
-  if (me.prefs.marks?.length) return saveMarks({ mark_style: "custom" });
-  saveMarks({ mark_style: "custom", marks: marksFor(me.prefs), marks_from: me.prefs.mark_style || "simple" });
+  const prefs = markPrefs();
+  if (v !== "custom") return saveMarks({ mark_style: v }, null, true);
+  if (prefs.marks?.length) return saveMarks({ mark_style: "custom" }, null, true);
+  saveMarks({ mark_style: "custom", marks: marksFor(prefs), marks_from: prefs.mark_style || "simple" }, null, true);
 };
 $("#markRows").addEventListener("change", (e) => {
   const el = e.target.closest("[data-f]"), row = e.target.closest(".markrow");
@@ -1405,9 +1428,9 @@ $("#markRows").addEventListener("click", (e) => {
     b.setAttribute("aria-pressed", String(on));
     markEdit(i, "look", on ? "strike" : "");
   } else if (e.target.closest("[data-rm]")) {
-    const gone = markDraft.splice(i, 1)[0];
-    markRowsDraw(markDraft.length ? `#mSym${Math.min(i, markDraft.length - 1)}` : "#markAdd");
-    if (!gone._new) markCommit();
+    const gone = markDraft.splice(i, 1)[0], next = Math.min(i, markDraft.length - 1);
+    markRowsDraw(markDraft.length ? `#mSym${next}` : "#markAdd");
+    if (!gone._new) markCommit(markDraft.length ? { row: next, field: "action" } : null);  // "One mark needs to finish…"
   }
 });
 $("#markRows").addEventListener("keydown", (e) => {  // Esc closes the symbols, back on their Pick button
@@ -1421,14 +1444,14 @@ $("#markRows").addEventListener("keydown", (e) => {  // Esc closes the symbols, 
 });
 $("#markAdd").onclick = () => {
   if (!markInfo || !me) return;
-  markDraft = markDraft || marksFor(me.prefs);
+  markDraft = markDraft || marksFor(markPrefs());
   if (markDraft.length >= markInfo.max_marks) return;
   markDraft.push({ symbol: "", meaning: "", action: "note", _new: true });
   markRowsDraw(`#mSym${markDraft.length - 1}`);
 };
 $("#markReset").onclick = () => {
-  const from = presetOf(me.prefs.marks_from) || presetOf("simple"), before = { marks: copyMarks(me.prefs.marks), marks_from: from.id };
-  markDraft = null;
+  const prefs = markPrefs(), from = presetOf(prefs.marks_from) || presetOf("simple");
+  const before = { marks: copyMarks(prefs.marks), marks_from: from.id };
   saveMarks({ mark_style: from.id, marks: copyMarks(from.marks), marks_from: from.id }, () => {
     // Their own list is gone now: Undo, right here (the Undo message at the bottom belongs to My list).
     $("#markUndoText").textContent = `Back to ${from.name}'s marks.`;
@@ -1436,10 +1459,11 @@ $("#markReset").onclick = () => {
     $("#markUndo").focus();
     $("#markUndo").onclick = () => {
       $("#markUndoRow").hidden = true;
-      markDraft = null;
-      saveMarks({ mark_style: "custom", ...before }, () => $("#markStyles input[value=custom]")?.focus());
+      saveMarks({ mark_style: "custom", ...before }, null, true);
+      $("#markStyles input[value=custom]")?.focus();  // where their own list is again
     };
-  });
+  }, true);
+  $(`#markStyles input[value="${from.id}"]`)?.focus();  // Start again is hidden now: on the style it went back to
 };
 
 $("#pwForm").onsubmit = async (e) => {

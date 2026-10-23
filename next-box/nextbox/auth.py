@@ -75,9 +75,9 @@ PREFS = {
     "keyboard_shortcuts": (True, lambda v: isinstance(v, bool)),
     # How they mark their list (nextbox/marks.py, SPEC §32): a preset, or "custom" = their own `marks`
     # ({symbol, meaning, action}, up to 8). "simple" is ✓ done → move ✗ drop, as Next Box always was.
-    "mark_style": ("simple", lambda v: v in _marks().STYLES),
+    "mark_style": ("simple", lambda v: isinstance(v, str) and v in _marks().STYLES),
     "marks": ([], lambda v: _marks().valid(v)),  # kept when they pick a preset, so "Your own" brings it back
-    "marks_from": ("simple", lambda v: v in _marks().PRESETS),  # the preset their own list started from
+    "marks_from": ("simple", lambda v: isinstance(v, str) and v in _marks().PRESETS),  # where their own list started
 }
 
 

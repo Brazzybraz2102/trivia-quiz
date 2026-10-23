@@ -672,18 +672,28 @@
   .markstyle b, .markstyle .muted { display:block; }
   .legendprev { display:block; max-width:100%; height:auto; background:#fff; border:1px solid var(--line); border-radius:6px; margin-top:6px; }
   .legendprev[hidden] { display:none; }
-  .markrow { display:grid; grid-template-columns:minmax(0, 9rem) minmax(0, 1fr) minmax(0, 17rem) auto; gap:6px 10px; align-items:end;
-             padding:10px 0; border-top:1px solid var(--line); }
+  /* A style's legend as text, black on white like the label, at the size of the words around it (it wraps between marks). */
+  .mslegend { display:flex; flex-wrap:wrap; gap:2px 14px; margin-top:6px; padding:5px 9px; background:#fff; color:#000;
+              border:1px solid var(--line); border-radius:6px; line-height:1.35; }
+  .mslegend[hidden] { display:none; }
+  .mslegi { min-width:0; overflow-wrap:anywhere; }
+  /* One row per mark: the symbol, what it means (never narrower than 14rem, about 20 letters, at any text size),
+     what Next Box does (as wide as its longest choice), Remove. What doesn't fit goes on the next line; on phones
+     each one has a line of its own. */
+  .markrow { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:flex-end; padding:10px 0; border-top:1px solid var(--line); }
+  .markrow > * { min-width:0; }
+  .markrow .msym, .markrow .mrm { flex:none; }
+  .markrow .mmean { flex:1 1 14rem; }
+  .markrow .mact { flex:0 1 auto; }
   .markrow:first-child { border-top:0; }
   .markrow label { display:block; font-size:.8125rem; font-weight:600; margin-bottom:3px; }
   .markrow .msymrow { display:flex; gap:6px; align-items:center; }
   .markrow .msymrow input { width:4.5rem; flex:none; text-align:center; font-size:1.25rem; padding:6px; }
   .markrow .msymrow input::placeholder { font-size:.75rem; }
   .markrow select { width:100%; }
-  .markrow .mrm { justify-self:start; }
-  .markrow .mlook, .markrow .merr, .markrow .mhint { grid-column:1 / -1; margin:0; font-size:.8125rem; }
-  .markrow .mlook:empty, .markrow .merr:empty, .markrow .mhint:empty { display:none; }
-  .mpick { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:6px; }
+  .markrow .mlook, .markrow .mdrop, .markrow .merr, .markrow .mhint { flex-basis:100%; margin:0; font-size:.8125rem; }
+  .markrow .mlook:empty, .markrow .mdrop:empty, .markrow .merr:empty, .markrow .mhint:empty { display:none; }
+  .mpick { flex-basis:100%; display:flex; flex-wrap:wrap; gap:6px; }
   .mpick[hidden] { display:none; }
   .mpick button { min-width:44px; min-height:44px; padding:4px 8px; font:inherit; font-size:1.25rem; border:1px solid var(--fieldLine); border-radius:8px; background:var(--bg); color:var(--fg); cursor:pointer; }
   .mpick .mstrike { font-size:.875rem; }
@@ -693,7 +703,7 @@
   .noted { margin:6px 0; }
   .noted .mk { font-weight:600; }
   @media (max-width:720px) {
-    .markrow { grid-template-columns:1fr; }
+    .markrow .msym, .markrow .mmean, .markrow .mact { flex:1 1 100%; }
     .markrow .mrm, #markAdd, #markReset, #markUndo, .markrow .msymrow button { min-height:44px; }
   }
   #quickDialog { max-width:560px; }
@@ -927,7 +937,7 @@
 
   <section id="scan">
     <div class="card"><h2>Snap your page</h2>
-      <p class="muted">Mark the label <span id="snapMarks">✓ done, → move, ✗ drop</span>, then take a photo. In a journal, get both pages in the photo:
+      <p class="muted">Mark the label <span id="snapMarks">✓ done · → move · ✗ drop</span>, then take a photo. In a journal, get both pages in the photo:
         your handwritten notes are read too and saved to your Journal. Drops and anything uncertain wait for you here.
         Your photo is read by Claude (Anthropic).</p>
       <input type="file" id="photoCam" class="sr-only" accept="image/*" capture="environment" tabindex="-1" aria-hidden="true">

@@ -3,7 +3,8 @@
 The marks are the person's own (nextbox/marks.py; "simple" is ✓ done, → move, ✗ drop). Each one has an action:
 auto-applied (confidence >= 0.7): done -> close, tomorrow -> due_date = the day after the ticket's day.
 Always held for confirmation: every drop (delete) and anything below 0.7. A "note" mark changes nothing:
-it's listed in `noted` with what it means to them.
+it's listed in `noted` with what it means to them. A row whose mark and number disagree waits too, and never
+as a drop or a note only one of them said (_resolve). Simple is asked exactly as before mark styles (PROMPT).
 When the photo also shows handwritten notes (the facing journal page), they're transcribed, and the
 photo is kept as that day's journal page (nextbox/journal.py).
 
@@ -15,11 +16,12 @@ from __future__ import annotations
 
 import base64
 import copy
+import functools
 from datetime import date, datetime, timedelta
 from typing import Literal
 from collections.abc import Callable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 from . import marks as mark_styles
 from .jobs import Context
@@ -33,6 +35,9 @@ Mark = Literal["done", "tomorrow", "drop", "note", "none"]
 NOT_ON_LABEL, DUPLICATE_ROW = "not on this label", "duplicate row"
 ALREADY_DONE, ALREADY_MOVED, READ_BEFORE = "already done", "already moved", "read before"
 NEWER_TASK = "deleted since printed"  # the row's task was deleted; a newer task has its old id
+# A "note" that isn't one of their notes, or a note and a delete that disagree (also the note on a held row that
+# isn't sure, when Snap named no odd mark).
+UNCLEAR = "unclear mark"
 NO_CODE = "We couldn't read the ticket code. Pick the ticket below."
 NO_TICKETS = "We saw ticked boxes, but you haven't printed a ticket with tasks yet, so nothing changed."
 NO_TICKETS_UNMARKED = "We saw a to-do label, but you haven't printed a ticket with tasks yet, so nothing changed."
@@ -42,27 +47,86 @@ READ_FAILED_NO_COPY = "Reading the photo didn't work. Try again in a minute."
 BUSY = ("reading", "matching")  # a record someone is working on right now
 
 
+SIMPLE_ACTIONS = ("done", "tomorrow", "drop")  # what Simple's marks do (and all Snap could report before mark styles)
+
+_ROW = "Task row number, counting from 1 at the top"
+_WHICH = "The number of the person's mark from the list (1, 2, 3...), or 0 for an empty box"
+_CONFIDENCE = "0.0-1.0: how sure you are about this row's mark"
+_NOTE = "The kind of odd mark, in at most 5 words, e.g. 'circled' or 'up arrow'. Never copy handwritten words"
+_CODE = "The code printed after '#' along the bottom edge of the label (left or right), without '#', or null if unreadable"
+_NOTES = "Handwritten notes outside the label, transcribed; '' if none"
+_WIN = "What's handwritten after 'Today's win:' on the label, or ''"
+
+
 class RowMark(BaseModel):
-    row: int = Field(description="Task row number, counting from 1 at the top")
+    row: int = Field(description=_ROW)
     mark: Mark
-    which: int = Field(default=0, description="The number of the person's mark from the list (1, 2, 3...), "
-                                              "or 0 for an empty box")
-    confidence: float = Field(description="0.0-1.0: how sure you are about this row's mark")
-    note: str = Field(default="", description="The kind of odd mark, in at most 5 words, e.g. 'circled' or "
-                                              "'up arrow'. Never copy handwritten words")
+    which: int = Field(default=0, description=_WHICH)
+    confidence: float = Field(description=_CONFIDENCE)
+    note: str = Field(default="", description=_NOTE)
 
 
 class ReadBack(BaseModel):
-    label_code: str | None = Field(description="The code printed after '#' along the bottom edge of the label "
-                                               "(left or right), without '#', or null if unreadable")
+    label_code: str | None = Field(description=_CODE)
     rows: list[RowMark]
-    notes: str = Field(default="", description="Handwritten notes outside the label, transcribed; '' if none")
-    win: str = Field(default="", description="What's handwritten after 'Today's win:' on the label, or ''")
+    notes: str = Field(default="", description=_NOTES)
+    win: str = Field(default="", description=_WIN)
 
 
 # (image bytes, media type, manifest) -> ReadBack. Swapped for a fake in tests.
 VisionFn = Callable[[bytes, str, list[dict]], ReadBack]
 
+
+def reply_format(marks: list[dict] | None) -> type[BaseModel]:
+    """What Snap asks the vision model to fill in for this person. Simple's is exactly what Next Box always asked
+    for (done, tomorrow, drop or none, and no mark number). Other marks add `which` and offer only the actions
+    their marks have. Whatever comes back is read as a ReadBack."""
+    if mark_styles.is_simple(marks):
+        return _reply_model(None)
+    return _reply_model(tuple(a for a in mark_styles.ACTIONS if any(m["action"] == a for m in marks)))
+
+
+@functools.cache
+def _reply_model(actions: tuple[str, ...] | None) -> type[BaseModel]:
+    reported = Literal[(*(actions or SIMPLE_ACTIONS), "none")]  # type: ignore[valid-type]
+    fields: dict = {"row": (int, Field(description=_ROW)), "mark": (reported, ...)}
+    if actions is not None:
+        fields["which"] = (int, Field(default=0, description=_WHICH))
+    fields.update(confidence=(float, Field(description=_CONFIDENCE)), note=(str, Field(default="", description=_NOTE)))
+    row = create_model("RowMark", **fields)
+    return create_model("ReadBack", label_code=(str | None, Field(description=_CODE)), rows=(list[row], ...),
+                        notes=(str, Field(default="", description=_NOTES)), win=(str, Field(default="", description=_WIN)))
+
+
+# Simple's prompt: word for word what Next Box always sent, with the ticket's rows still to fill in ({manifest_hint}).
+PROMPT = """This is a photo of a printed to-do label: a daily list, tear-off strips, a "just one thing"
+card, or one or more single-task stickers. Each task has a checkbox. When a small row number is
+printed next to or under a checkbox, use that number. Otherwise number the task rows 1, 2, 3...
+from top to bottom (skip the "SCHEDULE" section at the top, which has no boxes, anything in the
+"Also waiting" or "Not today" footer, and the small "tiny steps" boxes on a "just one thing" card).
+The person marked rows by hand:
+- a check mark (✓) in or near the box means "done"
+- an arrow (→) means "move to tomorrow"
+- a cross (✗ or X) or a line struck through the task means "drop"
+- an empty box means "none"
+- anything else (an up arrow, a circle, a note) is not one of these: use the closest mark with
+  confidence below 0.5 and name the kind of mark in the note, in at most 5 words (e.g. "circled",
+  "up arrow"); never copy handwritten words into the note
+
+Report every numbered row you can see, with the mark and your confidence.
+Be conservative: if a mark is ambiguous, smudged, or could belong to a neighbouring row, lower the confidence.
+Also read the code printed after '#' along the bottom edge of the label, left or right (like 260930-X5C8).
+
+The label may be stuck on the left page of a paper journal with handwritten notes on the right page
+(or around the label). If there are handwritten notes that are not part of the printed label,
+transcribe them into "notes" as faithfully as you can: keep the person's own words, line breaks and
+lists, write [unclear] for a word you can't read, and don't add anything. If there are none, leave
+"notes" empty. A small box drawn by hand at the start of a note line is a to-do: write it as "[ ] "
+(or "[x] " if the box is ticked). If the label has a "Today's win:" line with handwriting, put that text in "win"
+(not in "notes"). If the photo has notes but no label at all, report no rows and a null code.
+{manifest_hint}"""
+
+# Everyone else's: their own marks ({marks}, from marks_section), each with a number to report as "which".
 PROMPT_TEMPLATE = """This is a photo of a printed to-do label: a daily list, tear-off strips, a "just one thing"
 card, or one or more single-task stickers. Each task has a checkbox. When a small row number is
 printed next to or under a checkbox, use that number. Otherwise number the task rows 1, 2, 3...
@@ -99,6 +163,7 @@ GLYPH_WORDS = {
     "/": "a single slash (/) through the box", "•": "a dot (•) in the box", "○": "a circle (○)",
     "●": "the box filled in, or a filled dot (●)", "◐": "the box half filled in (◐)", "★": "a star (★)",
     "!": "an exclamation mark (!)", "?": "a question mark (?)", "–": "a dash (–)", "-": "a dash (-)",
+    "—": "a dash (—)",
 }
 ACTION_WORDS = {"done": '"done"', "tomorrow": '"tomorrow" (move it to tomorrow)', "drop": '"drop"',
                 "note": '"note" (nothing changes; it is only noted)'}
@@ -126,17 +191,15 @@ def marks_section(marks: list[dict]) -> str:
 
 
 def build_prompt(marks: list[dict] | None, manifest: list[dict]) -> str:
-    """The whole prompt for one photo: this person's marks and, when the ticket is known, its rows."""
+    """The whole prompt for one photo: this person's marks and, when the ticket is known, its rows.
+    Simple's marks (or none given) send PROMPT, exactly as before mark styles."""
     hint = ""
     if manifest:
         listing = "\n".join(f"{m['row']}. {m['content']}" for m in manifest)
         hint = f"\nThe label should list these task rows, in this order:\n{listing}"
-    section = marks_section(marks or mark_styles.preset_marks(mark_styles.DEFAULT_STYLE))
-    return PROMPT_TEMPLATE.format(marks=section, manifest_hint=hint)
-
-
-# The prompt for the simple marks, with the ticket's rows still to fill in ({manifest_hint}).
-PROMPT = PROMPT_TEMPLATE.replace("{marks}", marks_section(mark_styles.preset_marks(mark_styles.DEFAULT_STYLE)))
+    if mark_styles.is_simple(marks):
+        return PROMPT.format(manifest_hint=hint)
+    return PROMPT_TEMPLATE.format(marks=marks_section(marks), manifest_hint=hint)
 
 
 NOTE_CHARS = 40          # a row's note names the kind of mark, never a transcription (admins see it)
@@ -230,13 +293,13 @@ def claude_vision(settings, marks: list[dict] | None = None) -> VisionFn:
                         {"type": "text", "text": build_prompt(marks, manifest)},
                     ],
                 }],
-                output_format=ReadBack,
+                output_format=reply_format(marks),
             )
         except ValidationError:  # its message quotes the reply, notes and all
             raise ReadBackFailed("vision reply was cut short or declined") from None
         if response.stop_reason == "refusal" or response.parsed_output is None:
             raise ReadBackFailed(f"vision model returned no read-back (stop_reason={response.stop_reason})")
-        return response.parsed_output
+        return ReadBack.model_validate(response.parsed_output.model_dump())
 
     return run
 
@@ -390,18 +453,30 @@ def _apply(ctx: Context, mark: str, item: dict, day: str | None = None, scan_id:
     raise ValueError(mark)
 
 
+CHANGES = ("done", "tomorrow")  # what finishes or moves a task (and can be undone)
+
+
 def _resolve(rm: dict, marks: list[dict]) -> tuple[str, dict | None, bool]:
-    """(what to do, which of the person's marks it was, sure). The person's own mark decides what it
-    does; a photo that names one of their marks and a different action, or an action none of their marks
-    has, isn't sure, so it waits for them."""
+    """(what to do, which of the person's marks it was, sure).
+
+    Snap reports the mark (what it does) and, for anything but Simple, the number of the person's mark
+    (`which`). When the two agree, or there's no number and one of their marks does that, it's sure.
+    When they disagree it isn't, and it waits for the person under whichever of the two finishes or moves
+    the task (the number's first). So a disagreement never turns into a delete, or quietly into a note: a
+    note and a delete that disagree are an unclear note, which changes nothing. A mark that does something
+    none of their marks does isn't sure either."""
     mark, which = rm["mark"], rm.get("which") or 0
     if mark == "none":
         return "none", None, True
     if isinstance(which, int) and 1 <= which <= len(marks):
         own = marks[which - 1]
-        return own["action"], own, own["action"] == mark
-    own = next((m for m in marks if m["action"] == mark), None)
-    return mark, own, own is not None
+        if own["action"] == mark:
+            return mark, own, True
+        if own["action"] in CHANGES:
+            return own["action"], own, False
+        return ("note" if mark not in CHANGES else mark), None, False
+    same = [m for m in marks if m["action"] == mark]
+    return mark, (same[0] if len(same) == 1 else None), bool(same)
 
 
 def _mark_words(own: dict | None) -> dict:
@@ -432,8 +507,14 @@ def _match(ctx: Context, record: dict, label: dict, rows: list[dict], *, hold_al
         seen.add(row)
         if mark == "none":
             continue
-        entry = {**item, "mark": mark, "confidence": round(float(rm["confidence"]), 2),
-                 "note": (rm.get("note") or "")[:NOTE_CHARS], **_mark_words(own)}
+        # A row that isn't sure says so when Snap named no odd mark ("unclear mark"); never handwriting.
+        note = (rm.get("note") or "")[:NOTE_CHARS] or ("" if sure else UNCLEAR)
+        entry = {**item, "mark": mark, "confidence": round(float(rm["confidence"]), 2), "note": note,
+                 **_mark_words(own)}
+        if mark == "note" and not sure:  # not one of their notes (or a note and a delete that disagree)
+            record["ignored"].append({"row": row, "mark": mark, "reason": UNCLEAR, "content": item["content"],
+                                      "note": note})
+            continue
         if mark == "note":  # "started", "waiting on someone": shown with their words, nothing changes
             record["noted"].append(entry)
             continue

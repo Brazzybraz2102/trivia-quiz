@@ -192,7 +192,8 @@ def can_draw(symbol: str) -> bool:
 # --- the legend: how this person marks their list (nextbox/marks.py) ---------------------------
 LEGEND = "✓ done    → move    ✗ drop"  # the "simple" marks, as every label printed them before mark styles
 LEGEND_GAP = "    "
-_LEGEND_LIMITS = (60, 30, 20, 14, 10, 7, 4)  # a meaning shortened step by step until the legend fits two lines
+# A meaning on the legend: whole (up to 60), cut no shorter than 7 letters before a third line is used, never below 4.
+_LEGEND_LIMIT, _LEGEND_KEEP, _LEGEND_SHORTEST = 60, 7, 4
 
 
 def _short_meaning(text: str, limit: int) -> str:
@@ -222,21 +223,31 @@ def _item_text(item: tuple[str, str, bool]) -> str:
 
 
 def legend_lines(d: ImageDraw.ImageDraw, marks: list[dict] | None, font, width: int) -> list[list]:
-    """The legend split into lines that fit `width`: two at most, shortening the meanings as needed
-    (more only if even the shortest won't fit, so it never runs off the edge)."""
+    """The legend split into lines that fit `width`. Only the longest meanings are shortened, a letter at a
+    time, so short ones stay whole: on two lines while every meaning keeps 7 letters or more, then on three,
+    then down to 4 letters (more lines only if even that won't fit, so it never runs off the edge)."""
+    widths: dict[str, float] = {}
+
+    def measure(text: str) -> float:
+        if text not in widths:
+            widths[text] = d.textlength(text, font=font)
+        return widths[text]
+
+    longest = max((len(words) for _, words, _ in legend_items(marks, _LEGEND_LIMIT)), default=0)
+    keep = min(longest, _LEGEND_KEEP)
     lines: list[list] = []
-    for limit in _LEGEND_LIMITS:
-        items = legend_items(marks, limit)
-        lines = []
-        for item in items:
-            trial = LEGEND_GAP.join(_item_text(i) for i in [*lines[-1], item]) if lines else ""
-            if lines and d.textlength(trial, font=font) <= width:
-                lines[-1].append(item)
-            else:
-                lines.append([item])
-        fits = all(d.textlength(_item_text(i), font=font) <= width for i in items)
-        if fits and len(lines) <= 2:
-            break
+    for most, caps in ((2, range(longest, keep - 1, -1)), (3, range(longest, keep - 1, -1)),
+                       (3, range(keep - 1, _LEGEND_SHORTEST - 1, -1))):
+        for cap in caps:
+            items = legend_items(marks, cap)
+            lines = []
+            for item in items:
+                if lines and measure(LEGEND_GAP.join(_item_text(i) for i in [*lines[-1], item])) <= width:
+                    lines[-1].append(item)
+                else:
+                    lines.append([item])
+            if len(lines) <= most and all(measure(_item_text(i)) <= width for i in items):
+                return lines
     return lines
 
 
