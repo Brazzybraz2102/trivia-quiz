@@ -165,6 +165,10 @@ def problem(marks) -> str | None:
             return f"{_what(i)} take the spaces off the ends of what it means."
         if len(meaning) > MAX_MEANING:
             return f"{_what(i)} keep what it means to {MAX_MEANING} characters or fewer."
+        # The words print on every label's legend: a character the label font lacks (an emoji, say)
+        # would come out as an empty box. Spaces between words are fine.
+        if not all(can_draw(word) for word in meaning.split()):
+            return f"{_what(i)} what it means has a character the label can't print (like an emoji). Use words."
         if m.get("action") not in ACTIONS:
             return f"{_what(i)} pick what Next Box does."
         if look:

@@ -862,3 +862,11 @@ const settle = async () => { while (waiting.length || prefPending) { if (waiting
     assert out["queued"] == "progress" and out["b"] == ["progress", "progress"]
     assert out["tried"] == "simple" and out["c"][:2] == ["progress", "progress"]
     assert out["c"][2] == ["show", "Next Box isn't answering. Change it again to try again."]
+
+
+def test_a_meaning_the_label_cant_print_is_refused():
+    """Meanings print on every label's legend: an emoji would come out as an empty box."""
+    from nextbox import marks
+    assert marks.problem([{"symbol": "✓", "meaning": "done — all of it, café", "action": "done"}]) is None
+    err = marks.problem([{"symbol": "✓", "meaning": "done \U0001F389", "action": "done"}])
+    assert err and "can't print" in err
