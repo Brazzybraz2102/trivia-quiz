@@ -663,6 +663,49 @@
     #routineActs [data-routine=hide] { flex:none; font-size:0; min-width:44px; min-height:44px; padding:0; display:grid; place-items:center; }
     #routineActs [data-routine=hide]::before { content:"✕"; content:"✕" / ""; font-size:1.125rem; }
   }
+  /* How you mark your list (Settings): the ways to pick from, a preview of the legend, then one row per mark. */
+  .markstyles { border:0; padding:0; margin:8px 0 0; min-width:0; display:grid; grid-template-columns:repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); gap:8px; }
+  .markstyle { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border:2px solid var(--fieldLine); border-radius:12px; cursor:pointer; min-width:0; }
+  .markstyle:has(input:checked) { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+  .markstyle input { width:22px; height:22px; flex:none; margin:2px 0 0; accent-color:var(--accent); }
+  .markstyle .msbody { min-width:0; flex:1; }
+  .markstyle b, .markstyle .muted { display:block; }
+  .legendprev { display:block; max-width:100%; height:auto; background:#fff; border:1px solid var(--line); border-radius:6px; margin-top:6px; }
+  .legendprev[hidden] { display:none; }
+  /* A style's legend as text, black on white like the label, at the size of the words around it (it wraps between marks). */
+  .mslegend { display:flex; flex-wrap:wrap; gap:2px 14px; margin-top:6px; padding:5px 9px; background:#fff; color:#000;
+              border:1px solid var(--line); border-radius:6px; line-height:1.35; }
+  .mslegend[hidden] { display:none; }
+  .mslegi { min-width:0; overflow-wrap:anywhere; }
+  /* One row per mark: the symbol, what it means (never narrower than 14rem, about 20 letters, at any text size),
+     what Next Box does (as wide as its longest choice), Remove. What doesn't fit goes on the next line; on phones
+     each one has a line of its own. */
+  .markrow { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:flex-end; padding:10px 0; border-top:1px solid var(--line); }
+  .markrow > * { min-width:0; }
+  .markrow .msym, .markrow .mrm { flex:none; }
+  .markrow .mmean { flex:1 1 14rem; }
+  .markrow .mact { flex:0 1 auto; }
+  .markrow:first-child { border-top:0; }
+  .markrow label { display:block; font-size:.8125rem; font-weight:600; margin-bottom:3px; }
+  .markrow .msymrow { display:flex; gap:6px; align-items:center; }
+  .markrow .msymrow input { width:4.5rem; flex:none; text-align:center; font-size:1.25rem; padding:6px; }
+  .markrow .msymrow input::placeholder { font-size:.75rem; }
+  .markrow select { width:100%; }
+  .markrow .mlook, .markrow .mdrop, .markrow .merr, .markrow .mhint { flex-basis:100%; margin:0; font-size:.8125rem; }
+  .markrow .mlook:empty, .markrow .mdrop:empty, .markrow .merr:empty, .markrow .mhint:empty { display:none; }
+  .mpick { flex-basis:100%; display:flex; flex-wrap:wrap; gap:6px; }
+  .mpick[hidden] { display:none; }
+  .mpick button { min-width:44px; min-height:44px; padding:4px 8px; font:inherit; font-size:1.25rem; border:1px solid var(--fieldLine); border-radius:8px; background:var(--bg); color:var(--fg); cursor:pointer; }
+  .mpick .mstrike { font-size:.875rem; }
+  .mpick button[aria-pressed="true"] { border-color:var(--accent); background:var(--accent); color:var(--onAccent); }
+  .mpick .mpicknote { flex-basis:100%; margin:0; }
+  #markUndoRow[hidden] { display:none; }
+  .noted { margin:6px 0; }
+  .noted .mk { font-weight:600; }
+  @media (max-width:720px) {
+    .markrow .msym, .markrow .mmean, .markrow .mact { flex:1 1 100%; }
+    .markrow .mrm, #markAdd, #markReset, #markUndo, .markrow .msymrow button { min-height:44px; }
+  }
   #quickDialog { max-width:560px; }
   #quickText { min-height:6rem; }
   #quickMsg:empty, #quickFrom[hidden] { display:none; }
@@ -894,7 +937,7 @@
 
   <section id="scan">
     <div class="card"><h2>Snap your page</h2>
-      <p class="muted">Mark the label ✓ done, → move, ✗ drop, then take a photo. In a journal, get both pages in the photo:
+      <p class="muted">Mark the label <span id="snapMarks">✓ done · → move · ✗ drop</span>, then take a photo. In a journal, get both pages in the photo:
         your handwritten notes are read too and saved to your Journal. Drops and anything uncertain wait for you here.
         Your photo is read by Claude (Anthropic).</p>
       <input type="file" id="photoCam" class="sr-only" accept="image/*" capture="environment" tabindex="-1" aria-hidden="true">
@@ -1033,7 +1076,7 @@
   <section id="settings">
     <div class="chips" id="setJump" style="margin-bottom:12px" role="group" aria-label="Jump to">
       <button data-jump="setGeneral">General</button><button data-jump="tagCard">Tags</button>
-      <button data-jump="focusCard">Focus</button><button data-jump="calCard">Calendars</button>
+      <button data-jump="focusCard">Focus</button><button data-jump="markCard">Your marks</button><button data-jump="calCard">Calendars</button>
       <button data-jump="appCard">Linked app</button><button data-jump="labelCard">Label colors</button>
       <button data-jump="printCard">Printing</button><button data-jump="readCard">Read-back</button>
       <button data-jump="helpCard">Help</button>
@@ -1078,6 +1121,21 @@
           <option value="15">15 minutes before</option><option value="30">30 minutes before</option><option value="60">1 hour before</option></select></label>
       <label class="setting" id="remindNotifyRow"><div class="label"><b id="remindNotifyName">Show a notification too</b><span id="remindNotifyNote">For reminders and the focus timer, while Next Box is open in the background on this device. Nothing comes from the server.</span></div>
         <input type="checkbox" id="remindNotify" aria-labelledby="remindNotifyName" aria-describedby="remindNotifyNote"></label>
+    </div>
+
+    <div class="card" id="markCard"><h2>How you mark your list</h2>
+      <p class="muted">Use the marks you already make with a pen. Your labels print them at the top, and Snap reads them back.
+        Deletes always wait for you to confirm.</p>
+      <fieldset class="markstyles" id="markStyles"><legend class="sr-only">How you mark your list</legend></fieldset>
+      <h3 id="markHead">Your marks</h3>
+      <p class="muted" id="markNote">Change any of them and they become your own.</p>
+      <p class="muted" id="markPrevNote">On your labels:</p>
+      <img class="legendprev" id="markPreview" alt="" hidden>
+      <div class="markrows" id="markRows"></div>
+      <p class="err" id="markMsg" role="alert"></p>
+      <p class="row" id="markUndoRow" hidden><span id="markUndoText" role="status"></span><button class="linkish" id="markUndo" type="button">Undo</button></p>
+      <div class="row"><button class="plain" id="markAdd" type="button">Add a mark</button>
+        <button class="plain" id="markReset" type="button" hidden>Start again</button></div>
     </div>
 
     <div class="card" id="calCard"><h2>Calendars</h2>

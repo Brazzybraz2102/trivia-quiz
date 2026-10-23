@@ -218,7 +218,7 @@ const $$ = () => [num, text, sw, other];
 const box = { checked: false, value: "" };
 const $ = () => box;
 const noop = () => {};
-const confText = noop, remindShowPrefs = noop, applyAi = noop, applySnapReady = noop, applyDry = noop, setAppNames = noop;
+const confText = noop, remindShowPrefs = noop, applyAi = noop, applySnapReady = noop, applyDry = noop, setAppNames = noop, markSync = noop;
 """ + body + """
 const prefs = { slug_after: 3, default_filter: "", show_wins: true, max_rows: 5, confidence: 0.8 };
 loadPrefs(prefs);

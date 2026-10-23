@@ -73,7 +73,21 @@ PREFS = {
     "remind_notify": (False, lambda v: isinstance(v, bool)),  # also a browser notification (asked for on this device)
     # The one-key shortcuts (n, +, /, ?, g then a letter). Off for speech input, or keys pressed by accident (WCAG 2.1.4).
     "keyboard_shortcuts": (True, lambda v: isinstance(v, bool)),
+    # How they mark their list (nextbox/marks.py, SPEC §32): a preset, or "custom" = their own `marks`
+    # ({symbol, meaning, action}, up to 8). "simple" is ✓ done → move ✗ drop, as Next Box always was.
+    "mark_style": ("simple", lambda v: isinstance(v, str) and v in _marks().STYLES),
+    "marks": ([], lambda v: _marks().valid(v)),  # kept when they pick a preset, so "Your own" brings it back
+    "marks_from": ("simple", lambda v: isinstance(v, str) and v in _marks().PRESETS),  # where their own list started
 }
+
+
+def _marks():
+    from . import marks
+    return marks
+
+
+# A setting whose problem depends on the value: says just what's wrong ("Mark 2: …").
+PREF_PROBLEMS = {"marks": lambda v: _marks().problem(v)}
 
 # What to tell someone whose setting wasn't saved: plain words, never the setting's key.
 PREF_HINTS = {
@@ -92,6 +106,8 @@ PREF_HINTS = {
     "routine_morning": "Pick a time, like 08:00.",
     "routine_evening": "Pick a time, like 18:00.",
     "remind_before": "Pick how long before from the list.",
+    "mark_style": "Pick a way of marking from the list.",
+    "marks_from": "Pick a way of marking from the list.",
 }
 
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -488,7 +504,8 @@ class Accounts:
             if k not in PREFS:
                 raise AuthError(f"unknown setting {k}")
             if not PREFS[k][1](v):
-                raise AuthError(PREF_HINTS.get(k, "That value isn't allowed."))
+                raise AuthError((PREF_PROBLEMS[k](v) if k in PREF_PROBLEMS else None)
+                                or PREF_HINTS.get(k, "That value isn't allowed."))
         # Read, merge and write as one step: two settings changed a moment apart (a number box, then a
         # switch) must both be kept, not the second written over the first. The lock covers this process;
         # FOR UPDATE covers PostgreSQL with more than one (SQLite leaves it out and locks the file instead).
@@ -498,6 +515,9 @@ class Accounts:
             if row is None:
                 raise AuthError(f"no user {username}")
             prefs = {**default_prefs(), **(row["prefs"] or {}), **changes}
+            clash = _marks().check_style(prefs)  # "custom" needs a list of their own
+            if clash:
+                raise AuthError(clash)
             conn.execute(update(db.users).where(db.users.c.username == username).values(prefs=prefs))
         return prefs
 

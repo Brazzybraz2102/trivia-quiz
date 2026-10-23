@@ -354,7 +354,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(coaching.NO_KEY_OWNER, file=sys.stderr)
                 return 1
             data, media = scan.prepare_photo(args.photo.read_bytes())
-            rec = scan.scan_photo(ctx, scan.claude_vision(settings), data, media,
+            from .marks import effective
+            rec = scan.scan_photo(ctx, scan.claude_vision(settings, effective(ctx.prefs)), data, media,
                                   (args.label or "").lstrip("#") or None)
             print(json.dumps(rec, indent=2, ensure_ascii=False))
             if rec["needs_confirmation"]:

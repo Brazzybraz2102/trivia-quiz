@@ -177,6 +177,125 @@ class _Draw(ImageDraw.ImageDraw):
             x += super().textlength(t, f)
 
 
+def can_draw(symbol: str) -> bool:
+    """Every character of a mark's symbol is in DejaVu, the legend's font (the reading font borrows its
+    symbols from it too), so it never prints as an empty box. Spaces, joiners and accents on their own
+    are never a symbol."""
+    if not symbol or any(unicodedata.category(ch)[0] in "CZM" for ch in symbol):
+        return False
+    path = _dejavu(False)
+    if path is None:  # no DejaVu on this computer: only what any font has
+        return symbol.isascii() and symbol.isprintable()
+    return all(_covers(path, ch) for ch in symbol)
+
+
+# --- the legend: how this person marks their list (nextbox/marks.py) ---------------------------
+LEGEND = "✓ done    → move    ✗ drop"  # the "simple" marks, as every label printed them before mark styles
+LEGEND_GAP = "    "
+# A meaning on the legend: whole (up to 60), cut no shorter than 7 letters before a third line is used, never below 4.
+_LEGEND_LIMIT, _LEGEND_KEEP, _LEGEND_SHORTEST = 60, 7, 4
+
+
+def _short_meaning(text: str, limit: int) -> str:
+    text = " ".join(str(text).split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit - 1]
+    if " " in cut and cut.rfind(" ") >= limit // 2:  # at a word break when there's one not too far back
+        cut = cut[:cut.rfind(" ")]
+    return cut.rstrip(" ,.;:-–") + "…"
+
+
+def legend_items(marks: list[dict] | None, limit: int = 60) -> list[tuple[str, str, bool]]:
+    """(symbol, words, struck) for each mark: a mark with no symbol is its words with a line through them."""
+    if marks is None:
+        return [("✓", "done", False), ("→", "move", False), ("✗", "drop", False)]
+    out = []
+    for m in marks:
+        symbol = str(m.get("symbol") or "")
+        out.append((symbol, _short_meaning(m.get("meaning") or "", limit), not symbol and bool(m.get("look"))))
+    return out
+
+
+def _item_text(item: tuple[str, str, bool]) -> str:
+    symbol, words, _ = item
+    return f"{symbol} {words}" if symbol else words
+
+
+def legend_lines(d: ImageDraw.ImageDraw, marks: list[dict] | None, font, width: int) -> list[list]:
+    """The legend split into lines that fit `width`. Only the longest meanings are shortened, a letter at a
+    time, so short ones stay whole: on two lines while every meaning keeps 7 letters or more, then on three,
+    then down to 4 letters (more lines only if even that won't fit, so it never runs off the edge)."""
+    widths: dict[str, float] = {}
+
+    def measure(text: str) -> float:
+        if text not in widths:
+            widths[text] = d.textlength(text, font=font)
+        return widths[text]
+
+    longest = max((len(words) for _, words, _ in legend_items(marks, _LEGEND_LIMIT)), default=0)
+    keep = min(longest, _LEGEND_KEEP)
+    lines: list[list] = []
+    for most, caps in ((2, range(longest, keep - 1, -1)), (3, range(longest, keep - 1, -1)),
+                       (3, range(keep - 1, _LEGEND_SHORTEST - 1, -1))):
+        for cap in caps:
+            items = legend_items(marks, cap)
+            lines = []
+            for item in items:
+                if lines and measure(LEGEND_GAP.join(_item_text(i) for i in [*lines[-1], item])) <= width:
+                    lines[-1].append(item)
+                else:
+                    lines.append([item])
+            if len(lines) <= most and all(measure(_item_text(i)) <= width for i in items):
+                return lines
+    return lines
+
+
+def _line_width(d, line: list, font) -> float:
+    return d.textlength(LEGEND_GAP.join(_item_text(i) for i in line), font=font)
+
+
+def draw_legend(d: ImageDraw.ImageDraw, marks: list[dict] | None, font, y: int, left: int, right: int,
+                center: bool, step: int, last: int) -> int:
+    """Draw the legend from y; returns the y after it. `step` is the space between its lines and `last`
+    the space after the last one. A line with no struck item is drawn as one piece of text, so the simple
+    marks print exactly as the old fixed legend did."""
+    lines = legend_lines(d, marks, font, right - left)
+    for n, line in enumerate(lines):
+        x = (WIDTH - _line_width(d, line, font)) / 2 if center else left
+        if not any(struck for _, _, struck in line):
+            d.text((x, y), LEGEND_GAP.join(_item_text(i) for i in line), font=font, fill=0)
+        else:
+            gap = d.textlength(LEGEND_GAP, font=font)
+            for item in line:
+                text = _item_text(item)
+                d.text((x, y), text, font=font, fill=0)
+                w = d.textlength(text, font=font)
+                if item[2]:  # a line through the words: how this mark looks on paper
+                    mid = y + font.getmetrics()[0] - int(font.size * 0.3)
+                    d.line((x - 2, mid, x + w + 2, mid), fill=0, width=max(2, int(font.size) // 10))
+                x += w + gap
+        y += step if n < len(lines) - 1 else last
+    return y
+
+
+def legend_image(marks: list[dict] | None, size: int = 28) -> Image.Image:
+    """Just the legend, as the daily label prints it, trimmed to its words: for the previews in Settings."""
+    canvas = Image.new("RGB", (WIDTH, 400), "white")
+    d = _Draw(canvas)
+    left, right = MARGIN + 4, WIDTH - MARGIN - 4
+    y = draw_legend(d, marks, _font(size), 10, left, right, center=True, step=34, last=40)
+    box = _ink_box(canvas.crop((0, 0, WIDTH, y + 2)))
+    x0, x1 = (max(0, box[0] - 14), min(WIDTH, box[2] + 14)) if box else (0, WIDTH)
+    return canvas.crop((x0, 0, x1, y + 2))
+
+
+def _ink_box(img: Image.Image):
+    """The box around everything that isn't white (None for a blank image)."""
+    from PIL import ImageOps
+    return ImageOps.invert(img.convert("L")).getbbox()
+
+
 def _ellipsize(d: ImageDraw.ImageDraw, line: str, font, width: float) -> str:
     """End a cut-short line with "…", making sure the "…" still fits. One "…", even when the line
     already ends with a name that was cut short."""
@@ -242,8 +361,9 @@ def finalize(img: Image.Image, width: int = WIDTH, red: bool = False) -> Image.I
 
 def render_label(title: str, subtitle: str = "", rows: list[Row] | None = None,
                  body: str = "", code: str = "", legend: bool = True,
-                 accent_subtitle: bool = False, _height: int = 4000) -> Image.Image:
-    """Draw a ticket at WIDTH; pass it to finalize() for a printer. Rows get numbered checkboxes."""
+                 accent_subtitle: bool = False, marks: list[dict] | None = None, _height: int = 4000) -> Image.Image:
+    """Draw a ticket at WIDTH; pass it to finalize() for a printer. Rows get numbered checkboxes.
+    marks: the person's marks for the legend (marks.effective); None prints the simple ✓ → ✗ one."""
     title_f, sub_f, row_f, meta_f, small_f = _font(46, True), _font(26), _font(34), _font(24, True), _font(20)
     canvas = Image.new("RGB", (WIDTH, _height), "white")
     d = _Draw(canvas)
@@ -288,15 +408,14 @@ def render_label(title: str, subtitle: str = "", rows: list[Row] | None = None,
         y += 4
         d.line((MARGIN, y, WIDTH - MARGIN, y), fill=0, width=2)
         y += 10
-        d.text((MARGIN, y), "✓ done    → move    ✗ drop", font=small_f, fill=0)
-        y += 28
+        y = draw_legend(d, marks, small_f, y, MARGIN, WIDTH - MARGIN, center=False, step=26, last=28)
     if code:
         w = d.textlength(f"#{code}", font=meta_f)
         d.text((WIDTH - MARGIN - w, y), f"#{code}", font=meta_f, fill=0)
         y += 32
     y += MARGIN
     if y > _height:  # longer than the canvas: draw it again on one that fits (never crop into black)
-        return render_label(title, subtitle, rows, body, code, legend, accent_subtitle, _height=y)
+        return render_label(title, subtitle, rows, body, code, legend, accent_subtitle, marks, _height=y)
     return canvas.crop((0, 0, WIDTH, y))
 
 
@@ -320,9 +439,10 @@ def render_day(day_name: str, date_text: str, rows: list[DayRow], code: str, foo
                subtitle: str = "", waiting: list[str] | None = None, accent: bool = False,
                waiting_head: str = "Also waiting", win: str = "",
                schedule: list[tuple[str, str]] | None = None, journal: bool = False,
-               _height: int = 5000) -> Image.Image:
+               marks: list[dict] | None = None, _height: int = 5000) -> Image.Image:
     """The daily sheet: big day name, legend on top, time column, checkboxes on the right.
-    Read-back matches rows top to bottom against the manifest, so row order is the contract."""
+    Read-back matches rows top to bottom against the manifest, so row order is the contract.
+    marks: the person's marks for the legend (marks.effective); None prints the simple ✓ → ✗ one."""
     day_f, date_f, sub_f = _font(84, True), _font(40, True), _font(28)
     legend_f, time_f = _font(28), _font(28, True)
     text_f, text_bold_f, tag_f = _font(31), _font(31, True), _font(22)
@@ -375,10 +495,7 @@ def render_day(day_name: str, date_text: str, rows: list[DayRow], code: str, foo
         y += 4
     d.line((left, y, right, y), fill=0, width=4)
     y += 10
-    legend = "✓ done    → move    ✗ drop"
-    lw = d.textlength(legend, font=legend_f)
-    d.text(((WIDTH - lw) / 2, y), legend, font=legend_f, fill=0)
-    y += 40
+    y = draw_legend(d, marks, legend_f, y, left, right, center=True, step=34, last=40)
     d.line((left, y, right, y), fill=0, width=2)
     y += 12
 
@@ -472,7 +589,7 @@ def render_day(day_name: str, date_text: str, rows: list[DayRow], code: str, foo
     y += 36 + MARGIN
     if y > _height:  # longer than the canvas: draw it again on one that fits (never crop into black)
         return render_day(day_name, date_text, rows, code, footer, subtitle, waiting, accent, waiting_head,
-                          win, schedule, journal, _height=y)
+                          win, schedule, journal, marks, _height=y)
     return canvas.crop((0, 0, WIDTH, y))
 
 
