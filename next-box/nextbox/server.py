@@ -31,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import coach as coaching
-from . import jobs, printer, quiz, render, scan, upkeep
+from . import discover, jobs, printer, quiz, render, scan, upkeep
 from . import marks as mark_styles
 from .auth import PREF_HINTS, ROLES, Accounts, AuthError, default_prefs, rank
 from .config import PROJECT_DIR, app_version
@@ -2256,6 +2256,34 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         if knocked:
             audit(caller, "printer_check", printers=knocked)
         return result
+
+    # Set up a printer (the walkthrough): find it on the network, and ask a Brother which labels are in it.
+    # Both only listen or read, never print. Only staff, or an admin of Home: the Next Box computer's network is
+    # Home's, so a friend's household can't find (or read) their own printers from here (jobs.PRINT_AWAY).
+    def _may_look(caller: Caller) -> None:
+        if _restricted(caller):
+            raise HTTPException(403, jobs.PRINT_AWAY)
+
+    @app.post("/admin/printers/discover")
+    def discover_printers(caller: Caller = Depends(admin_only)):
+        _may_look(caller)
+        try:
+            found, how = discover.find()
+        except discover.FindError as exc:
+            audit(caller, "printer_discover", found=0, how=None)
+            return {"printers": [], "how": None, "why": str(exc)}
+        audit(caller, "printer_discover", found=len(found), how=how)
+        return {"printers": [dataclasses.asdict(f) for f in found], "how": how, "why": ""}
+
+    @app.get("/admin/printers/media")
+    def printer_media(address: str, caller: Caller = Depends(admin_only)):
+        _may_look(caller)
+        try:
+            out = discover.read_media(address)
+        except PrinterError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        audit(caller, "printer_media", read=out["read"], label=out["label"])
+        return out
 
     @app.post("/admin/printers")
     def add_printer(body: PrinterBody, caller: Caller = Depends(admin_only)):

@@ -323,6 +323,7 @@ async function loadLabels() {
   // Outside Home, the next step is PRINT_AWAY (shown here only, not again below).
   $("#noPrinterNext").textContent = !printsHere() ? PRINT_AWAY : noPrinterNext();
   $("#noPrinterGo").hidden = !none || !printsHere() || !canAddPrinter();
+  $("#labelAddRow").hidden = none || !printsHere() || !canAddPrinter();  // another one: Set up a printer, as above
   $("#printersLoaded").hidden = none && !printsHere();
   $("#printersLoaded").innerHTML = none ? "Until then, every ticket can be previewed and printed on paper."
     : "Loaded right now: " + ps.map((p) => `${sw(p.stock_color)}${esc(p.name)} (${esc(p.stock_color)} labels${p.ink === "black_red" ? ", red ink" : ""})`).join(", ");
@@ -352,8 +353,6 @@ async function loadLabels() {
     catch (e) { toast(e.message); }
   });
 }
-// No printer added: straight to Admin → Printers, with the add-a-printer form open.
-$("#noPrinterGo").onclick = () => { $("#npForm").open = true; goto("admin", "#npForm"); };
 $("#defPrinter").onchange = async () => {
   try {
     me.prefs = await api("/settings", { method: "PATCH", json: { default_printer: $("#defPrinter").value } });
@@ -416,7 +415,8 @@ function driverHints() {
 $("#npLabel").onchange = () => { $("#npWidth").value = labelWidth(); if ($("#npLabel").value !== "62") $("#npInk").checked = false; };
 $("#npInk").onchange = () => { if ($("#npInk").checked) { $("#npLabel").value = "62"; $("#npWidth").value = labelWidth(); } };  // DK-22251 is 62 mm
 
-// One form adds a printer or, after Edit, saves changes to it (same id, so people's usual printer stays).
+// Advanced: one form adds a printer or saves changes to one (same id, so people's usual printer stays). Set up a
+// printer (below) is the normal way; its "Advanced (type everything yourself)" opens this form.
 function editPrinter(p) {
   $("#npDriver").value = p.driver;
   if (p.driver === "brother_ql") { $("#npModel").value = p.model; $("#npLabel").value = p.label; }
@@ -429,7 +429,7 @@ function editPrinter(p) {
 }
 function resetPrinterForm() {
   delete $("#npGo").dataset.pid; $("#npGo").textContent = "Add printer";
-  $("#npTitle").textContent = "Add a printer"; $("#npCancel").hidden = true; $("#npMsg").textContent = "";
+  $("#npTitle").textContent = "Advanced (type everything yourself)"; $("#npCancel").hidden = true; $("#npMsg").textContent = "";
   $("#npName").value = $("#npAddress").value = $("#npHeight").value = "";
   $("#npColor").value = "white"; $("#npInk").checked = false; $("#npModel").value = "QL-1110NWB"; $("#npLabel").value = "62";
   if (printOpts?.drivers && $("#npDriver").options.length) driverHints();
@@ -455,7 +455,7 @@ $("#printerList").addEventListener("click", async (e) => {
   const pid = b.closest("[data-pid]").dataset.pid, p = printOpts.printers.find((x) => x.id === pid);
   if (!p) return;
   try {
-    if (b.dataset.p === "edit") return editPrinter(p);
+    if (b.dataset.p === "edit") return openPrinterSetup({ printer: p });  // the walkthrough, at its labels (Advanced has the form)
     if (b.dataset.p === "remove") {
       const n = p.usual_for || 0;
       if (!confirm(`Remove ${p.name}?` + (n ? ` It's the usual printer for ${n} ${n === 1 ? "person" : "people"}; their tickets will go to the first printer in the list instead.` : ""))) return;
@@ -482,6 +482,575 @@ $("#printerList").addEventListener("change", async (e) => {
   try { await api(`/admin/printers/${encodeURIComponent(sel.closest("[data-pid]").dataset.pid)}`, { method: "PATCH", json: { stock_color: sel.value } }); toast("Saved"); loadPrinters(false); loadLabels(); }
   catch (err) { toast(errText(err)); }
 });
+
+// ---------------------------------------------------------------- Set up a printer (the walkthrough)
+// The normal way to add a printer; Admin → Printers keeps the full form under "Advanced (type everything
+// yourself)". One decision per screen: what kind, find it, which labels are in it, a name, then try it. Next Box
+// searches the network and reads a Brother's loaded roll for you (POST /admin/printers/discover, GET
+// /admin/printers/media: staff and Home admins only; both only listen or read). The printer is saved at the end
+// of "Name it", so the test print uses it, and the test print asks "Send this to the printer?" first. Nothing
+// prints by itself. Edit on a printer opens it again at "Which labels are in it?" with its values.
+const PW_KINDS = [
+  ["brother", "Brother label printer", "QL or PT series, like the QL-1110NWB"],
+  ["other", "Another label printer", "Zebra, TSC, Munbyn, Dymo, Rollo, or a receipt printer"],
+  ["paper", "A regular printer", "An inkjet or laser printer at home or work"],
+  ["none", "I don't have one yet", "Use Next Box on screen for now"],
+];
+const PW_BRANDS = [
+  ["zpl", "Zebra", "Or another printer that uses ZPL"],
+  ["tspl", "TSC, Munbyn, iDPRT or Xprinter", "Most 4 × 6 in shipping-label printers"],
+  ["escpos", "A receipt printer", "Epson, Star, and most 58 or 80 mm printers"],
+  ["cups", "Dymo, Rollo, or one set up on this computer", "Next Box prints to it through this computer's own printer settings"],
+];
+// Labels for printers other than Brother: id, name, what for, width and height in mm (height 0: one long roll).
+const PW_SIZES = [
+  ["4x6", "4 × 6 in (102 × 152 mm)", "Shipping labels", 101.6, 152.4],
+  ["4x4", "4 × 4 in (102 × 102 mm)", "Square labels", 101.6, 101.6],
+  ["4x2", "4 × 2 in (102 × 51 mm)", "Address and box labels", 101.6, 50.8],
+  ["2x1", "2.25 × 1.25 in (57 × 32 mm)", "Small labels", 57.15, 31.75],
+  ["4c", "4 in (102 mm) wide, one long roll", "No gaps between labels", 101.6, 0],
+];
+// Receipt paper: id, name, what for, the dots a 203 dpi head prints across it.
+const PW_PAPER = [["80", "80 mm (3 1/8 in) paper", "Most receipt printers", 576], ["58", "58 mm (2 1/4 in) paper", "Small receipt printers", 384]];
+const PW_MODELS = ["QL-1110NWB", "QL-1100", "QL-820NWB", "QL-810W", "QL-800", "QL-700"];
+const PW_STEP = { kind: 1, brand: 1, find: 2, model: 3, labels: 3, size: 3, name: 4, try: 5, trouble: 5, fix: 5, done: 5 };
+let pwiz = null;
+
+const pwBrother = () => pwiz.driver === "brother_ql";
+const pwAddress = () => (pwiz.pick || pwiz.typed || "").trim();
+const pwNetwork = (a) => /^[A-Za-z0-9.-]+(:\d{1,5})?$/.test(a);  // not usb:// or /dev/…: those can't be searched or asked
+const pwCanLook = () => !printerAway();  // staff and Home: this computer's own network (the server checks too)
+const pwRolls = () => printOpts.drivers.brother_ql;
+const pwRollName = (id) => pwRolls().common.find((r) => r.id === id)?.name || labelName(id);  // "102 × 152 mm labels (4 × 6 in)"
+function pwLabelFits(id) {  // what the model takes: P-touch tape on PT printers only, 102 mm on the QL-1000 series only
+  const m = pwiz.model || "QL-1110NWB";
+  if (id.startsWith("pt") !== m.startsWith("PT-")) return false;
+  return !id.startsWith("102") || pwRolls().wide_models.includes(m);
+}
+// A saved printer's size, as one of the choices (or "own" for a size typed in).
+function pwSizeOf(p) {
+  if (p.driver === "escpos") return PW_PAPER.find((x) => x[3] === p.width_px)?.[0] || "own";
+  const dpi = p.dpi || 203, h = p.label_height_mm || 0;
+  return PW_SIZES.find((x) => Math.round(x[3] / 25.4 * dpi) === p.width_px && Math.abs(x[4] - h) < 1)?.[0] || "own";
+}
+
+async function openPrinterSetup({ from = "", printer: p = null } = {}) {
+  if (!canAddPrinter()) return toast(noPrinterNext());
+  try { printOpts = await api("/printing-options"); } catch (e) { return toast(errText(e)); }
+  pwiz = { from, step: "kind", back: [], kind: "", driver: "", found: null, searching: false, why: "", pick: "", typed: "",
+           model: "", read: null, choosing: false, label: "", size: "", dots: 0, dpi: 203, heightMm: 0, name: "",
+           color: "white", ink: "black", usual: false, pid: "", first: !printOpts.printers.length, dirty: false,
+           tested: null, fix: "", foundName: "", opener: document.activeElement, run: (openPrinterSetup.n = (openPrinterSetup.n || 0) + 1) };
+  if (p) {  // Edit: its values, at "Which labels are in it?" (Back goes to Find your printer)
+    Object.assign(pwiz, { pid: p.id, kind: p.driver === "brother_ql" ? "brother" : "other", driver: p.driver, typed: p.address,
+                          model: p.model || "", label: p.label || "", name: p.name, color: p.stock_color, ink: p.ink || "black",
+                          dots: p.width_px, dpi: p.dpi || 203, heightMm: p.label_height_mm || 0, back: ["kind", "find"],
+                          size: p.driver === "brother_ql" ? "" : pwSizeOf(p),
+                          step: p.driver === "brother_ql" ? "labels" : p.driver === "cups" ? "name" : "size" });
+  }
+  if (!$("#pwDialog").open) $("#pwDialog").showModal();
+  pwDraw();
+}
+function pwGo(step) { pwiz.back.push(pwiz.step); pwiz.step = step; pwDraw(); }
+function pwBack() { pwiz.step = pwiz.back.pop() || "kind"; pwDraw(); }
+
+// One screen: its heading gets focus (and is read out), its buttons at the bottom.
+function pwDraw() {
+  const s = pwiz.step, n = PW_STEP[s];
+  $("#pwMsg").textContent = "";
+  $("#pwStep").textContent = s === "done" ? "All done" : n ? `Step ${n} of 5` : "";
+  $("#pwBar").style.width = `${Math.round(100 * ((n || 5) - (s === "done" ? 0 : 1)) / 5)}%`;
+  $("#pwBack").hidden = !pwiz.back.length;
+  $("#pwNext").hidden = false;
+  $("#pwNext").textContent = "Next";
+  ({ kind: pwKind, brand: pwBrand, paper: pwPaper, none: pwNone, find: pwFind, model: pwModel, labels: pwLabels,
+     size: pwSize, name: pwName, try: pwTry, trouble: pwTrouble, fix: pwFix, done: pwDone })[s]();
+  $("#pwNav").hidden = $("#pwBack").hidden && $("#pwNext").hidden;  // no empty bar at the bottom
+  $("#pwTitle").focus();
+}
+function pwHead(title, hint = "") { $("#pwTitle").textContent = title; $("#pwHint").textContent = hint; }
+function pwCards(opts, chosen, attr) {
+  return `<div class="quizopts" role="group" aria-labelledby="pwTitle">${opts.map(([v, name, sub]) =>
+    `<button type="button" class="quizopt${v === chosen ? " chosen" : ""}" data-${attr}="${esc(v)}"><span><b>${esc(name)}</b>${sub ? `<span class="muted">${esc(sub)}</span>` : ""}</span>
+     ${v === chosen ? `<span class="quiznow">Your pick</span>` : ""}</button>`).join("")}</div>`;
+}
+const PW_ADVANCED = `<p class="muted">Know every detail already? <button type="button" class="linkish" data-pw="advanced">Advanced (type everything yourself)</button></p>`;
+
+function pwKind() {
+  pwHead("What kind of printer?", "Pick the closest.");
+  $("#pwBody").innerHTML = pwCards(PW_KINDS, pwiz.kind, "pw-kind") + PW_ADVANCED;
+  $("#pwNext").hidden = true;
+}
+function pwBrand() {
+  pwHead("Which one is it?", "The name is on the front or top of the printer.");
+  $("#pwBody").innerHTML = pwCards(PW_BRANDS, pwiz.driver, "pw-brand");
+  $("#pwNext").hidden = true;
+}
+// A regular printer, or none yet: nothing to set up. Say how Print on paper works, and finish.
+const PW_PAPER_HOW = `<ol class="pwlist"><li>Make a label as usual: Print today, Stickers, or any other.</li>
+  <li>Under it, tap <b>Print on paper</b>.</li><li>A page opens. Print it with your phone's or computer's Print.</li></ol>`;
+function pwPaper() {
+  pwHead("No setup needed", "Next Box makes a page you print yourself, on any printer.");
+  $("#pwBody").innerHTML = PW_PAPER_HOW + `<p class="muted">The paper size (Letter, A4…) is in Settings → Printing.</p>`;
+  $("#pwNext").textContent = "Done";
+}
+function pwNone() {
+  pwHead("That's fine: add one later", "Everything works on screen.");
+  $("#pwBody").innerHTML = `<p>Every label shows on screen first. To print one anyway:</p>` + PW_PAPER_HOW
+    + `<p class="muted">Or tap <b>Save label image</b> to keep a picture of it. Got a label printer? Come back to Settings → Printers &amp; label colors → Add a printer.</p>`;
+  $("#pwNext").textContent = "Done";
+}
+
+// Step 2: find it. Next Box searches by itself (about 5 seconds); "Type its address" is always there.
+function pwFind() {
+  if (pwiz.driver === "cups") {
+    pwHead("What's it called on this computer?", "Next Box sends labels to it through this computer's printer settings.");
+    $("#pwBody").innerHTML = `<div class="field"><label for="pwCups">Printer name</label>
+      <input type="text" id="pwCups" maxlength="100" autocapitalize="none" autocomplete="off" spellcheck="false" value="${esc(pwiz.typed)}" aria-describedby="pwCupsHelp"></div>
+      <p class="muted" id="pwCupsHelp">On the Next Box computer, open Settings → Printers and copy its name exactly. Or type <code>lpstat -p</code> in a terminal: the name comes after the word “printer”.</p>`;
+    return;
+  }
+  const brother = pwBrother(), typed = `<div class="field"><label for="pwAddr">The printer's address</label>
+      <input type="text" id="pwAddr" maxlength="100" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="192.168.1.50" value="${esc(pwiz.typed)}" aria-describedby="pwAddrHelp"></div>
+    <div id="pwAddrHelp"><p class="muted">How to find it:</p><ul class="pwlist muted">
+      <li><b>Print its settings page.</b> ${brother ? "Hold the printer's info (i) button for a second." : "The printer's manual says how: often by holding its Feed button."} The page shows its IP address.</li>
+      <li><b>Or look in your Wi-Fi router's app</b> (or its web page), in the list of connected devices.</li>
+      ${brother ? "<li>A Brother's name there starts with <b>BRW</b>, like BRW5413795FE5CF. Its address is next to it.</li>" : ""}</ul></div>`;
+  if (!pwCanLook()) {  // a household outside Home: its printers aren't on this computer's network
+    pwHead("Type your printer's address");
+    $("#pwBody").innerHTML = `<p class="pwnote">${esc(PRINT_AWAY)}</p><p class="muted">Only add a printer here if it's on the same network as the Next Box computer.</p>` + typed;
+    return;
+  }
+  pwHead("Find your printer", "Make sure it's switched on and on the same Wi-Fi as the Next Box computer.");
+  $("#pwBody").innerHTML = `<div id="pwFound" aria-live="polite"></div>
+    <div class="row"><button type="button" class="plain" data-pw="search">Search again</button></div>
+    <details id="pwType"${pwiz.typed ? " open" : ""}><summary>Type its address instead</summary>${typed}</details>`;
+  if (pwiz.found === null && !pwiz.searching) pwSearch();
+  else { pwPrePick(); pwShowFound(); }
+}
+function pwFits(list) {  // what fits the kind picked: a Brother for a Brother
+  return list.filter((f) => (pwBrother() ? f.driver === "brother_ql" : f.driver === pwiz.driver));
+}
+function pwPrePick() {  // exactly one that fits (or exactly one at all): picked for you
+  const list = pwiz.found || [], fits = pwFits(list), only = fits.length === 1 ? fits[0] : list.length === 1 ? list[0] : null;
+  if (only && !pwiz.typed && !pwiz.pick) pwPick(only.address, false);
+}
+async function pwSearch() {
+  const run = pwiz.run;
+  Object.assign(pwiz, { searching: true, found: null, why: "" });
+  pwShowFound();
+  let r;
+  try { r = await api("/admin/printers/discover", { method: "POST" }); }
+  catch (e) { r = { printers: [], why: errText(e) }; }
+  if (!pwiz || pwiz.run !== run) return;  // closed (or opened again) meanwhile
+  Object.assign(pwiz, { searching: false, found: r.printers || [], why: r.why || "" });
+  if (pwiz.pick && !pwiz.found.some((f) => f.address === pwiz.pick)) pwiz.pick = "";  // not there this time
+  pwPrePick();
+  if (pwiz.step === "find") pwShowFound();
+}
+function pwShowFound() {
+  const box = $("#pwFound");
+  if (!box) return;
+  $("#pwBody [data-pw=search]")?.setAttribute("aria-disabled", String(!!pwiz.searching));
+  if (pwiz.searching) {
+    box.innerHTML = `<p><span class="spin" aria-hidden="true"></span>Looking for printers on your network… (about 5 seconds)</p>`;
+    return;
+  }
+  const list = pwiz.found || [], fits = new Set(pwFits(list));
+  if (!list.length) {
+    box.innerHTML = `<p class="pwnote">${esc(pwiz.why || "No printers found. Check it's switched on and on the same Wi-Fi, then Search again. Or type its address below.")}</p>`;
+    if ($("#pwType")) $("#pwType").open = true;
+    return;
+  }
+  const what = (f) => (fits.has(f) ? "" : f.driver ? " · a different kind of label printer" : " · looks like a regular printer: use Print on paper for it");
+  box.innerHTML = `<p>${list.length === 1 ? "Found 1 printer." : `Found ${list.length} printers.`}${pwiz.pick ? "" : " Pick yours."}</p>
+    <fieldset class="jxopts pwfound"><legend class="sr-only">Printers found</legend>${list.map((f) => `<label class="jxopt">
+      <input type="radio" name="pwFound" value="${esc(f.address)}"${f.address === pwiz.pick ? " checked" : ""}>
+      <span><b>${esc(f.name || f.model || "Printer")}</b><span class="muted">${esc(f.address)} · on your network${f.host ? ` · ${esc(f.host)}` : ""}${what(f)}</span></span></label>`).join("")}</fieldset>`;
+}
+function pwPick(address, byHand = true) {
+  const f = (pwiz.found || []).find((x) => x.address === address);
+  if (address !== pwiz.pick) pwiz.read = null;  // another printer: ask its roll again
+  pwiz.pick = address; pwiz.typed = "";
+  if (f?.brother_model && pwBrother()) pwiz.model = f.brother_model;
+  pwiz.foundName = f && !pwBrother() ? f.name || f.model : "";
+  if (byHand) pwiz.dirty = true;
+  if ($("#pwAddr")) $("#pwAddr").value = "";
+}
+function pwFindNext() {
+  if (pwiz.driver === "cups") {
+    pwiz.typed = $("#pwCups").value.trim();
+    if (!pwiz.typed) { $("#pwMsg").textContent = "Type the printer's name as this computer shows it."; return $("#pwCups").focus(); }
+    return pwGo("name");
+  }
+  if (!pwAddress()) {
+    $("#pwMsg").textContent = pwCanLook() ? "Pick your printer, or type its address." : "Type the printer's address.";
+    if ($("#pwType")) $("#pwType").open = true;
+    return $("#pwAddr")?.focus();
+  }
+  pwGo(pwBrother() ? "labels" : "size");
+}
+
+// Step 3, Brother: ask the printer which roll is loaded (its own status page), else pick it.
+function pwLabels() {
+  const a = pwAddress(), canRead = pwCanLook() && pwNetwork(a);
+  pwHead("Which labels are in it?");
+  if (canRead && pwiz.read === null) return pwRead(a);
+  if (!pwiz.model) { pwiz.step = "model"; return pwModel(); }  // not known from the search or the printer: ask (Back skips this)
+  const r = pwiz.read, fits = r?.read && pwLabelFits(r.label);
+  if (fits && !pwiz.choosing) {
+    const c = pwRolls().common.find((x) => x.id === r.label);
+    $("#pwBody").innerHTML = `<div class="pwsays">Your printer says:<b>${esc(pwRollName(r.label))}</b>${c ? `<span>${esc(c.code)} · ${esc(c.use)}</span>` : ""}</div>
+      <p>Use this?</p><div class="row"><button type="button" class="go" data-pw="use">Yes, use these</button>
+      <button type="button" class="plain" data-pw="choose">No, let me pick</button></div>` + (pwiz.pid ? PW_ADVANCED : "");
+    $("#pwNext").hidden = true;
+    return;
+  }
+  const why = r?.read && !fits ? `Your printer says ${pwRollName(r.label)}, which don't fit the ${pwiz.model}. Is that the right model?`
+    : r && !r.read && r.why ? `Couldn't tell from the printer: ${r.why}` : "";
+  $("#pwHint").textContent = "Pick the roll that's in it. The size is on the roll's box, or on the sticker on its side.";
+  const all = printOpts.drivers.brother_ql.labels.filter((l) => pwLabelFits(l.id));
+  const common = pwRolls().common.filter((c) => pwLabelFits(c.id)), ids = new Set(common.map((c) => c.id));
+  const rest = all.filter((l) => !ids.has(l.id));
+  const radio = (id, name, sub) => `<label class="jxopt"><input type="radio" name="pwLabel" value="${esc(id)}"${id === pwiz.label ? " checked" : ""}>
+    <span><b>${esc(name)}</b>${sub ? `<span class="muted">${esc(sub)}</span>` : ""}</span></label>`;
+  $("#pwBody").innerHTML = (why && !pwiz.choosing ? `<p class="pwnote">${esc(why)}</p>` : "")
+    + `<fieldset class="jxopts"><legend class="sr-only">Label rolls</legend>
+      ${common.map((c) => radio(c.id, c.name, `${c.code} · ${c.use}`)).join("")}
+      ${rest.length ? `<details id="pwMoreSizes"${rest.some((l) => l.id === pwiz.label) ? " open" : ""}><summary>More sizes</summary>${rest.map((l) => radio(l.id, l.name, "")).join("")}</details>` : ""}</fieldset>`
+    + (pwiz.pid ? PW_ADVANCED : "");
+}
+async function pwRead(address) {
+  const run = pwiz.run;
+  $("#pwHint").textContent = "";
+  $("#pwBody").innerHTML = `<p><span class="spin" aria-hidden="true"></span>Asking your printer which labels are in it…</p>`;
+  $("#pwNext").hidden = true;
+  let r;
+  try { r = await api(`/admin/printers/media?address=${encodeURIComponent(address)}`); }
+  catch (e) { r = { read: false, why: errText(e) }; }
+  if (!pwiz || pwiz.run !== run || pwiz.step !== "labels") return;
+  pwiz.read = r;
+  if (r.model && !pwiz.model) pwiz.model = r.model;
+  pwDraw();
+}
+function pwUse(label) {
+  if (pwiz.label !== label) pwiz.dirty = true;
+  pwiz.label = label;
+  if (label !== "62") pwiz.ink = "black";  // the black + red roll is 62 mm
+  pwGo("name");
+}
+function pwModel() {
+  pwHead("Which model is it?", "It's printed on the front or top of the printer.");
+  const others = printOpts.drivers.brother_ql.models.filter((m) => !PW_MODELS.includes(m));
+  $("#pwBody").innerHTML = pwCards(PW_MODELS.map((m) => [m, `Brother ${m}`, ""]), pwiz.model, "pw-model")
+    + `<div class="field"><label for="pwModelAll">Another model</label><select id="pwModelAll"><option value="">Pick one…</option>
+      ${others.map((m) => `<option${m === pwiz.model ? " selected" : ""}>${esc(m)}</option>`).join("")}</select></div>`;
+  $("#pwNext").hidden = true;
+}
+function pwSetModel(m) {
+  if (!m) return;
+  pwiz.model = m; pwiz.dirty = true;
+  if (pwiz.label && !pwLabelFits(pwiz.label)) pwiz.label = "";
+  pwGo("labels");
+}
+
+// Step 3, other label printers: the size (or receipt paper width); Next Box works out the dots from the dpi.
+function pwSize() {
+  const receipt = pwiz.driver === "escpos";
+  pwHead(receipt ? "How wide is the paper?" : "How big are the labels?", "It's on the roll's box. Not sure? Measure one label.");
+  $("#pwBody").innerHTML = pwCards(receipt ? PW_PAPER : PW_SIZES, pwiz.size, "pw-size")
+    + `<details id="pwOwn"${pwiz.size === "own" ? " open" : ""}><summary>Another size</summary><div class="pwsize">
+      <div class="field"><label for="pwW">Width</label><input type="number" id="pwW" min="10" max="300" step="0.1" inputmode="decimal"></div>
+      ${receipt ? "" : `<div class="field"><label for="pwH">Height (empty: one long roll)</label><input type="number" id="pwH" min="0" max="1000" step="0.1" inputmode="decimal"></div>`}
+      <div class="field"><label for="pwUnit">Measured in</label><select id="pwUnit"><option value="mm">mm</option><option value="in">inches</option></select></div>
+      <div class="field"><label for="pwDpi">Print quality</label><select id="pwDpi"><option value="203">203 dpi (most)</option><option value="300">300 dpi</option></select></div>
+    </div><div class="row"><button type="button" class="plain" data-pw="ownsize">Use this size</button></div></details>`;
+  $("#pwNext").hidden = true;
+  if (pwiz.size === "own" && pwiz.dots) {
+    $("#pwW").value = (pwiz.dots / pwiz.dpi * 25.4).toFixed(1);
+    if ($("#pwH")) $("#pwH").value = pwiz.heightMm || "";
+    $("#pwDpi").value = String(pwiz.dpi);
+  }
+}
+function pwSetSize(v) {
+  const paper = PW_PAPER.find((p) => p[0] === v), label = PW_SIZES.find((p) => p[0] === v);
+  if (paper) Object.assign(pwiz, { size: v, dots: paper[3], dpi: 203, heightMm: 0 });
+  else Object.assign(pwiz, { size: v, dots: Math.round(label[3] / 25.4 * (pwiz.dpi || 203)), heightMm: label[4] });
+  pwiz.dirty = true;
+  pwGo("name");
+}
+function pwOwnSize() {
+  const k = $("#pwUnit").value === "in" ? 25.4 : 1, dpi = Number($("#pwDpi").value) || 203;
+  const w = Number($("#pwW").value) * k, h = Number($("#pwH")?.value || 0) * k, dots = Math.round(w / 25.4 * dpi);
+  if (!(dots >= 96 && dots <= 2400)) { $("#pwMsg").textContent = "Type the width: between 12 and 300 mm (½ to 12 inches)."; return $("#pwW").focus(); }
+  if (!(h >= 0 && h <= 1000)) { $("#pwMsg").textContent = "The height is up to 1000 mm. Leave it empty for one long roll."; return $("#pwH").focus(); }
+  Object.assign(pwiz, { size: "own", dots, dpi, heightMm: Math.round(h * 10) / 10, dirty: true });
+  pwGo("name");
+}
+
+// Step 4: a name (and, with several printers, its label color). Saved here, so the test print uses it.
+function pwName() {
+  pwHead("Name it", "So you can tell it apart from other printers.");
+  const brand = pwBrother() ? (pwiz.model ? `Brother ${pwiz.model}` : "") : pwiz.foundName || "";
+  if (!pwiz.name) {  // "Label printer" (or the model), and never the same name as another printer
+    const base = (pwiz.first || !brand ? "Label printer" : brand).slice(0, 37), taken = new Set(printOpts.printers.map((p) => p.name));
+    let n = 1;
+    pwiz.name = base;
+    while (taken.has(pwiz.name)) pwiz.name = `${base} ${++n}`;
+  }
+  const red = pwBrother() && pwiz.model.startsWith("QL-8") && pwiz.label === "62";
+  const color = `<div class="field"><label for="pwColor">Label color</label><select id="pwColor" aria-describedby="pwColorHelp">
+      ${printOpts.colors.map((c) => `<option${c === pwiz.color ? " selected" : ""}>${esc(c)}</option>`).join("")}</select>
+      <div class="muted" id="pwColorHelp">With several printers, the color picks which labels go where (Settings → Printers &amp; label colors).</div></div>`
+    + (red ? `<label class="pwcheck"><input type="checkbox" id="pwInk"${pwiz.ink === "black_red" ? " checked" : ""}> Black + red roll (DK-22251): print overdue tags in red</label>` : "");
+  $("#pwBody").innerHTML = `<div class="field"><label for="pwNameIn">Name</label><input type="text" id="pwNameIn" maxlength="40" value="${esc(pwiz.name)}"></div>`
+    + (pwiz.pid ? "" : pwiz.first ? `<p class="muted">It will be your usual printer.</p>`
+      : `<label class="pwcheck"><input type="checkbox" id="pwUsual"${pwiz.usual ? " checked" : ""}> Make it my usual printer</label>`)
+    + (pwiz.first ? `<details id="pwMore"><summary>More: label color</summary>${color}</details>` : color);  // a first printer: white, tucked away
+  $("#pwNext").textContent = pwiz.pid ? "Save changes" : "Save printer";
+}
+function pwKeepName() {  // what's typed and ticked on Name it, kept when going Back
+  if (!$("#pwNameIn")) return;
+  if ($("#pwNameIn").value !== pwiz.name || ($("#pwColor") && $("#pwColor").value !== pwiz.color)) pwiz.dirty = true;
+  pwiz.name = $("#pwNameIn").value;
+  pwiz.color = $("#pwColor")?.value || pwiz.color;
+  pwiz.ink = $("#pwInk")?.checked ? "black_red" : "black";
+  pwiz.usual = !!$("#pwUsual")?.checked;
+}
+async function pwSave() {
+  pwKeepName();
+  const name = pwiz.name.trim();
+  if (!name) { $("#pwMsg").textContent = "Give it a name, like Kitchen or Label printer."; return $("#pwNameIn").focus(); }
+  const body = { name, driver: pwiz.driver, address: pwAddress(), stock_color: pwiz.color, ink: pwiz.ink };
+  if (pwBrother()) {
+    Object.assign(body, { model: pwiz.model, label: pwiz.label,
+                          width_px: printOpts.drivers.brother_ql.labels.find((l) => l.id === pwiz.label)?.width || 696 });
+  } else if (pwiz.driver !== "cups") {
+    Object.assign(body, { width_px: pwiz.dots, dpi: pwiz.dpi, label_height_mm: pwiz.heightMm || 0 });
+  }
+  let cfg;
+  try {
+    cfg = await api(pwiz.pid ? `/admin/printers/${encodeURIComponent(pwiz.pid)}` : "/admin/printers",
+                    { method: pwiz.pid ? "PATCH" : "POST", json: body });
+  } catch (e) { $("#pwMsg").textContent = errText(e); return; }
+  const added = !pwiz.pid;
+  Object.assign(pwiz, { pid: cfg.id, dirty: false, tested: null });
+  if (added && (pwiz.first || pwiz.usual)) {  // the first printer is your usual one
+    try { me.prefs = await api("/settings", { method: "PATCH", json: { default_printer: cfg.id } }); } catch {}
+  }
+  toast(added ? "Printer saved" : "Changes saved");
+  loadLabels(); loadPrinters(false);
+  pwGo("try");
+}
+
+// Step 5: anything that would stop a real print (fixed here where it can be), then one test label.
+function pwBlockers() {
+  const st = printNow(), out = [];
+  if (st.printing_paused) {
+    out.push(me?.role === "superadmin" ? { text: "Printing is paused for everyone.", fix: ["Turn printing back on", "unpause"] }
+      : { text: "Printing is paused. Only the Next Box owner can turn it back on (Debug → Server switches)." });
+  }
+  if (me?.prefs?.always_dry_run) out.push({ text: "Always preview only is on for your account, so nothing goes to a printer.", fix: ["Turn it off", "always"] });
+  if (st.dry_run_forced && !st.printing_paused && !me?.prefs?.always_dry_run) {  // then it's NEXTBOX_DRY_RUN (as applyDry)
+    out.push(me?.role === "superadmin"
+      ? { text: "This Next Box makes previews only: NEXTBOX_DRY_RUN=1 is in its .env file. On the Next Box computer, delete that line, then run:",
+          code: "systemctl --user restart nextbox", fix: ["Check again", "recheck"] }
+      : { text: "This Next Box makes previews only for now. Ask its owner to turn printing on." });
+  }
+  return out;
+}
+async function pwTry() {
+  pwHead("Try it", "Print one test label to check it all works.");
+  $("#pwNext").hidden = true;
+  $("#pwBody").innerHTML = `<div id="pwChecks" aria-live="polite"><p><span class="spin" aria-hidden="true"></span>Checking that nothing is in the way…</p></div>
+    <div id="pwTestOut" aria-live="polite"></div>`;
+  const run = pwiz.run;
+  await refreshStatus();
+  if (!pwiz || pwiz.run !== run || pwiz.step !== "try") return;
+  pwShowChecks();
+}
+function pwShowChecks() {
+  const blocks = pwBlockers(), box = $("#pwChecks");
+  if (!box) return;
+  box.innerHTML = blocks.map((b) => `<div class="pwfix"><p>${esc(b.text)}</p>${b.code ? `<code class="pwcode">${esc(b.code)}</code>` : ""}
+      ${b.fix ? `<button type="button" class="plain" data-pw-fix="${esc(b.fix[1])}">${esc(b.fix[0])}</button>` : ""}</div>`).join("")
+    + (blocks.length ? `<p class="muted">Fix ${blocks.length === 1 ? "that" : "those"} first, then print a test label.</p>` : `<p class="ok">✓ Nothing is in the way.</p>`)
+    + `<div class="row"><button type="button" class="go" data-pw="test"${blocks.length ? ' aria-disabled="true"' : ""}>Print a test label</button>
+       <button type="button" class="plain" data-pw="finish">Finish for now</button></div>`;
+}
+async function pwFixIt(what) {
+  try {
+    if (what === "always") {
+      me.prefs = await api("/settings", { method: "PATCH", json: { always_dry_run: false } });
+      loadPrefs(me.prefs); toast("Always preview only is off");
+    } else if (what === "unpause") {
+      await api("/super/settings", { method: "PATCH", json: { printing_paused: false } });
+      me.printing_paused = false; $("#paused").hidden = true; toast("Printing is back on");
+    }
+  } catch (e) { return toast(errText(e)); }
+  await refreshStatus();
+  if (pwiz?.step !== "try") return;
+  pwShowChecks();
+  focusFirst($("#pwChecks [data-pw-fix]"), $("#pwChecks [data-pw=test]"));
+}
+async function pwTest() {
+  if (!confirm("Send this to the printer?")) return;
+  const out = $("#pwTestOut"), run = pwiz.run;
+  out.innerHTML = `<p><span class="spin" aria-hidden="true"></span>Sending a test label…</p>`;
+  let r;
+  try { r = await api(`/admin/printers/${encodeURIComponent(pwiz.pid)}/test?dry_run=false`, { method: "POST" }); }
+  catch (e) { out.innerHTML = `<p class="err">${esc(errText(e))}</p>`; return; }
+  if (!pwiz || pwiz.run !== run) return;
+  pwiz.tested = r;
+  const img = `<img src="${png(r.id)}" alt="The test label for ${esc(r.printer?.name || pwiz.name)}">`;
+  out.innerHTML = r.status === "printed"
+    ? `<p>Sent to ${esc(r.printer?.name || pwiz.name)}. <b>Did a label come out?</b></p>
+      <div class="row"><button type="button" class="go" data-pw="yes">Yes</button><button type="button" class="plain" data-pw="no">No</button></div>
+      <p class="muted">What it sent:</p>${img}`
+    : `<p class="${r.status === "failed" ? "err" : "muted"}">${esc(r.note || "It made a preview instead.")}</p>
+      <div class="row"><button type="button" class="go" data-pw="no">Help me fix it</button></div>${img}`;
+  const first = out.querySelector("p");
+  first.tabIndex = -1; first.focus();
+}
+function pwTrouble() {
+  pwHead("What happened?");
+  $("#pwNext").hidden = true;
+  const opts = [...(pwBrother() ? [["red", "Its light is flashing red", "And no label came out"]] : []),
+                ["nothing", "Nothing happened", "No sound, no label"], ["wrong", "It printed, but it looks wrong", "Cut off, too small, or blank labels"]];
+  $("#pwBody").innerHTML = pwCards(opts, "", "pw-trouble");
+}
+function pwFix() {
+  const cups = pwiz.driver === "cups", size = pwBrother() ? "labels" : cups ? "find" : "size";
+  const say = {
+    red: ["The labels may not match", "A flashing red light usually means the roll in it isn't the size Next Box sent. Switch the printer off and on to clear the light. Then check which labels are in it.", "Check the labels", "labels"],
+    nothing: ["It didn't get the label", cups ? "Check the printer is switched on, and that its name is exactly as this computer shows it."
+      : "The printer may be asleep or switched off, or the address may be wrong. Switch it on and wait for a steady light. Then find it again.", cups ? "Check the name" : "Find it again", "find"],
+    wrong: ["Let's check the label size", cups ? "The label size comes from this computer's printer settings: check the paper size there."
+      : "When the label is cut off, too small, or blank labels come out, the size set in Next Box doesn't match the roll.", cups ? "Check the name" : "Check the labels", size],
+  }[pwiz.fix];
+  pwHead(say[0]);
+  $("#pwBody").innerHTML = `<p>${esc(say[1])}</p><div class="row"><button type="button" class="go" data-pw-goto="${say[3]}">${esc(say[2])}</button></div>`;
+  $("#pwNext").hidden = true;
+}
+function pwDone() {
+  pwHead("All set", `Labels will print on ${pwiz.name}.`);
+  $("#pwBody").innerHTML = `<p>A real print always asks “Send this to the printer?” first.</p>
+    <div class="row"><button type="button" class="go" data-pw="today">Print today's label</button><button type="button" class="plain" data-pw="finish">Done</button></div>`;
+  $("#pwNext").hidden = $("#pwBack").hidden = true;
+}
+
+$("#pwBody").addEventListener("click", (e) => {
+  const t = e.target.closest("button");
+  if (!t || !pwiz || t.getAttribute("aria-disabled") === "true") return;
+  const d = t.dataset;
+  if (d.pwKind) {
+    if (pwiz.kind !== d.pwKind) Object.assign(pwiz, { driver: d.pwKind === "brother" ? "brother_ql" : "", pick: "", read: null, model: "" });
+    pwiz.kind = d.pwKind; pwiz.dirty = true;
+    return pwGo({ brother: "find", other: "brand", paper: "paper", none: "none" }[d.pwKind]);
+  }
+  if (d.pwBrand) {
+    if (pwiz.driver !== d.pwBrand) Object.assign(pwiz, { pick: "", size: "", model: "" });
+    pwiz.driver = d.pwBrand; pwiz.dirty = true;
+    return pwGo("find");
+  }
+  if (d.pwModel) return pwSetModel(d.pwModel);
+  if (d.pwSize) return pwSetSize(d.pwSize);
+  if (d.pwTrouble) { pwiz.fix = d.pwTrouble; return pwGo("fix"); }
+  if (d.pwFix) return pwFixIt(d.pwFix);
+  if (d.pwGoto) {  // from the troubleshooter: look again, then Save changes and Try it again
+    if (d.pwGoto === "find") Object.assign(pwiz, { found: null, read: null });
+    if (d.pwGoto === "labels") Object.assign(pwiz, { read: null, choosing: false });
+    return pwGo(d.pwGoto);
+  }
+  const act = d.pw;
+  if (act === "search") return pwSearch();
+  if (act === "use") return pwUse(pwiz.read.label);
+  if (act === "choose") { pwiz.choosing = true; return pwDraw(); }
+  if (act === "ownsize") return pwOwnSize();
+  if (act === "test") return pwTest();
+  if (act === "yes") return pwGo("done");
+  if (act === "no") return pwGo("trouble");
+  if (act === "finish") return $("#pwDialog").close();
+  if (act === "today") { pwiz.opener = null; $("#pwDialog").close(); goto("print"); return setTimeout(() => $("[data-act=today]").focus(), 200); }  // never prints by itself
+  if (act === "advanced") {  // the full form in Admin → Printers (for this printer, from Edit)
+    if (!pwAsk()) return;
+    const p = pwiz.pid && printOpts.printers.find((x) => x.id === pwiz.pid);
+    Object.assign(pwiz, { dirty: false, opener: null }); $("#pwDialog").close();
+    goto("admin");
+    loadPrinters(false).then(() => {
+      if (p) return editPrinter(p);
+      $("#npForm").open = true; $("#npForm").scrollIntoView({ behavior: smooth(), block: "nearest" }); $("#npDriver").focus();
+    });
+  }
+});
+$("#pwBody").addEventListener("change", (e) => {
+  if (!pwiz) return;
+  if (e.target.name === "pwFound") { pwPick(e.target.value); $("#pwMsg").textContent = ""; }
+  else if (e.target.name === "pwLabel") { pwiz.dirty = true; $("#pwMsg").textContent = ""; }
+  else if (e.target.id === "pwModelAll") pwSetModel(e.target.value);
+});
+$("#pwBody").addEventListener("input", (e) => {
+  if (!pwiz || e.target.id !== "pwAddr") return;
+  pwiz.typed = e.target.value; pwiz.dirty = true; pwiz.read = null;
+  if (pwiz.typed.trim() && pwiz.pick) {  // typing an address instead of the one picked
+    Object.assign(pwiz, { pick: "", model: pwiz.pid ? pwiz.model : "" });
+    $$("#pwBody [name=pwFound]").forEach((r) => { r.checked = false; });
+  }
+});
+$("#pwNext").onclick = () => hold($("#pwNext"), async () => {
+  const s = pwiz.step;
+  if (s === "paper" || s === "none") return pwFinish();
+  if (s === "find") return pwFindNext();
+  if (s === "labels") {
+    const picked = $("#pwBody [name=pwLabel]:checked")?.value;
+    if (!picked) { $("#pwMsg").textContent = "Pick the labels that are in it."; return $("#pwBody [name=pwLabel]")?.focus(); }
+    return pwUse(picked);
+  }
+  if (s === "name") return pwSave();
+});
+$("#pwBack").onclick = () => {
+  if (pwiz.step === "name") pwKeepName();
+  if (pwiz.step === "labels") pwiz.choosing = false;
+  pwBack();
+};
+// Paper or no printer: nothing to save. From Get started, that's the printer step dealt with.
+async function pwFinish() {
+  const from = pwiz.from;
+  pwiz.dirty = false;
+  $("#pwDialog").close();
+  if (from === "guide") { await api("/setup/printer/done", { method: "POST" }).catch(() => {}); loadGuide(); }
+}
+// Closing asks first if anything was picked and not saved yet (Esc, the phone's back gesture, Close).
+function pwAsk() {
+  if (!pwiz?.dirty) return true;
+  return confirm(pwiz.pid ? "Close without saving your changes?" : "Stop setting up this printer? Nothing has been saved yet.");
+}
+let pwKeep = null;
+$("#pwClose").onclick = () => { if (pwAsk()) { pwiz.dirty = false; $("#pwDialog").close(); } };
+$("#pwDialog").addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || e.defaultPrevented) return;
+  e.preventDefault();
+  if (pwAsk()) { pwiz.dirty = false; $("#pwDialog").close(); }
+});
+$("#pwDialog").addEventListener("cancel", (e) => {
+  if (!pwAsk()) { e.preventDefault(); if (!e.cancelable) pwKeep = document.activeElement; }
+  else if (pwiz) pwiz.dirty = false;
+});
+$("#pwDialog").addEventListener("close", () => {
+  if (pwKeep) { const el = pwKeep; pwKeep = null; $("#pwDialog").showModal(); if ($("#pwDialog").contains(el)) el.focus(); return; }
+  const was = pwiz;
+  pwiz = null;
+  if (!me) return;  // signed out
+  if (was?.pid) { loadLabels(); loadPrinters(false); refreshStatus(); loadGuide(); }
+  setTimeout(() => {
+    if (was?.opener?.isConnected && was.opener.offsetParent && !$$("dialog[open]").length) was.opener.focus();
+    else if (document.activeElement === document.body || !document.activeElement) focusMain();
+  }, 0);
+});
+// The ways in: Settings (no printer yet, or another one), Get started, and Admin → Printers (Add, and Edit).
+$("#noPrinterGo").onclick = () => openPrinterSetup({ from: "settings" });
+$("#labelAdd").onclick = () => openPrinterSetup({ from: "settings" });
+$("#prAdd").onclick = () => openPrinterSetup({ from: "admin" });
 
 // ---------------------------------------------------------------- usage (superadmin)
 const REASON_NAMES = { overdue: "overdue", urgent: "urgent", today: "daily", list: "lists", task: "single", note: "notes", new_task: "new tasks", text: "notes" };
@@ -3908,9 +4477,9 @@ const STEPS = {
   printer: { title: () => !printsHere() ? "Printing your labels" : guide?.can_add_printer ? "Add your label printer" : "Your printer",
              text: () => !printsHere() ? PRINT_AWAY
                : guide?.printers === 0 ? `${NO_PRINTER} ${noPrinterNext()} Until then, every ticket has Print on paper, which works with any printer.`
-               : guide?.can_add_printer ? "Admin → Printers for a label printer. No label printer? Every ticket has Print on paper, which works with any printer."
+               : guide?.can_add_printer ? "Set up a printer walks you through it: Next Box finds it and reads which labels are in it. No label printer? Every ticket has Print on paper, which works with any printer."
                                         : "No label printer? Every ticket has Print on paper, which works with any printer. A household admin can add a label printer later.",
-             go: () => printsHere() && guide?.can_add_printer ? ["Add printer", () => goto("admin", "#printerList")] : null, skip: true },
+             go: () => printsHere() && guide?.can_add_printer ? ["Set up a printer", () => openPrinterSetup({ from: "guide" })] : null, skip: true },
   preview: { title: "Make your first stickers", text: "Tick a task or two and tap Stickers. With “Preview only” on, nothing prints: you just see how it looks.",
              go: ["Show me", () => $(".printbar").scrollIntoView({ behavior: smooth(), block: "center" })] },
   today: { title: "Print today's label", text: "Today's tasks on one label, with the next tiny step under each. Tap Print today. With “Preview only” on, you just see it.",

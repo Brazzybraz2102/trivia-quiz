@@ -368,9 +368,11 @@ def test_the_settings_card_says_no_printer_added(html, js):
     card = html[html.index('<div class="card" id="labelCard">'):html.index('<div class="card" id="printCard">')]
     assert ('<div id="noPrinter" hidden><p><b>No printer added.</b> <span id="noPrinterNext"></span></p>'
             in card)
-    assert '<button type="button" class="go small" id="noPrinterGo" hidden>Add a printer</button>' in card
+    assert ('<button type="button" class="go small" id="noPrinterGo" aria-haspopup="dialog" hidden>Add a printer</button>'
+            in card)
     assert card.index('id="noPrinter"') < card.index('id="printersLoaded"') < card.index('id="defPrinterRow"')
-    assert '$("#noPrinterGo").onclick = () => { $("#npForm").open = true; goto("admin", "#npForm"); };' in js
+    # It opens Set up a printer (the walkthrough) now, not Admin → Printers' form (test_printer_wizard.py).
+    assert '$("#noPrinterGo").onclick = () => openPrinterSetup({ from: "settings" });' in js
     assert 'const NO_PRINTER = "No printer added.";' in js  # the same words in the Preview only line and Get started
 
 

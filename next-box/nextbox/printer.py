@@ -47,10 +47,21 @@ BROTHER_LABELS = (
     ("pt24", "24 mm P-touch tape", 128), ("pt36", "36 mm P-touch tape", 454),
 )
 
+# The Brother rolls most people have, shown first in Set up a printer's label picker: id, plain name, the code on
+# the box, what it's for. Every other size is under "More sizes".
+COMMON_ROLLS = (
+    ("62", "62 mm continuous roll", "DK-22205", "One long roll, cut to fit each label"),
+    ("102x152", "102 × 152 mm labels (4 × 6 in)", "DK-1241", "Shipping labels"),
+    ("62x100", "62 × 100 mm labels", "DK-1202", "Shipping labels"),
+    ("29x90", "29 × 90 mm labels", "DK-1201", "Address labels"),
+    ("102", "102 mm continuous roll", "DK-22243", "One wide roll, cut to fit each label"),
+)
+
 DRIVERS = {
     "brother_ql": {"name": "Brother QL / PT label printer", "address": "192.168.1.50 or usb://0x04f9:0x20a7",
-                   "width": 696, "dpi": 300, "models": list(BROTHER_MODELS),
-                   "labels": [{"id": i, "name": n, "width": w} for i, n, w in BROTHER_LABELS]},
+                   "width": 696, "dpi": 300, "models": list(BROTHER_MODELS), "wide_models": list(WIDE_MODELS),
+                   "labels": [{"id": i, "name": n, "width": w} for i, n, w in BROTHER_LABELS],
+                   "common": [{"id": i, "name": n, "code": c, "use": u} for i, n, c, u in COMMON_ROLLS]},
     "escpos": {"name": "ESC/POS receipt printer (Epson, Star, 58/80 mm)", "address": "192.168.1.60 or /dev/usb/lp0",
                "width": 576, "dpi": 203},
     "zpl": {"name": "ZPL label printer (Zebra and compatibles)", "address": "192.168.1.70", "width": 812, "dpi": 203},

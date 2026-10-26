@@ -20,6 +20,7 @@ dependencies = [
     "caldav>=3.3",
     "cryptography>=43",
     "sqlalchemy>=2.0",
+    "zeroconf>=0.136",  # Set up a printer: finds printers on the home network (Bonjour), only listening
 ]
 
 [project.optional-dependencies]
