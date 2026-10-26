@@ -8,10 +8,12 @@ printer._send_raster only.
   installed, for about TIME_LIMIT seconds. A printer's model comes from its announcement (usb_MDL, ty, product).
 - read_media(): a Brother's own status page (http://<printer>/general/status.html, else /) says what's loaded
   ("Media Type  102mm x 152mm / 4.0" x 6.0""). media_label() turns that into a label id from
-  printer.BROTHER_LABELS. A short timeout, a size cap, and only an address on the home network.
+  printer.BROTHER_LABELS. One plain GET with one deadline for all of it (MEDIA_TIMEOUT), a size cap, a page read
+  in one linear pass, and only an address on the home network.
 """
 from __future__ import annotations
 
+import codecs
 import html
 import ipaddress
 import re
@@ -21,8 +23,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
-
-import httpx
+from socket import create_connection
 
 from .printer import BROTHER_LABELS, BROTHER_MODELS, _host_port
 from .printers import PrinterError, _own_addresses, validate
@@ -287,21 +288,58 @@ def label_name(label_id: str | None) -> str:
     return next((n for i, n, _ in BROTHER_LABELS if i == label_id), "")
 
 
+_RAW_TEXT = re.compile(r"(script|style)\b", re.I)                    # their insides aren't words on the page
+_RAW_END = {"script": re.compile(r"</script\b", re.I), "style": re.compile(r"</style\b", re.I)}
+MAX_VALUE = 200  # a status page's values are a few words ("102mm x 152mm / 4.0" x 6.0""): longer isn't one
+
+
+def page_text(page: str) -> list[str]:
+    """The words between a page's tags, in order, leaving out scripts and styles. One pass, in linear time, so a page
+    of unclosed tags (or anything else on the network that answers) can't hold up the server: a tag or script that
+    never ends just ends the page there."""
+    cells, pos, n = [], 0, len(page)
+    while pos < n:
+        lt = page.find("<", pos)
+        cells.append(page[pos:] if lt < 0 else page[pos:lt])
+        if lt < 0:
+            break
+        gt = page.find(">", lt + 1)
+        if gt < 0:
+            break
+        pos = gt + 1
+        raw = _RAW_TEXT.match(page, lt + 1, gt)
+        if raw:
+            end = _RAW_END[raw[1].lower()].search(page, pos)
+            gt = page.find(">", end.end()) if end else -1
+            if gt < 0:
+                break
+            pos = gt + 1
+    out = []
+    for c in cells:
+        try:
+            c = html.unescape(c)
+        except ValueError:  # a number too long to be a character (&#1111…): Python won't read it, and it isn't a word
+            pass
+        c = re.sub(r"\s+", " ", c).strip()
+        if c:
+            out.append(c)
+    return out
+
+
 def page_fields(page: str) -> dict:
     """The status page's "Device Status", "Media Status" and "Media Type", and the model if it names one."""
-    page = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", page)
-    cells = [re.sub(r"\s+", " ", html.unescape(c)).strip() for c in re.split(r"<[^>]*>", page)]
-    cells = [c for c in cells if c]
+    cells = page_text(page)
     out = {}
     for key, want in (("status", "device status"), ("media_status", "media status"), ("media", "media type")):
         seen = []  # every value next to the words: a menu link called "Media Type" mustn't win over the real one
         for i, c in enumerate(cells):
             low = c.lower().rstrip(":").strip()
             if low == want and i + 1 < len(cells):
-                seen.append(cells[i + 1])
+                if len(cells[i + 1]) <= MAX_VALUE:
+                    seen.append(cells[i + 1])
             elif low.startswith(want + ":") or low.startswith(want + " "):
                 rest = c[len(want):].lstrip(" :").strip()
-                if rest:
+                if rest and len(rest) <= MAX_VALUE:
                     seen.append(rest)
         if key == "media":
             seen.sort(key=lambda v: (media_label(v) is None, not re.search(r"\d\s*mm|DK-", v, re.I)))
@@ -318,8 +356,9 @@ def page_fields(page: str) -> dict:
 HTTP_PORT = 80
 ALLOW_LOOPBACK = False
 STATUS_PATHS = ("/general/status.html", "/")
-MEDIA_TIMEOUT = 3.0    # seconds for the whole read
+MEDIA_TIMEOUT = 3.0    # seconds for the whole read, from asking to the last byte
 MAX_PAGE = 256 * 1024
+MAX_HEAD = 16 * 1024   # a web page's headers are much less
 
 
 def lan_address(address: str) -> tuple[str, str]:
@@ -347,18 +386,76 @@ def lan_address(address: str) -> tuple[str, str]:
     raise PrinterError(f"can't find {host}. Check the printer's address")
 
 
-def _get(client: httpx.Client, ip: str, host: str, path: str, timeout: float) -> str | None:
-    """The page, at most MAX_PAGE bytes, or None if it isn't there."""
-    url = f"http://{ip}:{HTTP_PORT}{path}"
-    with client.stream("GET", url, headers={"Host": host}, timeout=timeout) as r:
-        if r.status_code != 200:
-            return None
-        body = b""
-        for chunk in r.iter_bytes():
-            body += chunk
-            if len(body) >= MAX_PAGE:
+def _head_end(data: bytes | bytearray, start: int = 0) -> int:
+    """Where the headers end (the body starts), or -1. Some small web servers end lines with a bare LF."""
+    ends = [i + len(sep) for sep in (b"\r\n\r\n", b"\n\n") if (i := data.find(sep, start)) >= 0]
+    return min(ends) if ends else -1
+
+
+def _dechunk(body: bytes) -> bytes:
+    """A body sent in chunks (Transfer-Encoding: chunked), put back together as far as it's whole."""
+    out, pos = bytearray(), 0
+    while True:
+        nl = body.find(b"\n", pos)
+        size = body[pos:nl].split(b";")[0].strip() if nl >= 0 else b""
+        if not size or len(size) > 8 or not re.fullmatch(rb"[0-9A-Fa-f]+", size) or int(size, 16) == 0:
+            return bytes(out)
+        pos = nl + 1 + int(size, 16)
+        out += body[nl + 1:pos]
+        pos += 2 if body[pos:pos + 2] == b"\r\n" else 1 if body[pos:pos + 1] == b"\n" else 0
+
+
+def _get(ip: str, host: str, path: str, deadline: float) -> str | None:
+    """The page at `path` (at most MAX_PAGE bytes), or None when it isn't there (anything but a 200). One plain
+    HTTP/1.0 GET: never through a proxy, never following a redirect. `deadline` is for all of it, from connecting to
+    the last byte, so a printer (or anything else) that answers slowly or a byte at a time is cut off there:
+    TimeoutError. Something that isn't a web page: ConnectionError."""
+    def left() -> float:
+        t = deadline - time.monotonic()
+        if t <= 0:
+            raise TimeoutError("the printer's page took too long")
+        return t
+
+    ask = f"GET {path} HTTP/1.0\r\nHost: {host}\r\nAccept: text/html\r\nConnection: close\r\n\r\n".encode("ascii")
+    data, end, size, chunked, charset = bytearray(), -1, None, False, None
+    with create_connection((ip, HTTP_PORT), timeout=left()) as s:
+        s.settimeout(left())
+        s.sendall(ask)
+        while True:
+            s.settimeout(left())
+            got = s.recv(65536)
+            if not got:
                 break
-    return body[:MAX_PAGE].decode(r.charset_encoding or "utf-8", "replace")
+            data += got
+            if end < 0:
+                end = _head_end(data, max(0, len(data) - len(got) - 3))
+                if end < 0:
+                    if len(data) > MAX_HEAD:
+                        raise ConnectionError("not a web page")
+                    continue
+                status = re.match(rb"HTTP/\d(?:\.\d)?[ \t]+(\d{3})\b", data)
+                if not status:
+                    raise ConnectionError("not a web page")
+                if status[1] != b"200":
+                    return None
+                head = bytes(data[:end]).decode("latin-1").lower()
+                length = re.search(r"^content-length:[ \t]*(\d{1,9})[ \t]*\r?$", head, re.M)
+                size = int(length[1]) if length else None
+                chunked = bool(re.search(r"^transfer-encoding:[^\n]*chunked", head, re.M))
+                charset = re.search(r"^content-type:[^\n]*charset=\"?([\w.:-]{1,40})", head, re.M)
+            body = len(data) - end
+            if body >= MAX_PAGE or (size is not None and body >= size):
+                break
+            if chunked and data.endswith(b"\n0\r\n\r\n"):  # the last chunk
+                break
+    if end < 0:
+        raise ConnectionError("not a web page")
+    body = bytes(data[end:end + MAX_PAGE] if not chunked else _dechunk(bytes(data[end:]))[:MAX_PAGE])
+    try:
+        encoding = codecs.lookup(charset[1]).name if charset else "utf-8"
+    except LookupError:
+        encoding = "utf-8"
+    return body.decode(encoding, "replace")
 
 
 def read_media(address: str) -> dict:
@@ -370,24 +467,22 @@ def read_media(address: str) -> dict:
     deadline = time.monotonic() + MEDIA_TIMEOUT
     got: dict = {}
     why = ""
-    with httpx.Client(trust_env=False, follow_redirects=False) as client:  # never through a proxy
-        for path in STATUS_PATHS:
-            left = deadline - time.monotonic()
-            if left <= 0.05:
-                break
-            try:
-                page = _get(client, ip, host, path, left)
-            except httpx.TimeoutException:
-                why = "The printer didn't answer in time. Is it switched on?"
-                break
-            except httpx.HTTPError:
-                why = "The printer's web page didn't answer. Is it switched on, and is the address right?"
-                break
-            if page is None:
-                continue
-            got = {**page_fields(page), **got}
-            if got.get("media"):
-                break
+    for path in STATUS_PATHS:
+        if deadline - time.monotonic() <= 0.05:
+            break
+        try:
+            page = _get(ip, host, path, deadline)
+        except TimeoutError:
+            why = "The printer didn't answer in time. Is it switched on?"
+            break
+        except OSError:
+            why = "The printer's web page didn't answer. Is it switched on, and is the address right?"
+            break
+        if page is None:
+            continue
+        got = {**page_fields(page), **got}
+        if got.get("media"):
+            break
     label = media_label(got.get("media", "")) if got.get("media") else None
     if not why and not got.get("media"):
         why = "The printer's page doesn't say which labels are in it."

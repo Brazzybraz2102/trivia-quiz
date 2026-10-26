@@ -514,6 +514,9 @@ const PW_SIZES = [
 const PW_PAPER = [["80", "80 mm (3 1/8 in) paper", "Most receipt printers", 576], ["58", "58 mm (2 1/4 in) paper", "Small receipt printers", 384]];
 const PW_MODELS = ["QL-1110NWB", "QL-1100", "QL-820NWB", "QL-810W", "QL-800", "QL-700"];
 const PW_STEP = { kind: 1, brand: 1, find: 2, model: 3, labels: 3, size: 3, name: 4, try: 5, trouble: 5, fix: 5, done: 5 };
+// What "Find your printer" calls the kind picked in step 1 (one, several).
+const PW_KIND_WORDS = { brother_ql: ["Brother label printer", "Brother label printers"], zpl: ["Zebra printer", "Zebra printers"],
+                        tspl: ["label printer of that kind", "label printers of that kind"], escpos: ["receipt printer", "receipt printers"] };
 let pwiz = null;
 
 const pwBrother = () => pwiz.driver === "brother_ql";
@@ -631,9 +634,13 @@ function pwFind() {
 function pwFits(list) {  // what fits the kind picked: a Brother for a Brother
   return list.filter((f) => (pwBrother() ? f.driver === "brother_ql" : f.driver === pwiz.driver));
 }
-function pwPrePick() {  // exactly one that fits (or exactly one at all): picked for you
-  const list = pwiz.found || [], fits = pwFits(list), only = fits.length === 1 ? fits[0] : list.length === 1 ? list[0] : null;
-  if (only && !pwiz.typed && !pwiz.pick) pwPick(only.address, false);
+// Can't be picked for this kind: only a Brother for a Brother, and never a Brother for the others (their labels
+// would go to it in a language it doesn't speak). An unknown model can still be picked for the other kinds.
+const pwWrong = (f) => (pwBrother() ? f.driver !== "brother_ql" : f.driver === "brother_ql");
+function pwPrePick() {  // exactly one that fits the kind: picked for you. Anything else, the person picks.
+  const list = pwiz.found || [], fits = pwFits(list);
+  if (pwiz.pick && list.some((f) => f.address === pwiz.pick && pwWrong(f))) pwiz.pick = "";
+  if (fits.length === 1 && !pwiz.typed && !pwiz.pick) pwPick(fits[0].address, false);
 }
 async function pwSearch() {
   const run = pwiz.run;
@@ -656,17 +663,31 @@ function pwShowFound() {
     box.innerHTML = `<p><span class="spin" aria-hidden="true"></span>Looking for printers on your network… (about 5 seconds)</p>`;
     return;
   }
-  const list = pwiz.found || [], fits = new Set(pwFits(list));
+  const list = pwiz.found || [], fits = pwFits(list), others = list.filter((f) => !fits.includes(f));
   if (!list.length) {
     box.innerHTML = `<p class="pwnote">${esc(pwiz.why || "No printers found. Check it's switched on and on the same Wi-Fi, then Search again. Or type its address below.")}</p>`;
     if ($("#pwType")) $("#pwType").open = true;
     return;
   }
-  const what = (f) => (fits.has(f) ? "" : f.driver ? " · a different kind of label printer" : " · looks like a regular printer: use Print on paper for it");
-  box.innerHTML = `<p>${list.length === 1 ? "Found 1 printer." : `Found ${list.length} printers.`}${pwiz.pick ? "" : " Pick yours."}</p>
-    <fieldset class="jxopts pwfound"><legend class="sr-only">Printers found</legend>${list.map((f) => `<label class="jxopt">
-      <input type="radio" name="pwFound" value="${esc(f.address)}"${f.address === pwiz.pick ? " checked" : ""}>
-      <span><b>${esc(f.name || f.model || "Printer")}</b><span class="muted">${esc(f.address)} · on your network${f.host ? ` · ${esc(f.host)}` : ""}${what(f)}</span></span></label>`).join("")}</fieldset>`;
+  // The ones that fit the kind, to pick from. The rest (a regular printer, another kind) apart, under "Other
+  // printers": never picked for you, and greyed out when they can't be this kind at all.
+  const [one, many] = PW_KIND_WORDS[pwiz.driver] || ["printer like yours", "printers like yours"];
+  const canPick = others.filter((f) => !pwWrong(f));
+  const what = (f) => (pwBrother() ? (f.driver ? "a different kind of label printer: go Back and tap Another label printer" : "looks like a regular printer: use Print on paper for it")
+    : f.driver === "brother_ql" ? "a Brother label printer: go Back and tap Brother label printer"
+    : f.driver ? "a different kind of label printer" : "may be a regular printer");
+  const row = (f, wrong = false) => `<label class="jxopt${wrong ? " pwoff" : ""}">
+      <input type="radio" name="pwFound" value="${esc(f.address)}"${f.address === pwiz.pick ? " checked" : ""}${wrong ? " disabled" : ""}>
+      <span><b>${esc(f.name || f.model || "Printer")}</b><span class="muted">${esc(f.address)} · on your network${f.host ? ` · ${esc(f.host)}` : ""}${fits.includes(f) ? "" : ` · ${esc(what(f))}`}</span></span></label>`;
+  const say = !fits.length ? `No ${one} found. Check it's switched on and on the same Wi-Fi, then Search again. Or type its address below.`
+    + (canPick.length ? " If it's one of the other printers, pick it there." : "")
+    : `Found ${fits.length === 1 ? `1 ${one}` : `${fits.length} ${many}`}.${pwiz.pick ? "" : " Pick yours."}`;
+  const openOthers = (!fits.length && canPick.length) || others.some((f) => f.address === pwiz.pick);
+  box.innerHTML = `<p${fits.length ? "" : ' class="pwnote"'}>${esc(say)}</p>`
+    + (fits.length ? `<fieldset class="jxopts pwfound"><legend class="sr-only">Printers found</legend>${fits.map((f) => row(f)).join("")}</fieldset>` : "")
+    + (others.length ? `<details id="pwOthers"${openOthers ? " open" : ""}><summary>Other printers on your network (${others.length})</summary>
+      <fieldset class="jxopts pwfound"><legend class="sr-only">Other printers on your network</legend>${others.map((f) => row(f, pwWrong(f))).join("")}</fieldset></details>` : "");
+  if (!fits.length && $("#pwType")) $("#pwType").open = true;
 }
 function pwPick(address, byHand = true) {
   const f = (pwiz.found || []).find((x) => x.address === address);
@@ -683,6 +704,7 @@ function pwFindNext() {
     if (!pwiz.typed) { $("#pwMsg").textContent = "Type the printer's name as this computer shows it."; return $("#pwCups").focus(); }
     return pwGo("name");
   }
+  if (!pwiz.typed && (pwiz.found || []).some((f) => f.address === pwiz.pick && pwWrong(f))) { pwiz.pick = ""; pwShowFound(); }  // never the wrong kind
   if (!pwAddress()) {
     $("#pwMsg").textContent = pwCanLook() ? "Pick your printer, or type its address." : "Type the printer's address.";
     if ($("#pwType")) $("#pwType").open = true;
@@ -693,8 +715,8 @@ function pwFindNext() {
 
 // Step 3, Brother: ask the printer which roll is loaded (its own status page), else pick it.
 function pwLabels() {
-  const a = pwAddress(), canRead = pwCanLook() && pwNetwork(a);
-  pwHead("Which labels are in it?");
+  const a = pwAddress(), canRead = pwCanLook() && pwNetwork(a), pt = pwiz.model.startsWith("PT-");  // P-touch: tape
+  pwHead(pt ? "Which tape is in it?" : "Which labels are in it?");
   if (canRead && pwiz.read === null) return pwRead(a);
   if (!pwiz.model) { pwiz.step = "model"; return pwModel(); }  // not known from the search or the printer: ask (Back skips this)
   const r = pwiz.read, fits = r?.read && pwLabelFits(r.label);
@@ -708,16 +730,19 @@ function pwLabels() {
   }
   const why = r?.read && !fits ? `Your printer says ${pwRollName(r.label)}, which don't fit the ${pwiz.model}. Is that the right model?`
     : r && !r.read && r.why ? `Couldn't tell from the printer: ${r.why}` : "";
-  $("#pwHint").textContent = "Pick the roll that's in it. The size is on the roll's box, or on the sticker on its side.";
+  $("#pwHint").textContent = pt ? "Pick the tape that's in it. Its width is on the tape cassette."
+    : "Pick the roll that's in it. The size is on the roll's box, or on the sticker on its side.";
   const all = printOpts.drivers.brother_ql.labels.filter((l) => pwLabelFits(l.id));
   const common = pwRolls().common.filter((c) => pwLabelFits(c.id)), ids = new Set(common.map((c) => c.id));
   const rest = all.filter((l) => !ids.has(l.id));
   const radio = (id, name, sub) => `<label class="jxopt"><input type="radio" name="pwLabel" value="${esc(id)}"${id === pwiz.label ? " checked" : ""}>
     <span><b>${esc(name)}</b>${sub ? `<span class="muted">${esc(sub)}</span>` : ""}</span></label>`;
+  const more = !rest.length ? "" : !common.length ? rest.map((l) => radio(l.id, l.name, "")).join("")  // no common roll fits (a P-touch): them all
+    : `<details id="pwMoreSizes"${rest.some((l) => l.id === pwiz.label) ? " open" : ""}><summary>More sizes</summary>${rest.map((l) => radio(l.id, l.name, "")).join("")}</details>`;
   $("#pwBody").innerHTML = (why && !pwiz.choosing ? `<p class="pwnote">${esc(why)}</p>` : "")
-    + `<fieldset class="jxopts"><legend class="sr-only">Label rolls</legend>
+    + `<fieldset class="jxopts"><legend class="sr-only">${pt ? "Tapes" : "Label rolls"}</legend>
       ${common.map((c) => radio(c.id, c.name, `${c.code} · ${c.use}`)).join("")}
-      ${rest.length ? `<details id="pwMoreSizes"${rest.some((l) => l.id === pwiz.label) ? " open" : ""}><summary>More sizes</summary>${rest.map((l) => radio(l.id, l.name, "")).join("")}</details>` : ""}</fieldset>`
+      ${more}</fieldset>`
     + (pwiz.pid ? PW_ADVANCED : "");
 }
 async function pwRead(address) {
@@ -1003,7 +1028,10 @@ $("#pwNext").onclick = () => hold($("#pwNext"), async () => {
   if (s === "find") return pwFindNext();
   if (s === "labels") {
     const picked = $("#pwBody [name=pwLabel]:checked")?.value;
-    if (!picked) { $("#pwMsg").textContent = "Pick the labels that are in it."; return $("#pwBody [name=pwLabel]")?.focus(); }
+    if (!picked) {
+      $("#pwMsg").textContent = pwiz.model.startsWith("PT-") ? "Pick the tape that's in it." : "Pick the labels that are in it.";
+      return $("#pwBody [name=pwLabel]")?.focus();
+    }
     return pwUse(picked);
   }
   if (s === "name") return pwSave();

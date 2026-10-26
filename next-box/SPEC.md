@@ -208,7 +208,11 @@ One decision per screen in a dialog, phone-first, with Back and Next:
    this computer…" when neither is there. About 4 s (`TIME_LIMIT`); one search at a time; it only listens. Each printer
    is listed once (its services merged by IPv4 address; link-local addresses left out), label printers first, with
    the model from its TXT records (`usb_MDL`, else `ty`, else `product`): "Brother QL-1110NWB · 192.168.68.110 · on
-   your network · BRW5413795FE5CF.local". Exactly one that fits the kind (or exactly one at all) is picked for you.
+   your network · BRW5413795FE5CF.local". The printers that fit the kind picked in step 1 are listed to pick from,
+   and exactly one that fits is picked for you; otherwise the person picks. The rest are under **Other printers on
+   your network**, never picked for you: one that can't be that kind is shown greyed out and can't be picked (for a
+   Brother, anything but a Brother; for the other kinds, a Brother), and an unknown model can still be picked for
+   the other kinds. So a Brother that's asleep never leaves the HP or the TV picked in its place.
    **Type its address instead** says how to find it: the printer's settings page (hold its info button), the router's
    list of devices, a Brother's name starting with BRW. A CUPS printer asks for its name on this computer instead.
 3. **Which labels are in it?** For a Brother on the network, `GET /admin/printers/media?address=…` reads the printer's
@@ -217,9 +221,13 @@ One decision per screen in a dialog, phone-first, with Back and Next:
    "62mm x 100mm" → `62x100`, "29mm x 90mm" → `29x90`, the DK codes too; a size Next Box doesn't offer, like the
    DK-1247's 103 × 164 mm, is said plainly). "Your printer says: 102 × 152 mm labels (4 × 6 in). Use this?" Yes, or
    **No, let me pick**: the common rolls first (`printer.COMMON_ROLLS`, with their DK codes), the rest under **More
-   sizes**, only those that fit the model. The model is asked only when neither the search nor the page said it.
-   The read is an HTTP GET with a 3 s limit, a 256 KB cap, no proxy and no redirects, only to an address that passes
-   `printers.validate` and is on the home network (private; never loopback, link-local, multicast or this computer).
+   sizes**, only those that fit the model (a P-touch asks "Which tape is in it?" and lists its tapes straight away).
+   The model is asked only when neither the search nor the page said it.
+   The read is one plain HTTP GET with a 3 s limit for all of it (`MEDIA_TIMEOUT`, from connecting to the last byte,
+   so a page that answers slowly or a byte at a time is cut off), a 256 KB cap, no proxy and no redirects, and the
+   page is read in one linear pass (`discover.page_text`: a page of unclosed tags can't hold up the server). Only to
+   an address that passes `printers.validate` and is on the home network (private; never loopback, link-local,
+   multicast or this computer).
    Other kinds: the label size from common choices (4 × 6 in, …, one long roll) or typed in mm or inches with the
    dpi, or the receipt paper width (80 mm → 576 dots, 58 mm → 384); the dots are worked out. Nobody types dots.
 4. **Name it.** "Label printer" for a first printer, else the model. The label color (white by default, with one line

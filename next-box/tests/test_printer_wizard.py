@@ -348,7 +348,8 @@ MIKES_MEDIA = "102mm x 152mm / 4.0&quot; x 6.0&quot;"
 
 
 class StatusServer:
-    """A tiny stand-in for a printer's web page on 127.0.0.1: {path: html}, an optional delay, and what was asked."""
+    """A tiny stand-in for a printer's web page on 127.0.0.1: {path: html}, an optional delay, and what was asked.
+    A page can also be a function that writes the whole answer itself (to its socket file), for the odd ones."""
 
     def __init__(self):
         self.pages, self.delay, self.asked = {}, 0.0, []
@@ -361,6 +362,9 @@ class StatusServer:
                     time.sleep(outer.delay)
                 page = outer.pages.get(self.path)
                 try:
+                    if callable(page):
+                        page(self.wfile)
+                        return
                     if page is None:
                         self.send_response(404)
                         self.end_headers()
@@ -457,6 +461,98 @@ def test_a_printer_with_no_web_page_says_so(site, monkeypatch):
     monkeypatch.setattr(discover, "HTTP_PORT", port)
     monkeypatch.setattr(discover, "ALLOW_LOOPBACK", True)
     out = p["ann"].get("/admin/printers/media", params={"address": "127.0.0.1"}).json()
+    assert out["read"] is False and out["why"].startswith("The printer's web page didn't answer")
+
+
+# --- a page that's slow, odd or hostile can't hold up the server ------------------------------------------------------
+def trickle(head: bytes, body: bytes, every: float = 0.1):
+    """An answer that sends `head` at once, then `body` one byte at a time, `every` seconds apart."""
+    def write(out):
+        out.write(head)
+        for i in range(len(body)):
+            out.write(body[i:i + 1])
+            time.sleep(every)
+    return write
+
+
+def test_a_page_that_trickles_in_is_cut_off_at_the_time_limit(site, status_page, monkeypatch):
+    """The checker's stand-in sent a byte every 0.5 s and the read took a minute: the limit is for the whole read."""
+    _, p = site
+    monkeypatch.setattr(discover, "MEDIA_TIMEOUT", 0.5)
+    page = brother_page(MIKES_MEDIA).encode()
+    status_page.pages["/general/status.html"] = trickle(b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n", page)
+    start = time.monotonic()
+    out = p["ann"].get("/admin/printers/media", params={"address": "127.0.0.1"}).json()
+    assert time.monotonic() - start < 2.0
+    assert out["read"] is False and out["why"] == "The printer didn't answer in time. Is it switched on?"
+
+
+def test_headers_that_trickle_in_are_cut_off_too(site, status_page, monkeypatch):
+    _, p = site
+    monkeypatch.setattr(discover, "MEDIA_TIMEOUT", 0.5)
+    status_page.pages["/general/status.html"] = trickle(b"", b"HTTP/1.0 200 OK\r\n" + b"X-Slow: y\r\n" * 200, every=0.05)
+    start = time.monotonic()
+    out = discover.read_media("127.0.0.1")
+    assert time.monotonic() - start < 2.0 and out["why"] == "The printer didn't answer in time. Is it switched on?"
+
+
+def test_a_page_of_unclosed_tags_is_read_in_a_moment(status_page):
+    """256 KB of "<script " took the old parser 35 s, holding up every other request meanwhile."""
+    status_page.pages["/general/status.html"] = "<script " * 32768
+    start = time.monotonic()
+    out = discover.read_media("127.0.0.1")
+    assert time.monotonic() - start < 1.0
+    assert out["read"] is False and out["why"] == "The printer's page doesn't say which labels are in it."
+
+
+@pytest.mark.parametrize("page", ["<script " * 32768, "<" * 262144, "<script>" * 32768, "<style>a</style>" * 16384,
+                                  "&#" * 131072, "1." * 131072, "62mm x " * 37449, " " * 262144, "Media Type " * 23831,
+                                  "<dt>Media Type</dt><dd>" + "62mm x " * 37000 + "</dd>", "</script" * 32768,
+                                  "QL-" * 87381, "<a " * 87381, "<dd>&#" + "1" * 200000 + ";</dd>",
+                                  "<dt>Media Type</dt><dd>&#x" + "f" * 200000 + "</dd>"],
+                         ids=lambda page: f"{page[:24]!r}-{len(page)}-chars")
+def test_reading_a_page_takes_a_moment_whatever_is_on_it(page):
+    page = page[:discover.MAX_PAGE]
+    start = time.monotonic()
+    out = discover.page_fields(page)
+    assert time.monotonic() - start < 0.5
+    assert discover.media_label(out.get("media", "")) is None  # (and none of them is a roll)
+
+
+def test_the_words_on_a_page_leave_out_scripts_and_styles():
+    page = """<html><head><title>Brother QL-1110NWB</title><style>dt { content: "Media Type" }</style>
+    <SCRIPT type="text/javascript">var t = "<dt>Media Type</dt><dd>62mm</dd>";</SCRIPT ></head><body><scripts>kept</scripts>
+    <dl><dt>Media Type :</dt><dd>102mm x 152mm / 4.0&quot; x 6.0&quot;</dd></dl><p>a < b</p><script>never closed"""
+    assert discover.page_text(page) == ["Brother QL-1110NWB", "kept", "Media Type :", '102mm x 152mm / 4.0" x 6.0"', "a"]
+    assert discover.page_fields(page)["media"] == '102mm x 152mm / 4.0" x 6.0"'
+
+
+def test_a_page_that_keeps_the_connection_open_is_read_without_waiting(status_page):
+    """A server that answers HTTP/1.1 and doesn't hang up: its Content-Length (or last chunk) says it's all there."""
+    page = brother_page(MIKES_MEDIA).encode()
+
+    def keep_alive(out):
+        out.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\n\r\n" % len(page) + page)
+        time.sleep(3)
+
+    def chunked(out):
+        out.write(b"HTTP/1.1 200 OK\nContent-Type: text/html\nTransfer-Encoding: chunked\n\n")
+        for i in range(0, len(page), 100):
+            out.write(b"%x\r\n%s\r\n" % (len(page[i:i + 100]), page[i:i + 100]))
+        out.write(b"0\r\n\r\n")
+        time.sleep(3)
+
+    for answer in (keep_alive, chunked):
+        status_page.pages["/general/status.html"] = answer
+        start = time.monotonic()
+        out = discover.read_media("127.0.0.1")
+        assert time.monotonic() - start < 1.0, answer.__name__
+        assert (out["label"], out["model"], out["status"]) == ("102x152", "QL-1110NWB", "READY"), answer.__name__
+
+
+def test_something_that_isnt_a_web_page_says_so(status_page):
+    status_page.pages["/general/status.html"] = lambda out: out.write(b"\x1b@ not a web page at all\r\n\r\n")
+    out = discover.read_media("127.0.0.1")
     assert out["read"] is False and out["why"].startswith("The printer's web page didn't answer")
 
 
@@ -611,8 +707,10 @@ def test_searching_and_reading_the_roll_happen_by_themselves_but_printing_never_
     today = wizard[wizard.index('if (act === "today")'):]
     today = today[:today.index("\n")]
     assert 'goto("print")' in today and "api(" not in today  # it opens Print, where the button asks first
-    # The person picks the printer when there's more than one; exactly one is picked for them.
-    assert "fits.length === 1 ? fits[0] : list.length === 1 ? list[0] : null" in fn(js, "pwPrePick")
+    # Picked for them only when exactly one of the kind was found; otherwise the person picks (never another kind).
+    pre = fn(js, "pwPrePick")
+    assert "if (fits.length === 1 && !pwiz.typed && !pwiz.pick) pwPick(fits[0].address, false);" in pre
+    assert "list.length === 1" not in pre and "pwWrong(f)" in pre
 
 
 def test_anything_in_the_way_of_printing_is_fixed_in_place(js):
@@ -690,6 +788,123 @@ out.edit = [{ driver: "zpl", width_px: 812, dpi: 203, label_height_mm: 152.4 }, 
     assert out["QL-800"] == ["62", "29x90"]  # 102 mm labels fit the QL-1000 series only
     assert out["PT-P750W"] == ["pt24"]
     assert out["edit"] == ["4x6", "4x6", "80", "own"]  # Edit shows the size it has, or "Another size"
+
+
+def top_const(js, name):
+    """A top-level const of app.js, to the end of its statement."""
+    m = re.search(rf"^const {name} = .*?;\n", js, re.S | re.M)
+    assert m, name
+    return m[0]
+
+
+def found_script(js, body):
+    """Find your printer's list (pwPrePick, pwShowFound), run in node with small stand-ins for the page."""
+    return f"""
+{top_const(js, "esc")}
+let pwiz = {{ driver: "brother_ql", found: [], pick: "", typed: "", why: "" }};
+const els = {{}};
+const $ = (sel) => els[sel] || null;
+const pwBrother = () => pwiz.driver === "brother_ql";
+function pwPick(address) {{ pwiz.pick = address; }}
+{top_const(js, "PW_KIND_WORDS")}{fn(js, "pwFits")}{top_const(js, "pwWrong")}{fn(js, "pwPrePick")}{fn(js, "pwShowFound")}
+function show(driver, found, pick = "", typed = "") {{
+  Object.assign(pwiz, {{ driver, found, pick, typed }});
+  els["#pwFound"] = {{ innerHTML: "" }}; els["#pwType"] = {{ open: false }};
+  pwPrePick(); pwShowFound();
+  const html = els["#pwFound"].innerHTML, rows = {{}};
+  for (const m of html.matchAll(/<input type="radio" name="pwFound" value="([^"]*)"([^>]*)>/g)) rows[m[1]] = m[2].trim();
+  const others = html.includes('<details id="pwOthers"') ? html.slice(html.indexOf('<details id="pwOthers"')) : "";
+  const text = html.replace(/<[^>]*>/g, " ").replace(/\\s+/g, " ").replace(/&#39;/g, "'").replace(/&amp;/g, "&").trim();
+  return {{ pick: pwiz.pick, rows, text, others,
+           othersOpen: others.startsWith('<details id="pwOthers" open'), typeOpen: els["#pwType"].open }};
+}}
+const out = {{}};
+{body}
+console.log(JSON.stringify(out));
+"""
+
+
+MIKE = {"address": "192.168.68.110", "host": "BRW5413795FE5CF.local", "name": "Brother QL-1110NWB", "model": "QL-1110NWB",
+        "driver": "brother_ql", "brother_model": "QL-1110NWB"}
+HP = {"address": "192.168.68.31", "host": "HP4A2B.local", "name": "HP OfficeJet Pro 9010", "model": "HP OfficeJet Pro 9010",
+      "driver": None, "brother_model": None}
+OTHER_QL = {**MIKE, "address": "192.168.68.120", "host": "BRW0000.local", "name": "Brother QL-820NWB", "model": "QL-820NWB",
+            "brother_model": "QL-820NWB"}
+ZEBRA = {"address": "192.168.68.40", "host": "ZBR1.local", "name": "Zebra ZD421", "model": "ZD421", "driver": "zpl",
+         "brother_model": None}
+POS = {"address": "192.168.68.41", "host": "POS80.local", "name": "POS-80 Printer", "model": "POS-80", "driver": None,
+       "brother_model": None}
+
+
+def test_find_your_printer_picks_one_for_you_only_when_it_is_the_kind_you_said(js):
+    """The checker's two cases: Brother chosen with only an HP found, and a receipt printer chosen with only Mike's
+    Brother found. Neither is picked (or can be): the walkthrough would have sent one printer's language to another."""
+    found = {"MIKE": MIKE, "HP": HP, "OTHER_QL": OTHER_QL, "ZEBRA": ZEBRA, "POS": POS}
+    out = run_node(found_script(js, f"""
+const F = {json.dumps(found)};
+out.hpOnly = show("brother_ql", [F.HP]);
+out.brotherForReceipt = show("escpos", [F.MIKE]);
+out.mikeAndHp = show("brother_ql", [F.MIKE, F.HP]);
+out.twoBrothers = show("brother_ql", [F.MIKE, F.OTHER_QL]);
+out.unknownForTspl = show("tspl", [F.POS, F.HP]);
+out.zebra = show("zpl", [F.ZEBRA, F.MIKE]);
+out.wrongPickCleared = show("brother_ql", [F.MIKE, F.HP], F.HP.address);
+out.typed = show("brother_ql", [F.MIKE], "", "192.168.68.200");
+"""))
+    hp = out["hpOnly"]
+    assert hp["pick"] == "" and hp["rows"] == {"192.168.68.31": "disabled"}
+    assert hp["text"].startswith("No Brother label printer found.") and "Pick yours" not in hp["text"]
+    assert "looks like a regular printer: use Print on paper for it" in hp["others"] and hp["typeOpen"]
+    receipt = out["brotherForReceipt"]
+    assert receipt["pick"] == "" and receipt["rows"] == {"192.168.68.110": "disabled"}
+    assert receipt["text"].startswith("No receipt printer found.")
+    assert "a Brother label printer: go Back and tap Brother label printer" in receipt["others"]
+    both = out["mikeAndHp"]  # Mike's Brother is picked; the HP is apart, under Other printers, and can't be picked
+    assert both["pick"] == "192.168.68.110" and both["rows"] == {"192.168.68.110": "checked", "192.168.68.31": "disabled"}
+    assert both["text"].startswith("Found 1 Brother label printer.") and "Other printers on your network (1)" in both["text"]
+    assert not both["othersOpen"] and not both["typeOpen"]
+    two = out["twoBrothers"]
+    assert two["pick"] == "" and two["rows"] == {"192.168.68.110": "", "192.168.68.120": ""}
+    assert two["text"].startswith("Found 2 Brother label printers. Pick yours.")
+    unknown = out["unknownForTspl"]  # a model Next Box doesn't know might be yours: pickable, never picked for you
+    assert unknown["pick"] == "" and unknown["rows"] == {"192.168.68.41": "", "192.168.68.31": ""} and unknown["othersOpen"]
+    assert "If it's one of the other printers, pick it there." in unknown["text"]
+    assert out["zebra"]["pick"] == "192.168.68.40" and out["zebra"]["rows"]["192.168.68.110"] == "disabled"
+    assert out["wrongPickCleared"]["pick"] == "192.168.68.110"  # an HP picked before (another kind) isn't kept
+    assert out["typed"]["pick"] == ""                               # an address typed in wins
+
+
+def test_a_p_touch_lists_its_tapes_straight_away(js):
+    """The common rolls are QL rolls, so a PT model got an empty list with only a closed "More sizes"."""
+    labels = [{"id": i, "name": n, "width": w} for i, n, w in BROTHER_LABELS]
+    common = [{"id": i, "name": n, "code": c, "use": u} for i, n, c, u in COMMON_ROLLS]
+    out = run_node(f"""
+let pwiz = {{ model: "PT-P750W", read: {{ read: false, why: "The printer's page doesn't say which labels are in it." }},
+             choosing: false, label: "", pid: "", pick: "192.168.68.116", typed: "" }};
+const printOpts = {{ drivers: {{ brother_ql: {{ wide_models: ["QL-1100", "QL-1110NWB"], labels: {json.dumps(labels)},
+                                               common: {json.dumps(common)} }} }} }};
+{top_const(js, "esc")}
+const els = {{ "#pwBody": {{ innerHTML: "" }}, "#pwHint": {{ textContent: "" }}, "#pwNext": {{ hidden: false }}, "#pwTitle": {{ textContent: "" }} }};
+const $ = (sel) => els[sel];
+function pwHead(t, h = "") {{ els["#pwTitle"].textContent = t; els["#pwHint"].textContent = h; }}
+const pwAddress = () => pwiz.pick, pwCanLook = () => true, pwNetwork = () => true, pwRolls = () => printOpts.drivers.brother_ql;
+const pwRollName = (id) => id, PW_ADVANCED = "";
+{fn(js, "pwLabelFits")}{fn(js, "pwLabels")}
+const out = {{}};
+for (const m of ["PT-P750W", "QL-1110NWB"]) {{
+  pwiz.model = m; pwLabels();
+  const body = els["#pwBody"].innerHTML;
+  out[m] = {{ title: els["#pwTitle"].textContent, hint: els["#pwHint"].textContent, details: body.includes("<details"),
+             legend: body.match(/<legend class="sr-only">([^<]*)/)[1], ids: [...body.matchAll(/name="pwLabel" value="([^"]*)"/g)].map((x) => x[1]) }};
+}}
+console.log(JSON.stringify(out));
+""")
+    pt = out["PT-P750W"]
+    assert pt["title"] == "Which tape is in it?" and "tape" in pt["hint"] and pt["legend"] == "Tapes"
+    assert pt["ids"] == ["pt12", "pt18", "pt24", "pt36"] and not pt["details"]  # all there, nothing to open
+    ql = out["QL-1110NWB"]
+    assert ql["title"] == "Which labels are in it?" and ql["legend"] == "Label rolls" and ql["details"]
+    assert ql["ids"][:5] == ["62", "102x152", "62x100", "29x90", "102"] and "pt24" not in ql["ids"]
 
 
 def test_the_docs_say_how_to_add_a_printer_now():
