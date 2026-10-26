@@ -139,7 +139,7 @@ Settings form.
 - **Web security headers:** CSP with `frame-ancestors 'none'`, nosniff, no-referrer.
 - **Retention:** tickets and scans older than `NEXTBOX_RETENTION_DAYS` (90) are pruned at startup
   and by `nextbox prune`.
-- **Dependencies:** pinned in `constraints.txt`. The installer also upgrades pip and setuptools.
+- **Dependencies:** pinned in `constraints.txt` (python-zeroconf and ifaddr for Set up a printer's search, §14). The installer also upgrades pip and setuptools.
 - **systemd:** `Restart=always`, `UMask=0077`, `ProtectSystem=strict` with write access only to the data dir.
 
 ## 14. Printers and label colors
@@ -191,6 +191,62 @@ unless it's still the .env.example address (`printers.EXAMPLE_PRINTER_IP`, 192.1
 added. A first printer an older version seeded from that example address takes the real `PRINTER_IP` once
 it's set. `nextbox doctor` calls the example address what it is (not a printer that doesn't answer), and a
 superadmin on a preview-only Next Box (`NEXTBOX_DRY_RUN=1`) is told how to leave it.
+
+**Set up a printer** (the walkthrough, `app.js` `openPrinterSetup`) is how admins add a printer. It opens from
+Settings → Printers & label colors (**Add a printer**: "No printer added", and also once there are printers), the Get
+started printer step and Admin → Printers (**Add a printer**). **Edit** on a printer opens it again at step 3 with its
+values. Admin → Printers keeps the full form, collapsed, as **Advanced (type everything yourself)** (also linked from
+step 1, and from step 3 when editing). Who may add printers is unchanged (admins and staff; `_restricted` outside Home).
+One decision per screen in a dialog, phone-first, with Back and Next:
+1. **What kind of printer?** Brother label printer (QL / PT); another label printer (then which one: Zebra → `zpl`;
+   TSC, Munbyn, iDPRT, Xprinter → `tspl`; a receipt printer → `escpos`; Dymo, Rollo or one set up on this computer →
+   `cups`); a regular printer (no setup: it explains Print on paper, §21, and finishes); I don't have one yet (the
+   same, and where to come back). Finishing those from Get started puts the printer step away.
+2. **Find your printer.** On arrival it runs `POST /admin/printers/discover` (and **Search again**): Bonjour (mDNS)
+   browsing for `_pdl-datastream._tcp`, `_printer._tcp` and `_ipp._tcp` (`nextbox/discover.py`), with python-zeroconf
+   (pinned), or `avahi-browse -r -t -p -k` when zeroconf isn't installed, and "Next Box can't search the network on
+   this computer…" when neither is there. About 4 s (`TIME_LIMIT`); one search at a time; it only listens. Each printer
+   is listed once (its services merged by IPv4 address; link-local addresses left out), label printers first, with
+   the model from its TXT records (`usb_MDL`, else `ty`, else `product`): "Brother QL-1110NWB · 192.168.68.110 · on
+   your network · BRW5413795FE5CF.local". The printers that fit the kind picked in step 1 are listed to pick from,
+   and exactly one that fits is picked for you; otherwise the person picks. The rest are under **Other printers on
+   your network**, never picked for you: one that can't be that kind is shown greyed out and can't be picked (for a
+   Brother, anything but a Brother; for the other kinds, a Brother), and an unknown model can still be picked for
+   the other kinds. So a Brother that's asleep never leaves the HP or the TV picked in its place.
+   **Type its address instead** says how to find it: the printer's settings page (hold its info button), the router's
+   list of devices, a Brother's name starting with BRW. A CUPS printer asks for its name on this computer instead.
+3. **Which labels are in it?** For a Brother on the network, `GET /admin/printers/media?address=…` reads the printer's
+   own status page (`http://<printer>/general/status.html`, else `/`): its **Media Type** (and the model, if the page
+   names one) mapped to a `BROTHER_LABELS` id by `discover.media_label` ("102mm x 152mm" → `102x152`, "62mm" → `62`,
+   "62mm x 100mm" → `62x100`, "29mm x 90mm" → `29x90`, the DK codes too; a size Next Box doesn't offer, like the
+   DK-1247's 103 × 164 mm, is said plainly). "Your printer says: 102 × 152 mm labels (4 × 6 in). Use this?" Yes, or
+   **No, let me pick**: the common rolls first (`printer.COMMON_ROLLS`, with their DK codes), the rest under **More
+   sizes**, only those that fit the model (a P-touch asks "Which tape is in it?" and lists its tapes straight away).
+   The model is asked only when neither the search nor the page said it.
+   The read is one plain HTTP GET with a 3 s limit for all of it (`MEDIA_TIMEOUT`, from connecting to the last byte,
+   so a page that answers slowly or a byte at a time is cut off), a 256 KB cap, no proxy and no redirects, and the
+   page is read in one linear pass (`discover.page_text`: a page of unclosed tags can't hold up the server). Only to
+   an address that passes `printers.validate` and is on the home network (private; never loopback, link-local,
+   multicast or this computer).
+   Other kinds: the label size from common choices (4 × 6 in, …, one long roll) or typed in mm or inches with the
+   dpi, or the receipt paper width (80 mm → 576 dots, 58 mm → 384); the dots are worked out. Nobody types dots.
+4. **Name it.** "Label printer" for a first printer, else the model. The label color (white by default, with one line
+   on what color is for) shows with several printers and is under **More** for a first one. A first printer becomes
+   the admin's usual printer (`default_printer`); later ones offer the tick. **Save printer** saves it here, so the
+   test print uses it.
+5. **Try it.** First what would stop a real print, fixed in place where it can be: **Always preview only** (**Turn it
+   off**), printing paused (a superadmin can **Turn printing back on**; others are told who can), `NEXTBOX_DRY_RUN=1`
+   (the owner is told to delete that line and run `systemctl --user restart nextbox`; `.env` is never shown). Then
+   **Print a test label**, a real print only on that tap after "Send this to the printer?"
+   (`POST /admin/printers/{id}/test?dry_run=false`), and "Did a label come out?" Yes: **All set**, with **Print
+   today's label** (it opens Print; that button asks first too). No: what happened? A flashing red light (the roll may
+   not match: back to step 3), nothing happened (asleep, off or the wrong address: back to step 2), or it printed but
+   looks wrong (back to step 3). From there, Save changes and Try it again.
+Both lookups are for staff and admins of Home only (the Next Box computer's network is Home's): anyone else gets 403
+with `PRINT_AWAY`, and a household admin outside Home types the address. Both are audited (`printer_discover` with
+how many were found, `printer_media` with the label), never with the address. Each step's heading gets focus; Esc,
+Close or the back gesture ask first when something was picked and not saved; it works at 320 px with Extra large
+text, in light and dark.
 
 **Routing:** every ticket has a reason: overdue, urgent, today (daily list), list, task, note or
 new_task. Each person's `color_rules` maps reasons to label colors (default: overdue → red), and

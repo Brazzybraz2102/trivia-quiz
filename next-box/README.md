@@ -28,7 +28,8 @@ The full list, and calendars: [Which apps and calendars work](#which-apps-and-ca
 ## Install on the desktop (about 15 minutes)
 
 You'll need:
-- the printer's IP address (hold the printer's info button to print its settings, or check your router)
+- your label printer switched on and on the same Wi-Fi as the computer. You don't need its address:
+  Next Box finds it for you (see step 5)
 - an Anthropic API key, for Snap (marks and handwriting) and the AI helpers (console.anthropic.com →
   API keys). Without it Snap and the AI helpers are off and the app says so.
 
@@ -48,10 +49,11 @@ sudo apt install -y python3-venv wl-clipboard libnotify-bin   # Fedora: sudo dnf
 scripts/install.sh          # builds everything, makes your NEXTBOX_KEY, starts the service
 .venv/bin/nextbox doctor    # checks it all and says what to fix
 ```
-Later, when you have them, put `PRINTER_IP` and `ANTHROPIC_API_KEY` (for Snap and the AI helpers) in
-`.env` with `nano .env`, delete the `NEXTBOX_DRY_RUN=1` line, and run
+Later, when you have it, put `ANTHROPIC_API_KEY` (for Snap and the AI helpers) in `.env` with
+`nano .env`. When you're ready to print, delete the `NEXTBOX_DRY_RUN=1` line there and run
 `systemctl --user restart nextbox`. Until then Next Box makes previews instead of printing.
-No label printer? Delete the `PRINTER_IP` line instead: everyone can still **Print on paper**.
+Your printer is added in the web app (step 5). No label printer? Delete the `PRINTER_IP` line: everyone
+can still **Print on paper**.
 
 `install.sh` also adds iPhone (HEIC) photo support for Snap (the `heic` extra, `pillow-heif`). If
 that can't be installed on your computer, it says so and carries on; people then send JPEGs
@@ -91,9 +93,20 @@ See `DATABASE.md` lesson 13.
 xdg-open "$(.venv/bin/nextbox --dry-run --json today | python3 -c 'import sys,json;print(json.load(sys.stdin)["png"])')"
 ```
 
-### 5. First real print
-Load 62 mm continuous tape (DK-22205), or set **Label size** (Admin → Printers → Edit) to the roll
-you have, then:
+### 5. Add your printer, then the first real print
+Sign in to the web app as the admin, then **Settings → Add a printer and follow the steps**:
+1. **What kind of printer?** Tap Brother label printer (or another kind).
+2. **Find your printer.** Next Box searches your Wi-Fi by itself and picks it (for example
+   "Brother QL-1110NWB · 192.168.68.110"). Not found? Type its address: hold the printer's info
+   button to print its settings page, or look for a name starting with BRW in your router's list.
+3. **Which labels are in it?** A Brother says which roll is loaded ("Your printer says: 102 × 152 mm
+   labels (4 × 6 in). Use this?"). Tap Yes, or pick the roll from the list.
+4. **Name it.** "Label printer" is filled in for you. Tap **Save printer**.
+5. **Try it.** It says if anything would stop a print (Always preview only, `NEXTBOX_DRY_RUN=1`,
+   printing paused) and how to fix it, then **Print a test label** asks "Send this to the printer?".
+   If no label comes out, it asks what happened and takes you back to the right step.
+
+Then, from the computer:
 ```bash
 .venv/bin/nextbox today
 ```
@@ -175,13 +188,18 @@ scripts/hotkey.sh '<Super><Shift>t'             # then for real
    the real print for the day.
 
 ## Printers and label colors
-- **Adding printers (admins):** **Admin → Printers → Add a printer**. Pick the kind, enter its
-  address (an IP like `192.168.1.60`, a USB device like `/dev/usb/lp0`, or the CUPS printer name)
-  and say which **label color** is loaded. Use **Test (preview)** first, then **Test print**.
-  When you swap a roll, change its color there.
-- **Brother label size:** pick the roll that's loaded. Not sure which it is? Type the printer's
+- **Adding printers (admins):** **Settings → Add a printer and follow the steps** (also on Get started
+  and in **Admin → Printers**). Next Box searches your network for the printer (Bonjour), asks a Brother
+  which roll is loaded, works out the print width itself, and ends with a test print that asks first.
+  Nothing to type but a name. **Edit** on a printer runs the same steps again from "Which labels are in it?"
+  (do that when you swap a roll). Searching and reading the roll only work for printers on the Next Box
+  computer's own network, so they're for staff and Home's admins.
+- **Advanced (type everything yourself):** the full form is still in **Admin → Printers**, for an address
+  like `/dev/usb/lp0` or a CUPS printer name, a model the steps don't list, or a print width in dots.
+  Use **Test (preview)** first, then **Test print**.
+- **Brother label size:** the steps read it from the printer. To check it yourself, type the printer's
   address into a browser: its own web page shows **Media Type** (for example
-  `102mm x 152mm / 4.0" x 6.0"` is the 4x6 shipping-label roll, so pick "102 × 152 mm labels").
+  `102mm x 152mm / 4.0" x 6.0"` is the 4x6 shipping-label roll, "102 × 152 mm labels").
   The sticker on the roll says it too. If the Label size doesn't match the roll, a Brother stops
   with a flashing red light and stops answering: switch it off and on, then fix the Label size.
   On die-cut labels (fixed-size labels like 4x6 or 62 × 29) a short ticket fills the top of one
@@ -245,7 +263,7 @@ in that app.
 
 Colored labels for the QL-1110NWB: it prints black only, so color comes from the roll. Brother
 makes 62 mm yellow film tape (DK-22606). Other colors come from third-party 62 mm DK-compatible
-rolls; check the listing says it fits the QL-1100/1110. Add each loaded roll as a printer (Admin → Printers) with its label color.
+rolls; check the listing says it fits the QL-1100/1110. Add each loaded roll as a printer (Settings → Add a printer) with its label color.
 
 From the command line:
 ```bash

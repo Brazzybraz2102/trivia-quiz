@@ -161,6 +161,40 @@
   #quizMsg:empty { display:none; }
   #quizSkip, #quizAgain { white-space:nowrap; flex:none; }
   @media (max-width:720px) { #quizSkip { min-height:44px; } }
+  /* Set up a printer: one decision per screen, like the setup questions (.quizopt cards, .quizfoot buttons). */
+  #pwDialog { max-width:560px; max-height:calc(100dvh - 24px); }
+  #pwDialog h2 { font-size:1.375rem; margin:10px 0 4px; overflow-wrap:anywhere; }
+  #pwDialog h2:focus { outline:none; }
+  #pwDialog :is(p, li, label, summary, .muted) { overflow-wrap:anywhere; }
+  #pwHint:empty, #pwMsg:empty { display:none; }
+  #pwClose { white-space:nowrap; flex:none; }
+  #pwDialog details { margin-top:12px; }
+  #pwDialog details summary { cursor:pointer; color:var(--accent); font-weight:600; }
+  #pwDialog input[type=text], #pwDialog input[type=number], #pwDialog select { font-size:1.0625rem; }
+  .pwsays { background:var(--note); color:var(--noteFg); border-radius:10px; padding:12px 14px; margin:12px 0; font-size:1.0625rem; }
+  .pwsays b { display:block; font-size:1.1875rem; margin-top:2px; }
+  .pwsays span { display:block; font-size:.9375rem; margin-top:2px; }
+  #labelAddRow[hidden], #pwNav[hidden] { display:none; }
+  #pwDialog .jxopt { border-color:var(--fieldLine); }  /* 3:1 against the card, in dark too */
+  #pwDialog .jxopt:has(input:checked) { border-color:var(--accent); }
+  .pwnote { background:var(--note); color:var(--noteFg); border-radius:10px; padding:10px 12px; margin:10px 0; }
+  .pwfix { border:1px solid var(--fieldLine); border-radius:10px; padding:10px 12px; margin:10px 0; }
+  .pwfix p { margin:0 0 6px; }
+  .pwcode { display:block; font:.9375rem/1.4 ui-monospace, monospace; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin:6px 0; overflow-wrap:anywhere; white-space:pre-wrap; user-select:all; }
+  .pwlist { margin:10px 0; padding-left:1.4em; } .pwlist li { margin:6px 0; }
+  .pwfound { margin-top:4px; }
+  .pwfound .jxopt { margin-top:8px; }
+  .pwfound .jxopt.pwoff { cursor:default; border-style:dashed; }  /* can't be this kind: shown, not picked (text keeps its contrast) */
+  .pwcheck { display:flex; gap:10px; align-items:center; margin-top:12px; }
+  .pwcheck input { width:22px; height:22px; flex:none; margin:0; }
+  .pwsize { display:grid; grid-template-columns:repeat(auto-fit, minmax(8.5rem, 1fr)); gap:8px 12px; }
+  .pwsize input { width:100%; }
+  #pwBody img { display:block; max-width:100%; max-height:28vh; margin-top:8px; border:1px solid var(--line); border-radius:6px; background:#fff; }
+  #pwBody .row { margin-top:12px; }
+  @media (max-width:720px) {
+    #pwClose, #pwBody button, #pwDialog summary { min-height:44px; }
+    .pwcheck input, #pwDialog .jxopt input { width:26px; height:26px; }
+  }
   .srow .nowtag[hidden] { display:none; }
   @font-face { font-family:"Atkinson Hyperlegible"; src:url("fonts/AtkinsonHyperlegible-Regular.ttf") format("truetype"); font-weight:400; font-display:swap; }
   @font-face { font-family:"Atkinson Hyperlegible"; src:url("fonts/AtkinsonHyperlegible-Bold.ttf") format("truetype"); font-weight:700; font-display:swap; }
@@ -1162,8 +1196,9 @@
 
     <div class="card" id="labelCard"><h2>Printers &amp; label colors</h2>
       <div id="noPrinter" hidden><p><b>No printer added.</b> <span id="noPrinterNext"></span></p>
-        <button type="button" class="go small" id="noPrinterGo" hidden>Add a printer</button></div>
+        <button type="button" class="go small" id="noPrinterGo" aria-haspopup="dialog" hidden>Add a printer</button></div>
       <p class="muted" id="printersLoaded">…</p>
+      <div class="row" id="labelAddRow" hidden><button type="button" class="plain small" id="labelAdd" aria-haspopup="dialog">Add a printer</button></div>
       <label class="setting" id="defPrinterRow"><div class="label"><b>My usual printer</b><span id="defPrinterNote">Used whenever a color below isn't loaded anywhere.</span></div><select id="defPrinter" aria-label="My usual printer"></select></label>
       <h3 id="ruleHead">Which labels for what</h3>
       <div id="colorRules"></div>
@@ -1201,7 +1236,9 @@
       <div id="printerList" class="muted">…</div>
       <div id="prOut" aria-live="polite"></div>
       <p class="muted" id="prSameNet" hidden>Only add a printer here if it's on the same network as the Next Box computer.</p>
-      <details id="npForm" style="margin-top:10px"><summary><b id="npTitle">Add a printer</b></summary>
+      <div class="row"><button type="button" class="go" id="prAdd" aria-haspopup="dialog">Add a printer</button>
+        <span class="muted">Step by step: Next Box finds it and reads which labels are in it.</span></div>
+      <details id="npForm" style="margin-top:10px"><summary><b id="npTitle">Advanced (type everything yourself)</b></summary>
         <div class="field"><label for="npDriver">Kind of printer</label><select id="npDriver" style="max-width:100%"></select></div>
         <div class="field"><label for="npName">Name</label><input type="text" id="npName" maxlength="40" placeholder="Office, Kitchen, Red roll…"></div>
         <div class="field"><label for="npAddress">Address</label><input type="text" id="npAddress" autocapitalize="none"><div class="muted" id="npHint"></div></div>
@@ -1427,6 +1464,21 @@
     <button type="button" class="plain" id="quizBack">← Back</button>
     <button type="button" class="linkish" id="quizPass">Skip this question</button>
     <button type="button" class="go" id="quizNext">Next</button>
+  </div>
+</dialog>
+
+<!-- Set up a printer: the walkthrough (app.js openPrinterSetup). Admin → Printers keeps the full form under Advanced. -->
+<dialog id="pwDialog" aria-labelledby="pwTitle" aria-describedby="pwHint">
+  <div class="quizhead"><span class="muted" id="pwStep"></span>
+    <button type="button" class="linkish" id="pwClose">Close</button></div>
+  <div class="quizbar" aria-hidden="true"><div id="pwBar"></div></div>
+  <h2 id="pwTitle" tabindex="-1"></h2>
+  <p class="muted" id="pwHint"></p>
+  <div id="pwBody"></div>
+  <p class="err" id="pwMsg" role="alert"></p>
+  <div class="row quiznav quizfoot" id="pwNav">
+    <button type="button" class="plain" id="pwBack">← Back</button>
+    <button type="button" class="go" id="pwNext">Next</button>
   </div>
 </dialog>
 
