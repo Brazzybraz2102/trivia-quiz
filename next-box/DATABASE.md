@@ -301,6 +301,11 @@ To restore: stop the service, copy the backup over `nextbox.db`, then start the 
 Also keep `secret.key`, which is next to the database. Without it, the to-do app connections
 saved in the backup can't be unlocked.
 
+Moving to another computer is different from a backup: `nextbox move pack` puts the database (as one
+SQLite file, even from PostgreSQL), `secret.key` and `.env` into one file locked with a passphrase, and
+`nextbox move unpack` on the new computer checks it and puts it all in place. The scripts do every step:
+README "Move Next Box to another PC".
+
 ## 12. Later: PostgreSQL
 
 SQLite is perfect for one computer. A shared cloud server would use **PostgreSQL**, a database

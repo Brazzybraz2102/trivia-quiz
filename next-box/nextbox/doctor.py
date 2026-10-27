@@ -99,6 +99,12 @@ def json_report(settings: Settings, checks: list[tuple[str, str, str]]) -> dict:
 def _checks(settings: Settings, accounts: Accounts | None, say) -> bool:
     """Every check, in order, through `say(mark, text, fix)`. False when it had to stop early."""
     say(NOTE, f"Next Box {app_version()}")
+    from .move import UNDO_HINT, moved_on, read_marker
+    marker = read_marker(settings.data_dir)
+    if marker is not None:  # scripts/move-out.sh: everything else is off here on purpose, so that's all to say
+        say(BAD, f"Next Box was moved to another PC{moved_on(marker)}, so it stays off on this one",
+            f"use Next Box on the new PC. {UNDO_HINT}")
+        return True
     from . import db as _db
     from .dbtools import describe_location, is_postgres
     url = _db.url_for(settings.data_dir)

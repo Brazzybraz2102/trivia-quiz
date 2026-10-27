@@ -522,10 +522,14 @@ def copy_database(source_url: str, target_url: str, batch: int = 500) -> dict:
         raise RuntimeError(f"the target database isn't empty (it has {', '.join(busy)}); "
                            "nothing was copied")
     counts = {}
+    # PostgreSQL: every table is read from one snapshot (REPEATABLE READ), so a copy taken while Next Box
+    # runs still fits together, and rows stream from the server instead of all sitting in memory.
     with src.connect() as s_conn, dst.begin() as d_conn:  # all or nothing
+        if src.dialect.name == "postgresql":
+            s_conn = s_conn.execution_options(isolation_level="REPEATABLE READ")
         for table in db.metadata.sorted_tables:
             n = 0
-            result = s_conn.execute(select(table)).mappings()
+            result = s_conn.execute(select(table).execution_options(stream_results=True, yield_per=batch)).mappings()
             while rows := result.fetchmany(batch):
                 d_conn.execute(insert(table), [dict(r) for r in rows])
                 n += len(rows)

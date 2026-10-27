@@ -140,7 +140,8 @@ Settings form.
 - **Retention:** tickets and scans older than `NEXTBOX_RETENTION_DAYS` (90) are pruned at startup
   and by `nextbox prune`.
 - **Dependencies:** pinned in `constraints.txt` (python-zeroconf and ifaddr for Set up a printer's search, §14). The installer also upgrades pip and setuptools.
-- **systemd:** `Restart=always`, `UMask=0077`, `ProtectSystem=strict` with write access only to the data dir.
+- **systemd:** `Restart=always` (but not after exit 78, moved to another PC, §33), `UMask=0077`,
+  `ProtectSystem=strict` with write access only to the data dir.
 
 ## 14. Printers and label colors
 **Drivers** (`nextbox/printer.py`) and how they connect:
@@ -452,6 +453,8 @@ tables. See §16.
 - [ ] A5 GNOME hotkey bound (`scripts/hotkey.sh`)
 - [ ] A6 HA entity IDs filled; auto fired twice, second call `skipped`
 - [ ] A7 demo checklist passed
+- [x] Move to another PC: one locked file, a guard on the old PC (§33)
+- [ ] Move to the EMNet Server PC for real (NEEDS MIKE: README "Move Next Box to another PC")
 ### Phase B: phone apps (Expo): not started
 - [ ] B1–B5. The Expo app from `ticket-app.zip` isn't in this repo yet. Its `src/api.ts` should call
       the endpoints above; the Read back screen maps onto `/scan` + `/scan/{id}/confirm`.
@@ -984,3 +987,66 @@ list, so "Your own" brings it back; changing a preset's marks makes them their o
   wraps at any text size, and "What it means to you" is never narrower than 14rem. "Delete it" has "Next Box always
   asks you before it deletes." under it. Changes save one at a time; a style picked (or Start again, or Undo)
   redraws the rows at once as they will be saved, and an older answer never redraws them.
+
+## 33. Move to another PC
+`nextbox/move.py`, `scripts/move-out.sh` (old PC) and `scripts/move-in.sh` (new PC); README "Move Next Box to another
+PC". Everything moves in ONE locked file; nothing is deleted on the old PC, and `move-out.sh --undo` puts it back.
+- **`nextbox move pack [--out PATH] [--while-running]`** makes `~/nextbox-move-YYYY-MM-DD.nbmove` (never over a file:
+  -2, -3 ...; mode 600). It refuses while Next Box answers on `http://127.0.0.1:<port>/version` ("Stop Next Box first
+  ..."), unless `--while-running`. Inside: `nextbox.db`, always SQLite (SQLite: the online backup API; PostgreSQL:
+  `dbtools.copy_database` into a fresh SQLite file, one REPEATABLE READ snapshot, rows streamed), `secret.key`, the
+  `.env` Settings loaded (`PROJECT_DIR/.env` or `NEXTBOX_ENV_FILE`) and `manifest.json` (format, app version,
+  made_at, from_host, db_was, counts of accounts/households/printers/My list tasks/journal pages, had_public_url,
+  sha256 and size of each file: no secret value, no username). Left out: `png/` (a cache), `backups/`,
+  `practice/`, `.printer.lock`, the `app` link, `-wal`/`-shm`. The temporary copy lives in a 700 folder in the
+  data folder and is always removed; a half-written move file is deleted.
+- **The passphrase** is asked with getpass (twice on pack, at least 10 characters, "four random words"); never from
+  arguments, the environment or a log. Typed forms are made equal (Unicode NFC, spaces collapsed). Unpack allows 3
+  tries when interactive.
+- **Encryption** (the STREAM construction of Hoang, Reyhanitabar, Rogaway and Vizár, as in Tink and age): a plain
+  header `NBMOVE` + 4-byte length + JSON {format, app_version, made_on, from_host, kdf {scrypt, n=2^15, r=8, p=1,
+  16-byte salt}, cipher, chunk, nonce_prefix, check}. scrypt gives 48 bytes: an AES-256-GCM key and a 16-byte
+  `check` that tells a wrong passphrase ("That passphrase didn't open this move file.") from damage. The body is a
+  tar stream (owner 0, no user names) in 1 MiB chunks, each sealed with AES-256-GCM: nonce = 7-byte random prefix ‖
+  4-byte chunk number ‖ 1 byte (1 on the last chunk), associated data = the whole header. A changed byte (header
+  included), reordered, missing or extra chunks, or a file cut anywhere (also between chunks) give "This move file
+  is damaged or incomplete. Copy it again." Nothing is ever shown as a traceback.
+- **`nextbox move info FILE`**: the plain header (version, day, which PC), no passphrase.
+- **`nextbox move unpack FILE [--replace]`**: refuses a file made by a newer Next Box ("Update this copy first:
+  scripts/update.sh"); an older one is fine (the server's start adds tables and columns and runs upkeep). Refuses
+  while a Next Box answers on this PC's port. The target is this PC's data folder (700). It holds data when its
+  `nextbox.db` has an account, or there's a `secret.key` with no database beside it: then `--replace` is needed,
+  and what's there (the database with its -wal/-shm, `secret.key`) goes to `backups/before-move-<stamp>/` (700).
+  A database with no accounts (install.sh ran first) and its key are set aside without asking. It decrypts into a
+  700 temp folder (always removed), checks each sha256 against the manifest, `PRAGMA quick_check` and that the vault
+  key opens every saved linked-app and calendar secret (counted, never shown), and only then changes anything:
+  `nextbox.db` and `secret.key` (600), and `.env` (600; a different one already there is kept as
+  `.env.before-move`, 600) with `DATABASE_URL` and `NEXTBOX_DATA_DIR` commented out, each with a line saying why
+  (setup-postgres.sh moves to PostgreSQL again). No value is ever printed. The summary: what moved (counts), the
+  linked apps that unlock, each network printer from the printers table and `PRINTER_IP` tried with a TCP connect
+  only (2 s, nothing sent; "This PC may not be on the same network as the printer."), USB/CUPS printers named as
+  staying behind, and the next steps (`nextbox move next-steps`): the phone address, Home Assistant's exact new
+  `nextbox_print_today_url` line when it has printed (auto_guard or a `source="auto"` ticket in the last 60 days),
+  and `scripts/go-online.sh` when `NEXTBOX_PUBLIC_URL` is set. `auto_guard` moves too, so the once-a-day print
+  can't happen twice on moving day.
+- **`scripts/move-out.sh [--undo]`** (old PC): says what happens in 3 lines and asks for `MOVE`; stops the service,
+  packs (if that fails the service starts again and nothing else changes), writes the `MOVED-AWAY` marker (JSON:
+  moved_at, file, turned_off), disables the service, removes the status square (`install-tray.sh --remove`) and,
+  if cloudflared is active, `sudo systemctl disable --now cloudflared` (two connectors would split visitors). It
+  ends with the file and its size, how to copy it (USB stick, or `scp`/`move-in.sh user@ip:path` with
+  openssh-server) and how to undo. `--undo` warns that the new PC's copy must be off first, asks for `UNDO`, removes
+  the marker and turns back on exactly what it lists.
+- **`scripts/move-in.sh FILE|user@host:path [--replace]`** (new PC, in a fresh copy of the code): checks first, each
+  failure saying what to do: not root, Linux, systemd with a working `systemctl --user`, python3 >= 3.10 with
+  venv/ensurepip (apt/dnf/pacman hints), no Next Box already running (else `--replace`, which stops it), port 8787
+  free (else the program, its pid and `systemctl [--user] disable --now <unit>` from `ss -ltnp`). Then scp if
+  needed, the venv, `move info`, `move unpack`, `scripts/install.sh` (keeps the `.env`), `nextbox doctor`, the next
+  steps, the tunnel offered (y/N; the token only ever goes into go-online.sh's silent prompt), the status square
+  suggested on a desktop, and deleting the move file offered.
+- **The MOVED-AWAY guard** (`<data dir>/MOVED-AWAY`, 600): `nextbox serve` (and `server.build_default_app`) exit with
+  78 and "Next Box was moved to another PC on <day>, so it doesn't start here ... scripts/move-out.sh --undo";
+  install.sh's unit has `RestartPreventExitStatus=78`, and with the marker install.sh skips the tests, leaves the
+  service disabled and says why (so `update.sh` out of habit can't bring it back); `nextbox doctor` (and `--json`,
+  for the status square) shows it as the first ✗ and stops there. Every other CLI command that could print, serve
+  or change data refuses too (exit 78; `clip` says it with notify-send for the hotkey); `move`, `doctor`, `db`,
+  `status` and `printed` still work. A marker that can't be read still counts.

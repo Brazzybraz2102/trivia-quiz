@@ -246,13 +246,18 @@ def url_for(root_or_url) -> str:
     return f"sqlite:///{root / 'nextbox.db'}"
 
 
-def database(root_or_url) -> Engine:
-    """The shared engine for a data dir (SQLite) or a URL. Creates tables on first use."""
+def _engine_url(root_or_url) -> str:
     url = url_for(root_or_url)
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]  # Fly/Heroku style
     if url.startswith("postgresql://"):
         url = "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
+
+
+def database(root_or_url) -> Engine:
+    """The shared engine for a data dir (SQLite) or a URL. Creates tables on first use."""
+    url = _engine_url(root_or_url)
     with _lock:
         engine = _engines.get(url)
         if engine is None:
@@ -289,6 +294,15 @@ def _add_missing_columns(engine: Engine) -> None:
                 if col.name not in have and col.nullable:
                     kind = col.type.compile(dialect=engine.dialect)
                     conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {kind}'))
+
+
+def forget_engine(root_or_url) -> None:
+    """Close and forget one cached engine (e.g. a temporary SQLite copy that's about to be packed or deleted)."""
+    url = _engine_url(root_or_url)
+    with _lock:
+        engine = _engines.pop(url, None)
+    if engine is not None:
+        engine.dispose()
 
 
 def reset_engines() -> None:

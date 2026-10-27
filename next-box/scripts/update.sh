@@ -14,6 +14,6 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 echo "Downloading the newest Next Box..."
 git clone -q --depth 1 -b claude/ticket-todoist-printer-nldz8a https://github.com/brazzybraz2102/trivia-quiz.git "$TMP/src"
-rsync -a --delete --exclude .env --exclude .venv "$TMP/src/next-box/" "$HERE/"
+rsync -a --delete --exclude .env --exclude '.env.before-move*' --exclude .venv "$TMP/src/next-box/" "$HERE/"
 echo "Installing (your .env, accounts, lists and journal are kept)..."
 scripts/install.sh

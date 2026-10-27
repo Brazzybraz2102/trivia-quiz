@@ -48,6 +48,13 @@ case "${1:-}" in
     ;;
 esac
 
+# Moved to another PC (scripts/move-out.sh)? Next Box stays off here, so a square would only ever be red.
+if [[ -x "$LINK/.venv/bin/nextbox" ]] && "$LINK/.venv/bin/nextbox" move marker show >/dev/null 2>&1; then
+  echo "Next Box was moved to another PC, so there's no status square for it here."
+  echo "Add it on the new PC (scripts/install-tray.sh there). To bring Next Box back here: scripts/move-out.sh --undo"
+  exit 0
+fi
+
 if [[ -z "${XDG_CURRENT_DESKTOP:-}" && -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
   echo "This isn't a desktop session, so there's no top bar to put the status icon in."
   echo "Run this in a terminal on the computer's desktop."

@@ -3269,6 +3269,11 @@ def build_default_app() -> FastAPI:
 
     os.umask(0o077)  # every file Next Box writes is readable by this desktop user only
     settings = load_settings()
+    from .move import MOVED_EXIT, moved_away_message, read_marker
+    marker = read_marker(settings.data_dir)
+    if marker is not None:  # moved to another PC (scripts/move-out.sh): this copy's data is old
+        print(moved_away_message(marker), file=sys.stderr)
+        raise SystemExit(MOVED_EXIT)
     if not settings.server_key:
         raise SystemExit("NEXTBOX_KEY is not set in .env; refusing to start an unauthenticated server")
     store = Store(settings.data_dir)

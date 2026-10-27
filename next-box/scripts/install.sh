@@ -16,8 +16,17 @@ if ! .venv/bin/pip install -q -c constraints.txt -e '.[dev,postgres,heic]'; then
   echo "Couldn't add iPhone (HEIC) photos, so installing without them: people send JPEGs instead."
   .venv/bin/pip install -q -c constraints.txt -e '.[dev,postgres]'
 fi
-echo "Checking everything works (about 3 minutes)..."
-.venv/bin/python -m pytest -q
+# Moved to another PC with scripts/move-out.sh (the MOVED-AWAY marker in the data folder)? Then the code is
+# updated, but Next Box stays off here, so phones and Home Assistant never get this PC's old lists.
+MOVED=no
+if .venv/bin/nextbox move marker show >/dev/null 2>&1; then
+  MOVED=yes
+  MOVED_ON="$(.venv/bin/nextbox move marker show --date 2>/dev/null || true)"
+fi
+if [[ $MOVED == no ]]; then
+  echo "Checking everything works (about 3 minutes)..."
+  .venv/bin/python -m pytest -q
+fi
 
 # Labels draw emoji, Chinese/Japanese and Hindi with these fonts. Without them those characters are
 # left off the label (never printed as empty boxes), so this only suggests; it doesn't install anything.
@@ -78,6 +87,8 @@ Environment=NEXTBOX_ENV_FILE=%h/.local/share/nextbox/app/.env
 ExecStart=%h/.local/share/nextbox/app/.venv/bin/nextbox serve
 Restart=always
 RestartSec=5
+# 78: Next Box was moved to another PC (scripts/move-out.sh), so it refuses to start: don't keep retrying.
+RestartPreventExitStatus=78
 UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes
@@ -89,6 +100,14 @@ WantedBy=default.target
 EOF
 
 systemctl --user daemon-reload
+if [[ $MOVED == yes ]]; then
+  systemctl --user disable --now nextbox.service 2>/dev/null || true
+  echo
+  echo "Next Box was moved to another PC${MOVED_ON:+ on $MOVED_ON}, so it stays off on this one"
+  echo "(phones and Home Assistant use the new PC). The code here is updated anyway."
+  echo "To bring Next Box back to this PC instead: scripts/move-out.sh --undo"
+  exit 0
+fi
 systemctl --user enable --now nextbox.service
 systemctl --user restart nextbox.service
 if ! loginctl show-user "$USER" -p Linger | grep -q yes; then
