@@ -36,7 +36,8 @@ KDF_N_RANGE = (2 ** 15, 2 ** 18)
 DAMAGED = "This move file is damaged or incomplete. Copy it again."
 EMPTY = "The move file is empty: the copy didn't finish. Copy it again."
 NOT_A_MOVE_FILE = "This isn't a Next Box move file."
-UPDATE_FIRST = "Update this copy first: scripts/update.sh"
+UPDATE_FIRST = ("Get the newest Next Box code first (README \"Move Next Box to another PC\", step 1; "
+                "where Next Box is already installed: scripts/update.sh)")
 
 # Exit codes (also `nextbox move unpack`'s): what scripts/move-in.sh tells Mike to do.
 GO, FAILED, NEWER_FILE, BAD_FILE, OTHER_ZONE, ALREADY_HERE, HAS_DATA, NEWER_HERE = 0, 1, 3, 4, 5, 6, 7, 8
@@ -192,13 +193,22 @@ def utc_offset() -> str:
     return datetime.now().astimezone().strftime("%z")
 
 
+# Old names some PCs still use, for systems whose zone data has only the real ones.
+OLD_NAMES = {"US/Eastern": "America/New_York", "US/Central": "America/Chicago", "US/Mountain": "America/Denver",
+             "US/Pacific": "America/Los_Angeles", "US/Arizona": "America/Phoenix", "US/Alaska": "America/Anchorage",
+             "US/Hawaii": "Pacific/Honolulu", "US/East-Indiana": "America/Indiana/Indianapolis",
+             "US/Michigan": "America/Detroit", "Canada/Eastern": "America/Toronto",
+             "Canada/Central": "America/Winnipeg", "Canada/Mountain": "America/Edmonton",
+             "Canada/Pacific": "America/Vancouver", "GB": "Europe/London", "Europe/Kiev": "Europe/Kyiv"}
+
+
 def same_zone(a: str | None, b: str | None) -> bool:
     """Do two zones keep the same clock (now and for the next year)? Unknown on either side: nothing to compare."""
     if not a or not b or a == b:
         return True
     try:
         from zoneinfo import ZoneInfo
-        za, zb = ZoneInfo(a), ZoneInfo(b)
+        za, zb = ZoneInfo(OLD_NAMES.get(a, a)), ZoneInfo(OLD_NAMES.get(b, b))
     except Exception:
         return False
     start = datetime.now(timezone.utc)

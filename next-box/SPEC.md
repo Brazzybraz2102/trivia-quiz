@@ -1036,7 +1036,7 @@ list, so "Your own" brings it back; changing a preset's marks makes them their o
   `nextbox doctor` notes a clock on UTC.
 - **`nextbox move info FILE`**: the plain header (version, day, which PC, time zone), no passphrase.
 - **`nextbox move unpack FILE [--replace] [--replace-newer] [--port N]`**: refuses a file made by a newer Next Box
-  ("Update this copy first: scripts/update.sh"); an older one is fine (the server's start adds tables and columns and
+  ("Get the newest Next Box code first", README step 1, or scripts/update.sh where it's installed); an older one is fine (the server's start adds tables and columns and
   runs upkeep). Refuses another time zone, the same file twice ("This move file is already in place here (since
   <day>). Nothing to do."), and while a Next Box answers on this PC's port. The target is this PC's data folder
   (700). It holds data when its `nextbox.db` has an account, or there's a `secret.key` with no database beside it:
@@ -1063,9 +1063,13 @@ list, so "Your own" brings it back; changing a preset's marks makes them their o
   terminal closes or it's killed before the marker is written, the service starts again and nothing else changes),
   writes the `MOVED-AWAY` marker (JSON: moved_at, file, turned_off), disables the service, removes the status
   square (`install-tray.sh --remove`) and, if cloudflared is active or enabled, `sudo systemctl disable --now
-  cloudflared` (two connectors would split visitors). It ends with the file and the one line to paste on the new PC
+  cloudflared` (two connectors would split visitors). Before that it asks whether the tunnel also carries other
+  websites ([Y/n], Enter turns it off); with `n`, or `NEXTBOX_TUNNEL=shared` in `.env` (go-online.sh writes it when
+  it put Next Box on a tunnel that was already there), the tunnel stays on and it says to delete only Next Box's
+  hostname from it and give the new PC a tunnel of its own. It ends with the file and the one line to paste on the new PC
   (get the code into `~/next-box` + `move-in.sh user@ip:path`, the address from `nextbox move address`, the route's
-  own; or `move-in.sh ~/<file>` after a USB stick). `--undo` is for "changed my mind before using the new PC": it
+  own; or `move-in.sh ~/<file>` after a USB stick; both end with `--replace` when this PC has `MOVED-IN`, i.e.
+  Next Box came here from the PC it's going back to). `--undo` is for "changed my mind before using the new PC": it
   says how to move back instead and to switch the new PC off with its own `move-out.sh`, asks for `UNDO`, removes
   the marker and turns back on exactly what it lists. `--forget` (after a week) refuses without the marker ("this
   is a PC it runs on, so nothing was deleted"), asks for the PC's name, then removes the data folder, the code, the
@@ -1081,15 +1085,19 @@ list, so "Your own" brings it back; changing a preset's marks makes them their o
   back with `--replace`. `--check` stops there (plus the time zone and pypi.org) and changes nothing. Then scp if
   needed ("type yes"), `movecheck.py` (seconds), the packages (`install_packages`: a pip failure says whether
   Python is too old, pypi.org can't be reached, or neither), `move info`, stopping a Next Box already running here
-  (only now), `move unpack` (a failure restarts what it stopped), `scripts/install.sh` (keeps the `.env`), turning
-  the tunnel back on when the marker listed it, `nextbox doctor`, the next steps with every ✗ from the summary
+  (only now), `move unpack` (a failure restarts what it stopped; exit 6 with Next Box not running here means an
+  earlier run stopped before the install, so it says "Finishing the setup..." and carries on with install.sh),
+  `scripts/install.sh` (keeps the `.env`), turning
+  the tunnel back on when the marker listed it, `nextbox doctor`, the next steps (`--tunnel-here` when it turned
+  the tunnel back on: "The internet tunnel is on again here") with every ✗ from the summary
   repeated, the tunnel offered (y/N; the token only ever goes into go-online.sh's silent prompt), the status square
   suggested on a desktop, and when to `--forget` and delete the move file.
 - **`scripts/go-online.sh`** installs cloudflared with apt (no apt: it says where to get it and stops before asking
   for the token), and when a tunnel already runs here compares its tunnel id (the token's `t`, from `systemctl cat
   cloudflared`) with the pasted one. It always ends by fetching `$PUBLIC/version`: "Done" only when that's Next
-  Box; otherwise what to set in the dashboard (`<host> → HTTP → localhost:<port>`), or how to add the hostname to
-  the other tunnel this PC already runs.
+  Box; otherwise what to set in the dashboard (`<host> → HTTP → localhost:<port>`), or, when this PC already runs
+  another tunnel: delete the hostname from Next Box's old tunnel first (and a leftover DNS record), then add it to
+  this one; `NEXTBOX_TUNNEL=shared` goes into `.env`.
 - **The MOVED-AWAY guard** (`<data dir>/MOVED-AWAY`, 600): `nextbox serve` (and `server.build_default_app`) exit with
   78 and "Next Box was moved to another PC on <day>, so it doesn't start here ... scripts/move-out.sh --undo";
   install.sh's unit has `RestartPreventExitStatus=78`, and with the marker install.sh skips the tests, leaves the

@@ -892,14 +892,17 @@ def lan_ip() -> str:
     return _lan_ip()
 
 
-def next_steps(port: int, home_assistant: bool, public_url: bool, ip: str | None = None) -> list[str]:
+def next_steps(port: int, home_assistant: bool, public_url: bool, ip: str | None = None,
+               tunnel_here: str | None = None) -> list[str]:
     ip = ip or lan_ip()
     lines = [f"On your phone (same Wi-Fi): http://{ip}:{port}/app  (sign in as before)"]
     if home_assistant:
         lines += ["Home Assistant prints from this PC now. In Home Assistant's secrets.yaml change this line,",
                   "then restart Home Assistant (the key stays the same):",
                   f"  nextbox_print_today_url: http://{ip}:{port}/print/today"]
-    if public_url:
+    if public_url and tunnel_here:  # moved back: move-in.sh turned this PC's tunnel on again
+        lines += [f"The internet tunnel is on again here. Check it with: curl {tunnel_here.rstrip('/')}/version"]
+    elif public_url:
         lines += ["Your internet address (NEXTBOX_PUBLIC_URL) has to move here too: the old PC's tunnel is off now.",
                   "Run scripts/go-online.sh on this PC (README \"Move Next Box to another PC\", step 4)."]
         if int(port) != DEFAULT_PORT:

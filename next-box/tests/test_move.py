@@ -486,7 +486,7 @@ def test_a_newer_next_box_file_is_refused_an_older_one_is_fine(old, tmp_path, mo
         unpack(tmp_path / "new", newer.path, tmp_path / "new.env")
     assert move.info(newer.path)["newer"] and not move.info(older.path)["newer"]
     assert cli.main(["move", "info", str(newer.path)]) == movecheck.NEWER_FILE == 3
-    assert "Update this copy first: scripts/update.sh" in capsys.readouterr().out
+    assert "Get the newest Next Box code first" in capsys.readouterr().out
     assert unpack(tmp_path / "new", older.path, tmp_path / "new.env").accounts == 3
 
 
@@ -1164,6 +1164,48 @@ def test_move_out_sh_turns_off_a_tunnel_that_only_starts_with_the_pc(tmp_path):
     assert not (state / "cloudflared.enabled").exists() and "cloudflared" in (home / "marker.off").read_text()
 
 
+def test_move_out_sh_leaves_a_tunnel_on_that_also_carries_other_websites(tmp_path):
+    """One tunnel can carry several websites from this PC. Turning it off would take them down too: then only
+    Next Box's address leaves it (in the dashboard), and the new PC gets a tunnel of its own."""
+    run, root, home, log, state = _move_out_pc(tmp_path)
+    (state / "nextbox").touch()
+    (state / "cloudflared").touch()
+    (root / ".env").write_text("NEXTBOX_KEY=k\nNEXTBOX_PUBLIC_URL=https://nextbox.example.com\n")
+    r = run(answer="MOVE\nn\n")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Does this PC's tunnel also carry other websites" in r.stdout
+    assert "The tunnel stays on here" in r.stdout and "delete only nextbox.example.com" in r.stdout
+    assert "Create a tunnel" in r.stdout and "nextbox.example.com → HTTP → localhost:8787" in r.stdout
+    assert (state / "cloudflared").exists() and "disable --now cloudflared" not in log.read_text()
+    assert "cloudflared" not in (home / "marker.off").read_text()  # --undo won't touch it either
+    # go-online.sh recorded a shared tunnel: no question, it stays on.
+    run, root, home, log, state = _move_out_pc(tmp_path / "again")
+    (state / "nextbox").touch()
+    (state / "cloudflared").touch()
+    (root / ".env").write_text("NEXTBOX_KEY=k\nNEXTBOX_TUNNEL=shared\n")
+    r = run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Does this PC's tunnel" not in r.stdout and "delete only nextbox.braznarkel.com" in r.stdout
+    assert (state / "cloudflared").exists() and "disable --now cloudflared" not in log.read_text()
+
+
+def test_move_out_sh_moving_back_says_replace(tmp_path):
+    """Next Box came to this PC with a move: the PC it came from still has its moving-day lists, so the line to
+    paste there ends with --replace (without it, move-in.sh stops there)."""
+    run, root, home, log, state = _move_out_pc(tmp_path)
+    (state / "nextbox").touch()
+    r = run()
+    assert r.returncode == 0 and "--replace" not in r.stdout
+    data = home / ".local" / "share" / "nextbox"
+    data.mkdir(parents=True)
+    (data / "MOVED-IN").write_text("{}")
+    (home / "marker").unlink()
+    r = run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "~/next-box/scripts/move-in.sh ~/nextbox-move-2026-10-27.nbmove --replace" in r.stdout
+    assert "puts its old lists aside" in r.stdout
+
+
 def test_move_out_sh_puts_next_box_back_on_when_the_terminal_closes(tmp_path):
     run, root, home, log, state = _move_out_pc(tmp_path)
     (state / "nextbox").touch()
@@ -1321,10 +1363,28 @@ def test_move_in_sh_checks_the_file_against_this_pc_before_installing(old, tmp_p
     shutil.rmtree(data)
     unpack(data, packed.path, tmp_path / "new.env")  # moved in already
     db.forget_engine(sqlite_url(data))
+    (state / "nextbox").touch()  # ...and running
     r = run(str(packed.path), "--replace")  # the same command again, from the history
     assert r.returncode == 0 and "This move file is already in place here" in r.stdout
     assert "Nothing was changed." in r.stdout and not (data / "backups").exists()
     assert not (root / ".venv").exists()
+    # An earlier run stopped after the files were in place, before the install (Next Box isn't running):
+    # running it again finishes the setup instead of saying "nothing to do".
+    (state / "nextbox").unlink()
+    log = tmp_path / "steps"
+    (root / "scripts" / "install.sh").write_text(f"""#!/usr/bin/env bash
+echo "install.sh" >> "{log}"
+mkdir -p .venv/bin
+printf '#!/usr/bin/env bash\\necho "nextbox $*" >> "{log}"\\n' > .venv/bin/nextbox
+chmod 755 .venv/bin/nextbox
+""")
+    (root / "scripts" / "install.sh").chmod(0o755)
+    r = run(str(packed.path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "already in place here. Finishing the setup..." in r.stdout and "Nothing was changed." not in r.stdout
+    steps = log.read_text().splitlines()
+    assert steps[0] == "install.sh" and "nextbox doctor" in steps and "nextbox move next-steps" in steps
+    assert not any("unpack" in x for x in steps) and not (data / "backups").exists()
 
 
 def test_move_in_sh_sets_aside_an_empty_running_next_box_by_itself(old, tmp_path, monkeypatch):
@@ -1423,6 +1483,12 @@ def test_go_online_checks_the_address_really_reaches_next_box(tmp_path):
     assert r.returncode == 1 and "Done" not in r.stdout
     assert "This PC already runs another Cloudflare tunnel" in r.stdout
     assert "nextbox.example.com → HTTP → localhost:8788" in r.stdout
+    # The address leaves Next Box's old tunnel first (Cloudflare refuses a name that's still in use), and the
+    # shared tunnel is remembered, so move-out.sh leaves it on if Next Box moves away later.
+    assert r.stdout.index("delete nextbox.example.com") < r.stdout.index("Add: nextbox.example.com")
+    assert (root / ".env").read_text().splitlines().count("NEXTBOX_TUNNEL=shared") == 1
+    r = run(token("tunnel-nextbox"))
+    assert (root / ".env").read_text().splitlines().count("NEXTBOX_TUNNEL=shared") == 1  # once, also on a re-run
     for out in (r.stdout, r.stderr):
         assert "SENTINEL" not in out and "eyJ" not in out
     script = (SCRIPTS / "go-online.sh").read_text()
@@ -1454,3 +1520,27 @@ def test_the_docs_explain_the_move():
     assert "## 33. Move to another PC" in spec and "RestartPreventExitStatus=78" in spec
     assert "AES-256-GCM" in spec and "scrypt" in spec and "MOVED-IN" in spec and "--forget" in spec
     assert "nextbox move pack" in (PROJECT_DIR / "DATABASE.md").read_text()
+
+
+def test_moving_back_says_the_tunnel_is_on_again_here():
+    """move-in.sh turned this PC's tunnel back on (moving back): don't also say it has to move here."""
+    back = move.next_steps(8787, False, True, ip="192.168.68.50", tunnel_here="https://nextbox.example.com/")
+    assert "The internet tunnel is on again here. Check it with: curl https://nextbox.example.com/version" in back
+    assert not any("has to move here" in line for line in back)
+    assert any("has to move here" in line for line in move.next_steps(8787, False, True, ip="192.168.68.50"))
+
+
+def test_old_time_zone_names_count_as_their_real_zone(monkeypatch):
+    """A PC set to US/Eastern and one set to America/New_York keep the same clock, also where the zone data
+    has only the real names."""
+    import zoneinfo
+    real = zoneinfo.ZoneInfo
+
+    def only_real_names(name):
+        if "/" in name and name.split("/")[0] in ("US", "Canada"):
+            raise zoneinfo.ZoneInfoNotFoundError(name)
+        return real(name)
+    monkeypatch.setattr(zoneinfo, "ZoneInfo", only_real_names)
+    assert movecheck.same_zone("US/Eastern", "America/New_York")
+    assert movecheck.same_zone("America/Los_Angeles", "US/Pacific")
+    assert not movecheck.same_zone("US/Eastern", "America/Chicago")

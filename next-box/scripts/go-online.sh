@@ -87,6 +87,11 @@ else
   echo "Tunnel installed. It starts by itself whenever this computer starts."
 fi
 
+# A tunnel that also carries something else: move-out.sh must leave it on when Next Box moves away later.
+if [[ -n "$OTHER" ]] && ! grep -q '^NEXTBOX_TUNNEL=shared$' .env; then
+  sed -i '/^NEXTBOX_TUNNEL=/d' .env
+  echo "NEXTBOX_TUNNEL=shared" >> .env
+fi
 if grep -q '^NEXTBOX_PUBLIC_URL=' .env; then
   sed -i "s|^NEXTBOX_PUBLIC_URL=.*|NEXTBOX_PUBLIC_URL=$PUBLIC|" .env
 else
@@ -121,9 +126,11 @@ HOST="${PUBLIC#*://}"
 HOST="${HOST%%/*}"
 if [[ -n "$OTHER" ]]; then
   echo "This PC already runs another Cloudflare tunnel (for something else), and a PC runs only one."
-  echo "So put Next Box's address on that one: in the dashboard open that tunnel → Public Hostname → Add:"
-  echo "  $HOST → HTTP → localhost:$PORT"
-  echo "then delete $HOST from Next Box's old tunnel. Then check: curl $PUBLIC/version"
+  echo "So Next Box's address moves onto that one, in the dashboard (Zero Trust → Networks → Tunnels):"
+  echo "  1. Next Box's old tunnel → Public Hostname: delete $HOST. If Cloudflare then says the name is"
+  echo "     still taken, delete its leftover record under your domain's DNS → Records too."
+  echo "  2. This PC's tunnel → Public Hostname → Add: $HOST → HTTP → localhost:$PORT"
+  echo "  3. Check: curl $PUBLIC/version"
 else
   echo "$PUBLIC doesn't reach Next Box here yet. In the dashboard, open your tunnel → Public Hostname and"
   echo "check it says: $HOST → HTTP → localhost:$PORT. Then check again with: curl $PUBLIC/version"

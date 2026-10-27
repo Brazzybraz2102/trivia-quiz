@@ -534,6 +534,9 @@ It gets the newest Next Box first, then says what will happen and asks you to ty
   new PC. Write it down, but not on the USB stick.
 - It makes one locked file in your home folder, like `~/nextbox-move-2026-10-27.nbmove`.
 - It removes the status square and turns off the internet tunnel here (it may ask for your password).
+  First it asks whether that tunnel also carries other websites from this PC. Most don't: press Enter. If
+  it does, the tunnel stays on, and it tells you to delete only Next Box's address from it in the
+  dashboard and give the new PC a tunnel of its own.
 - It ends with **one line to paste on the new PC**.
 
 Ran it twice by mistake? The second time it says Next Box already moved, and asks before making another file.
@@ -550,7 +553,8 @@ With a USB stick instead: copy the file into the new PC's home folder, then:
 It checks the file first (seconds), asks for the passphrase, puts everything in place, installs the
 service (the checks take about 3 minutes) and ends with what's left to do. Nothing is changed until the
 file is unlocked and checked.
-- Run it again with the same file? It says "already in place" and changes nothing.
+- Run it again with the same file? It says "already in place" and changes nothing. If the first run
+  stopped before the install finished, it finishes the setup instead.
 - Already tried Next Box on the new PC? If it has no accounts, it's set aside by itself (also while it
   runs). If it has accounts, add `--replace`, but only if that was a test copy: what's there goes to
   `~/.local/share/nextbox/backups/before-move-...`. A Next Box that was used after the move file was

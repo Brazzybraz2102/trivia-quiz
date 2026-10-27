@@ -248,13 +248,34 @@ if [[ -f "$AUTOSTART" ]]; then
   fi
 fi
 # Running now, or only set to start with the PC: either way it would connect again (two connectors split visitors).
+# Unless it also carries other websites from this PC: then only Next Box's address leaves it (in the dashboard).
+PUBLIC_HOST="$(sed -n 's|^NEXTBOX_PUBLIC_URL=[a-z]*://\([^/]*\).*|\1|p' .env 2>/dev/null | tail -1 || true)"
+PUBLIC_HOST="${PUBLIC_HOST:-nextbox.braznarkel.com}"
 if systemctl is-active --quiet cloudflared 2>/dev/null || systemctl is-enabled --quiet cloudflared 2>/dev/null; then
-  echo "Turning off the internet tunnel here, or Cloudflare would keep sending some visitors to this PC."
-  echo "(It may ask for this PC's password.)"
-  if sudo systemctl disable --now cloudflared; then
-    "$NB" move marker set --off cloudflared
+  SHARED=""
+  if grep -q '^NEXTBOX_TUNNEL=shared$' .env 2>/dev/null; then
+    SHARED=yes  # go-online.sh put Next Box on a tunnel that was already here for something else
   else
-    echo "Couldn't turn it off. Please run: sudo systemctl disable --now cloudflared"
+    echo
+    echo "Next, the internet tunnel here gets turned off, or Cloudflare would keep sending some visitors to this PC."
+    echo "Does this PC's tunnel also carry other websites, besides Next Box? Most don't: then just press Enter."
+    read -r -p "Turn the tunnel off? [Y/n] " ANSWER || ANSWER=""
+    [[ "$ANSWER" == [nN]* ]] && SHARED=yes
+  fi
+  if [[ -n "$SHARED" ]]; then
+    echo "The tunnel stays on here, for your other websites. Two things instead:"
+    echo "  1. Now, in dash.cloudflare.com → Zero Trust → Networks → Tunnels → this PC's tunnel → Public Hostname:"
+    echo "     delete only $PUBLIC_HOST (leave the others)."
+    echo "  2. On the new PC, Next Box gets its own tunnel: in the same place, Create a tunnel (name it after the"
+    echo "     new PC), add $PUBLIC_HOST → HTTP → localhost:8787 to it, and paste its install command"
+    echo "     into scripts/go-online.sh there."
+  else
+    echo "(It may ask for this PC's password.)"
+    if sudo systemctl disable --now cloudflared; then
+      "$NB" move marker set --off cloudflared
+    else
+      echo "Couldn't turn it off. Please run: sudo systemctl disable --now cloudflared"
+    fi
   fi
 fi
 
@@ -265,20 +286,30 @@ if [[ -z "$ADDR" || -z "$IP" ]]; then
   IP="<this PC's IP>"
 fi
 GET="rm -rf ~/nb-src && git clone -q --depth 1 -b $BRANCH $REPO ~/nb-src && mkdir -p ~/next-box && cp -a ~/nb-src/next-box/. ~/next-box/ && rm -rf ~/nb-src"
+# Next Box came to this PC with a move: the PC it came from still has its old lists, so moving back replaces them.
+REPLACE=""
+DATA="$("$HERE/.venv/bin/python" -c 'from nextbox.config import load_settings; print(load_settings().data_dir)' \
+  2>/dev/null || true)"
+if [[ -n "$DATA" && -f "$DATA/MOVED-IN" ]]; then
+  REPLACE=" --replace"
+fi
 echo
 echo "Done. Next Box is off on this PC."
 echo "The move file: $FILE"
+if [[ -n "$REPLACE" ]]; then
+  echo "(The lines below end with --replace: on the PC Next Box came from, that puts its old lists aside.)"
+fi
 if systemctl is-active --quiet ssh 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null \
     || systemctl is-active --quiet ssh.socket 2>/dev/null || [[ -x /usr/sbin/sshd ]]; then
   echo "On the new PC, paste this one line. It gets Next Box and fetches the file from here over the network"
   echo "(it asks for this PC's password; if it asks \"Are you sure you want to continue connecting\", type yes):"
-  echo "  $GET && ~/next-box/scripts/move-in.sh $USER@$IP:$FILE"
+  echo "  $GET && ~/next-box/scripts/move-in.sh $USER@$IP:$FILE$REPLACE"
   echo "Or copy the file with a USB stick into the new PC's home folder, and paste this line there instead:"
 else
   echo "Copy it with a USB stick into the new PC's home folder, then on the new PC paste this one line"
   echo "(to fetch it over the network instead, this PC needs SSH first: sudo apt install -y openssh-server,"
-  echo "and then the line ends with: ~/next-box/scripts/move-in.sh $USER@$IP:$FILE):"
+  echo "and then the line ends with: ~/next-box/scripts/move-in.sh $USER@$IP:$FILE$REPLACE):"
 fi
-echo "  $GET && ~/next-box/scripts/move-in.sh ~/$(basename "$FILE")"
+echo "  $GET && ~/next-box/scripts/move-in.sh ~/$(basename "$FILE")$REPLACE"
 echo "(The new PC needs git for it: sudo apt install -y git, or on Fedora: sudo dnf install -y git)"
 echo "Changed your mind? scripts/move-out.sh --undo turns Next Box back on here."

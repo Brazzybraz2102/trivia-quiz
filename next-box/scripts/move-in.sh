@@ -220,64 +220,78 @@ set +e
 "$PY" -I nextbox/movecheck.py "$FILE" "$DATA" $REPLACE $NEWER
 CODE=$?
 set -e
+# Already in place from an earlier run: done if Next Box runs; otherwise that run stopped before the install.
+DONE=""
+already_here() {
+  if systemctl --user is-active --quiet nextbox.service 2>/dev/null; then
+    echo "Nothing was changed."
+    exit 0
+  fi
+  DONE=yes
+  echo "The move file is already in place here. Finishing the setup..."
+}
 case $CODE in
   0) ;;
   3) stop "This Next Box code is older than the one that made the move file." \
-          "Get the newest code (README \"Move Next Box to another PC\", step 3), then run this again." ;;
+          "Get the newest code (README \"Move Next Box to another PC\", step 1), then run this again." ;;
   4) stop "Copy the move file again (from the old PC, or from the USB stick), then run this again." ;;
-  6) echo "Nothing was changed."; exit 0 ;;
+  6) already_here ;;
   7) stop "Only if that Next Box was just a test copy: --replace puts its lists aside (in $DATA/backups/):" \
           "scripts/move-in.sh $SHOW --replace" ;;
   *) stop "Nothing was changed. Fix what it says above, then run this again." ;;
 esac
 
 # --- 3. Python packages, then the move ------------------------------------------------------------------------
-echo "Setting up Next Box's Python packages (a few minutes)..."
-install_packages || stop "Nothing was moved yet. Fix what it says above, then run this again."
-echo
-set +e
-.venv/bin/nextbox move info "$FILE"
-CODE=$?
-set -e
-case $CODE in
-  0) ;;
-  3) stop "This copy of Next Box can't open that file." "Get the newest code (README), then run this again." ;;
-  *) stop "Copy the move file again (from the old PC, or from the USB stick), then run this again." ;;
-esac
 TURNED_OFF=""
-if [[ -n "$AWAY" ]]; then  # what move-out.sh turned off here: it's turned back on after the move
-  TURNED_OFF="$(.venv/bin/nextbox move marker show --turned-off 2>/dev/null || true)"
-fi
-if [[ -n "$RUNNING" ]]; then
-  echo "Stopping the Next Box that's on this PC now (what's in it is set aside in $DATA/backups/)..."
-  systemctl --user stop nextbox.service 2>/dev/null || true
-  sleep 1
-  if answers_like_nextbox; then
-    stop "A Next Box is still answering on port $PORT (started by hand in a terminal?)." \
-         "Stop it there (Ctrl+C), then run this again."
+PROBLEMS=""
+if [[ -z "$DONE" ]]; then
+  echo "Setting up Next Box's Python packages (a few minutes)..."
+  install_packages || stop "Nothing was moved yet. Fix what it says above, then run this again."
+  echo
+  set +e
+  .venv/bin/nextbox move info "$FILE"
+  CODE=$?
+  set -e
+  case $CODE in
+    0) ;;
+    3) stop "This copy of Next Box can't open that file." "Get the newest code (README), then run this again." ;;
+    *) stop "Copy the move file again (from the old PC, or from the USB stick), then run this again." ;;
+  esac
+  if [[ -n "$AWAY" ]]; then  # what move-out.sh turned off here: it's turned back on after the move
+    TURNED_OFF="$(.venv/bin/nextbox move marker show --turned-off 2>/dev/null || true)"
   fi
-  port_taken && port_problem
-fi
-echo
-LOG="$(mktemp)"
-trap 'rm -f "$LOG"' EXIT
-PORT_OPT=()
-[[ -n "$PORT_ARG" ]] && PORT_OPT=(--port "$PORT_ARG")
-set +e
-PYTHONUNBUFFERED=1 .venv/bin/nextbox move unpack "$FILE" $REPLACE $NEWER ${PORT_OPT[@]+"${PORT_OPT[@]}"} \
-  --no-next-steps 2>&1 | tee "$LOG"
-CODE=${PIPESTATUS[0]}
-set -e
-if [[ $CODE != 0 ]]; then
-  [[ $CODE == 6 ]] && { echo "Nothing was changed."; exit 0; }
   if [[ -n "$RUNNING" ]]; then
-    systemctl --user start nextbox.service 2>/dev/null || true
-    echo "The Next Box that was on this PC is on again."
+    echo "Stopping the Next Box that's on this PC now (what's in it is set aside in $DATA/backups/)..."
+    systemctl --user stop nextbox.service 2>/dev/null || true
+    sleep 1
+    if answers_like_nextbox; then
+      stop "A Next Box is still answering on port $PORT (started by hand in a terminal?)." \
+           "Stop it there (Ctrl+C), then run this again."
+    fi
+    port_taken && port_problem
   fi
-  stop "Nothing was changed by this run. Fix what it says above, then run this again."
+  echo
+  LOG="$(mktemp)"
+  trap 'rm -f "$LOG"' EXIT
+  PORT_OPT=()
+  [[ -n "$PORT_ARG" ]] && PORT_OPT=(--port "$PORT_ARG")
+  set +e
+  PYTHONUNBUFFERED=1 .venv/bin/nextbox move unpack "$FILE" $REPLACE $NEWER ${PORT_OPT[@]+"${PORT_OPT[@]}"} \
+    --no-next-steps 2>&1 | tee "$LOG"
+  CODE=${PIPESTATUS[0]}
+  set -e
+  if [[ $CODE == 6 ]]; then
+    echo "The move file is already in place here. Finishing the setup..."
+  elif [[ $CODE != 0 ]]; then
+    if [[ -n "$RUNNING" ]]; then
+      systemctl --user start nextbox.service 2>/dev/null || true
+      echo "The Next Box that was on this PC is on again."
+    fi
+    stop "Nothing was changed by this run. Fix what it says above, then run this again."
+  fi
+  # Anything marked ✗ above, with its fix, is repeated at the very end (the install's output pushes it away).
+  PROBLEMS="$(awk '/✗/ {show=1; print; next} show && /^    / {print; next} {show=0}' "$LOG")"
 fi
-# Anything marked ✗ above, with its fix, is repeated at the very end (the install's output pushes it away).
-PROBLEMS="$(awk '/✗/ {show=1; print; next} show && /^    / {print; next} {show=0}' "$LOG")"
 
 # --- 4. Install: the service, starting at boot (keeps the moved .env) ------------------------------------------
 echo
@@ -295,7 +309,9 @@ echo
 # --- 5. What's left ---------------------------------------------------------------------------------------------
 echo
 echo "Next Box has moved to this PC. What's left:"
-.venv/bin/nextbox move next-steps | sed 's/^/  /'
+TUNNEL_HERE=()
+[[ " $TURNED_OFF " == *" cloudflared "* ]] && TUNNEL_HERE=(--tunnel-here)
+.venv/bin/nextbox move next-steps ${TUNNEL_HERE[@]+"${TUNNEL_HERE[@]}"} | sed 's/^/  /'
 if [[ -n "$PROBLEMS" ]]; then
   echo "  Still to fix (from above):"
   echo "$PROBLEMS" | sed 's/^/  /'

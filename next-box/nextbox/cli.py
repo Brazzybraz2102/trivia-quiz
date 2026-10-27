@@ -226,7 +226,8 @@ def _move(settings, args) -> int:
             return 0
         if args.move_cmd == "next-steps":
             ha, public = move.facts_here(settings)
-            for line in move.next_steps(settings.port, ha, public):
+            here = os.environ.get("NEXTBOX_PUBLIC_URL", "").strip() if args.tunnel_here else None
+            for line in move.next_steps(settings.port, ha, public, tunnel_here=here):
                 print(line)
             return 0
         # marker (scripts/move-out.sh and install.sh)
@@ -359,7 +360,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="even when the Next Box on this PC has newer lists than the file (only for a test copy)")
     mu.add_argument("--port", type=int, help="run Next Box on this port here (NEXTBOX_PORT in .env)")
     mu.add_argument("--no-next-steps", action="store_true", help=argparse.SUPPRESS)
-    mvs.add_parser("next-steps", help="after a move: the phone address, Home Assistant's new address, the tunnel")
+    ns = mvs.add_parser("next-steps", help="after a move: the phone address, Home Assistant's new address, the tunnel")
+    ns.add_argument("--tunnel-here", action="store_true", help=argparse.SUPPRESS)  # move-in.sh turned it on again
     mvs.add_parser("address", help=argparse.SUPPRESS)  # scripts: "<this PC's IP> <port>"
     mk = mvs.add_parser("marker", help="the MOVED-AWAY marker that keeps Next Box off here (scripts/move-out.sh)")
     mk.add_argument("marker_cmd", choices=["set", "show", "clear"])
