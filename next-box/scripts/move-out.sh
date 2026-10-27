@@ -1,20 +1,32 @@
 #!/usr/bin/env bash
 # Move Next Box to another PC, step 1 of 2. Run this on the OLD PC, from its Next Box folder:
-#   ~/.local/share/nextbox/app/scripts/move-out.sh          make one locked move file; Next Box goes off here
-#   ~/.local/share/nextbox/app/scripts/move-out.sh --undo   turn Next Box back on here instead
+#   ~/.local/share/nextbox/app/scripts/move-out.sh           make one locked move file; Next Box goes off here
+#   ~/.local/share/nextbox/app/scripts/move-out.sh --undo    changed your mind before using the new PC: on again here
+#   ~/.local/share/nextbox/app/scripts/move-out.sh --forget  after a week: delete Next Box from this old PC for good
 # Step 2 is scripts/move-in.sh on the new PC (README "Move Next Box to another PC").
-# Nothing is deleted. Never prints .env values.
+# Moving back later is the same two steps the other way round. Never prints .env values.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$HERE"
 NB="$HERE/.venv/bin/nextbox"
 AUTOSTART="$HOME/.config/autostart/nextbox-tray.desktop"
+BRANCH=claude/ticket-todoist-printer-nldz8a
+REPO=https://github.com/brazzybraz2102/trivia-quiz.git
 
-if [[ ! -x "$NB" ]]; then
-  echo "Run this in the Next Box folder on the old PC (the one with .venv in it):"
-  echo "  ~/.local/share/nextbox/app/scripts/move-out.sh"
+if [[ "$(id -u)" == 0 ]]; then
+  echo "Don't run this with sudo or as root: Next Box belongs to you, not to root. Run it as yourself:"
+  echo "  ~/.local/share/nextbox/app/scripts/move-out.sh ${1:-}"
   exit 1
 fi
+if [[ ! -x "$NB" ]]; then
+  echo "Run this in the Next Box folder on the old PC (the one with .venv in it):"
+  echo "  ~/.local/share/nextbox/app/scripts/move-out.sh ${1:-}"
+  exit 1
+fi
+
+has_desktop() {
+  [[ -n "${XDG_CURRENT_DESKTOP:-}${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]
+}
 
 undo() {
   local day off answer what
@@ -23,12 +35,14 @@ undo() {
     return 0
   fi
   off="$("$NB" move marker show --turned-off)"
-  echo "This turns Next Box back on here, with what it had when it moved${day:+ ($day)}."
-  echo "First switch it off on the new PC (there: systemctl --user disable --now nextbox, and"
-  echo "sudo systemctl disable --now cloudflared if you moved the tunnel), or there would be two copies."
-  echo "Anything changed on the new PC since then stays there."
-  read -r -p "Type UNDO to go on: " answer || answer=""
-  if [[ "$answer" != "UNDO" ]]; then
+  echo "This turns Next Box back on here, with the lists it had when it moved${day:+ ($day)}."
+  echo "It's for when Next Box on the new PC wasn't used yet: what was added there doesn't come back here."
+  echo "  Used the new PC already? Move back instead: run scripts/move-out.sh on the new PC, then here:"
+  echo "  ~/.local/share/nextbox/app/scripts/move-in.sh <the file it made> --replace"
+  echo "Ran move-in.sh on the new PC? First switch Next Box off there for good: scripts/move-out.sh there"
+  echo "(delete the file it makes), or there would be two copies."
+  read -r -p "Type UNDO to turn it back on here: " answer || answer=""
+  if [[ "${answer^^}" != "UNDO" ]]; then
     echo "Nothing changed."
     return 1
   fi
@@ -40,11 +54,16 @@ undo() {
         if systemctl --user enable --now nextbox.service; then
           echo "Next Box is on again here."
         else
-          echo "Couldn't start it. Run scripts/install.sh, which sets it up again."
+          echo "Couldn't start it. Run $HERE/scripts/install.sh, which sets it up again."
         fi
         ;;
       tray)
-        scripts/install-tray.sh || echo "Add the status square again from the desktop: scripts/install-tray.sh"
+        if has_desktop; then
+          scripts/install-tray.sh || echo "Add the status square again: $HERE/scripts/install-tray.sh"
+        else
+          echo "The status square: run this in a terminal on this PC's own screen:"
+          echo "  ~/.local/share/nextbox/app/scripts/install-tray.sh"
+        fi
         ;;
       cloudflared)
         echo "Turning the internet tunnel back on here (it may ask for this PC's password)."
@@ -52,21 +71,128 @@ undo() {
         ;;
     esac
   done
-  echo "Done. Check it with: .venv/bin/nextbox doctor"
+  echo "Done. Check it with: $HERE/.venv/bin/nextbox doctor"
+}
+
+# After a week on the new PC: delete Next Box from this old PC, but only here (the MOVED-AWAY marker says so).
+forget() {
+  local host answer data link pg files f
+  if ! "$NB" move marker show >/dev/null 2>&1; then
+    echo "Next Box wasn't moved away from this PC: this is a PC it runs on, so nothing was deleted."
+    echo "Run this on the old PC, the one you moved Next Box away from."
+    return 1
+  fi
+  data="$("$HERE/.venv/bin/python" -c 'from nextbox.config import load_settings; print(load_settings().data_dir)' \
+    2>/dev/null || true)"
+  if [[ -z "$data" || ! -f "$data/MOVED-AWAY" || "$data" == "$HOME" || "$data" == / ]]; then
+    echo "Couldn't find this PC's Next Box data folder, so nothing was deleted."
+    return 1
+  fi
+  link="$(readlink -f "$data/app" 2>/dev/null || true)"
+  host="$(hostname 2>/dev/null || echo this-pc)"
+  files=()
+  for f in "$HOME"/nextbox-move-*.nbmove; do
+    [[ -f "$f" ]] && files+=("$f")
+  done
+  echo "This deletes Next Box from this PC ($host) for good. Next Box on the new PC isn't touched."
+  echo "  - the lists, accounts and journals from before the move: $data"
+  echo "  - the code: $HERE"
+  if [[ -n "$link" && "$link" != "$HERE" && -f "$link/scripts/move-out.sh" ]]; then
+    echo "  - the code the service used: $link"
+  fi
+  echo "  - its background service, the status square and the hotkey"
+  if [[ ${#files[@]} -gt 0 ]]; then
+    echo "  - the move file(s) here: ${files[*]}"
+  fi
+  echo "Only do this once Next Box has worked on the new PC for a while (a week is good)."
+  read -r -p "To go on, type this PC's name ($host): " answer || answer=""
+  if [[ "$answer" != "$host" ]]; then
+    echo "Nothing was deleted."
+    return 1
+  fi
+
+  # The extras first, while the code and its .venv are still here.
+  if [[ " $("$NB" move marker show --turned-off 2>/dev/null || true) " == *" cloudflared "* ]] \
+      && command -v cloudflared >/dev/null; then
+    read -r -p "Also remove the internet tunnel from this PC (it's on the new PC now)? [y/N] " answer || answer=""
+    if [[ "$answer" == [yY]* ]]; then
+      sudo cloudflared service uninstall || echo "Couldn't. Later: sudo cloudflared service uninstall"
+    fi
+  fi
+  pg="$("$HERE/.venv/bin/python" - <<'PY' 2>/dev/null || true
+import os
+from urllib.parse import urlsplit
+from nextbox.config import load_settings
+load_settings()
+url = urlsplit(os.environ.get("DATABASE_URL", ""))
+local = (url.hostname or "localhost") in ("localhost", "127.0.0.1", "::1")
+print("yes" if url.scheme.startswith("postgres") and local and url.path == "/nextbox" else "")
+PY
+)"
+  if [[ "$pg" == yes ]]; then
+    read -r -p "Also delete Next Box's PostgreSQL databases on this PC (nextbox, nextbox_practice)? [y/N] " answer || answer=""
+    if [[ "$answer" == [yY]* ]]; then
+      sudo -u postgres dropdb --if-exists nextbox || true
+      sudo -u postgres dropdb --if-exists nextbox_practice || true
+      sudo -u postgres dropuser --if-exists nextbox || true
+    fi
+  fi
+  if [[ -f "$AUTOSTART" ]]; then
+    scripts/install-tray.sh --remove >/dev/null 2>&1 || rm -f "$AUTOSTART"
+  fi
+  if command -v gsettings >/dev/null && "$HERE/.venv/bin/python" - <<'PY' 2>/dev/null; then
+import ast, subprocess, sys
+schema = "org.gnome.settings-daemon.plugins.media-keys"
+mine = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/nextbox-clip/"
+now = subprocess.run(["gsettings", "get", schema, "custom-keybindings"], capture_output=True, text=True).stdout
+keys = ast.literal_eval(now.strip().removeprefix("@as ") or "[]")
+if mine not in keys:
+    sys.exit(1)
+subprocess.run(["gsettings", "set", schema, "custom-keybindings", repr([k for k in keys if k != mine])], check=True)
+subprocess.run(["gsettings", "reset-recursively", f"{schema}.custom-keybinding:{mine}"], check=False)
+PY
+    echo "Removed the Next Box hotkey."
+  fi
+  systemctl --user disable --now nextbox.service >/dev/null 2>&1 || true
+  rm -f "$HOME/.config/systemd/user/nextbox.service"
+  systemctl --user daemon-reload 2>/dev/null || true
+  if [[ ${#files[@]} -gt 0 ]]; then
+    rm -f "${files[@]}"
+  fi
+  rm -rf "$data"
+  if [[ -n "$link" && "$link" != "$HERE" && -f "$link/scripts/move-out.sh" && "$link" != "$HOME" ]]; then
+    rm -rf "$link"
+  fi
+  cd "$HOME"
+  [[ -f "$HERE/scripts/move-out.sh" && -d "$HERE/nextbox" && "$HERE" != "$HOME" ]] && rm -rf "$HERE"
+  echo "Done: Next Box is gone from this PC."
+  echo "Last step: delete the move file on the new PC (rm ~/nextbox-move-*.nbmove there) and on the USB stick."
 }
 
 case "${1:-}" in
   "") ;;
   --undo) undo; exit $? ;;
-  *) echo "Usage: scripts/move-out.sh [--undo]"; exit 2 ;;
+  --forget) forget; exit $? ;;
+  *) echo "Usage: scripts/move-out.sh [--undo | --forget]"; exit 2 ;;
 esac
 
-echo "This moves Next Box off this PC ($(hostname 2>/dev/null || echo "this computer")):"
-echo "  1. Next Box goes offline here, and stays off (also after a restart or an update)."
-echo "  2. It makes one locked file with everything in it, for the new PC. You pick its passphrase."
-echo "  3. Nothing is deleted. Changed your mind later? scripts/move-out.sh --undo puts it back."
-read -r -p "Type MOVE to go on: " ANSWER || ANSWER=""
-if [[ "$ANSWER" != "MOVE" ]]; then
+if "$NB" move marker show >/dev/null 2>&1; then
+  # Moved away already: a second file has the lists from that day, not what was added on the new PC since.
+  DAY="$("$NB" move marker show --date 2>/dev/null || true)"
+  NAME="$("$NB" move marker show --name 2>/dev/null || true)"
+  echo "Next Box already moved away from this PC${DAY:+ on $DAY}${NAME:+ (file $NAME)}."
+  echo "Its lists here are from that day: anything added on the new PC since isn't in them."
+  echo "Make a new move file only if the first one or its passphrase is lost, and Next Box on the new PC"
+  echo "wasn't used yet. (To use Next Box on this PC again instead: scripts/move-out.sh --undo)"
+  read -r -p "Type MOVE to make a new move file anyway: " ANSWER || ANSWER=""
+else
+  echo "This moves Next Box off this PC ($(hostname 2>/dev/null || echo "this computer")):"
+  echo "  1. Next Box goes offline here, and stays off (also after a restart or an update)."
+  echo "  2. It makes one locked file with everything in it, for the new PC. You pick its passphrase."
+  echo "  3. Nothing is deleted. Changed your mind later? scripts/move-out.sh --undo puts it back."
+  read -r -p "Type MOVE to go on: " ANSWER || ANSWER=""
+fi
+if [[ "${ANSWER^^}" != "MOVE" ]]; then
   echo "Nothing changed."
   exit 1
 fi
@@ -76,6 +202,16 @@ if systemctl --user is-active --quiet nextbox.service 2>/dev/null \
     || systemctl --user is-enabled --quiet nextbox.service 2>/dev/null; then
   WAS_ON=yes
 fi
+# A closed terminal or a kill before the move file is made: Next Box comes back on here, as if nothing happened.
+MARKED=no
+on_signal() {
+  if [[ $MARKED == no && $WAS_ON == yes ]]; then
+    systemctl --user start nextbox.service 2>/dev/null || true
+    echo "Stopped before the move file was made, so Next Box is on again here." 2>/dev/null || true
+  fi
+  exit 129
+}
+trap on_signal HUP TERM
 echo "Stopping Next Box here..."
 systemctl --user stop nextbox.service 2>/dev/null || true
 
@@ -102,6 +238,7 @@ FILE="$(cat "$PATHFILE")"
 OFF=()
 [[ $WAS_ON == yes ]] && OFF=(--off service)
 "$NB" move marker set --file "$(basename "$FILE")" ${OFF[@]+"${OFF[@]}"}
+MARKED=yes
 systemctl --user disable nextbox.service 2>/dev/null || true
 if [[ -f "$AUTOSTART" ]]; then
   scripts/install-tray.sh --remove >/dev/null 2>&1 || true
@@ -110,7 +247,8 @@ if [[ -f "$AUTOSTART" ]]; then
     echo "Removed the status square from the top bar."
   fi
 fi
-if systemctl is-active --quiet cloudflared 2>/dev/null; then
+# Running now, or only set to start with the PC: either way it would connect again (two connectors split visitors).
+if systemctl is-active --quiet cloudflared 2>/dev/null || systemctl is-enabled --quiet cloudflared 2>/dev/null; then
   echo "Turning off the internet tunnel here, or Cloudflare would keep sending some visitors to this PC."
   echo "(It may ask for this PC's password.)"
   if sudo systemctl disable --now cloudflared; then
@@ -120,22 +258,27 @@ if systemctl is-active --quiet cloudflared 2>/dev/null; then
   fi
 fi
 
-SIZE="$(du -h "$FILE" | cut -f1)"
-IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
-if [[ -z "$IP" ]]; then
+# This PC's address on the home network (the route's own: not a Docker or VPN address).
+ADDR="$("$NB" move address 2>/dev/null || true)"
+IP="${ADDR% *}"
+if [[ -z "$ADDR" || -z "$IP" ]]; then
   IP="<this PC's IP>"
 fi
+GET="rm -rf ~/nb-src && git clone -q --depth 1 -b $BRANCH $REPO ~/nb-src && mkdir -p ~/next-box && cp -a ~/nb-src/next-box/. ~/next-box/ && rm -rf ~/nb-src"
 echo
 echo "Done. Next Box is off on this PC."
-echo "The move file: $FILE ($SIZE)"
-echo "Copy it to the new PC, one of two ways:"
-echo "  - with a USB stick: copy it onto the stick, then into the new PC's home folder"
-if systemctl is-active --quiet ssh 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null; then
-  echo "  - over the network, on the new PC: scripts/move-in.sh $USER@$IP:$FILE"
-  echo "    (or just copy it there: scp $USER@$IP:$FILE ~/)"
+echo "The move file: $FILE"
+if systemctl is-active --quiet ssh 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null \
+    || systemctl is-active --quiet ssh.socket 2>/dev/null || [[ -x /usr/sbin/sshd ]]; then
+  echo "On the new PC, paste this one line. It gets Next Box and fetches the file from here over the network"
+  echo "(it asks for this PC's password; if it asks \"Are you sure you want to continue connecting\", type yes):"
+  echo "  $GET && ~/next-box/scripts/move-in.sh $USER@$IP:$FILE"
+  echo "Or copy the file with a USB stick into the new PC's home folder, and paste this line there instead:"
 else
-  echo "  - over the network: this PC needs SSH first (here: sudo apt install -y openssh-server), then"
-  echo "    on the new PC: scripts/move-in.sh $USER@$IP:$FILE   (or: scp $USER@$IP:$FILE ~/)"
+  echo "Copy it with a USB stick into the new PC's home folder, then on the new PC paste this one line"
+  echo "(to fetch it over the network instead, this PC needs SSH first: sudo apt install -y openssh-server,"
+  echo "and then the line ends with: ~/next-box/scripts/move-in.sh $USER@$IP:$FILE):"
 fi
-echo "Then on the new PC follow README \"Move Next Box to another PC\"."
+echo "  $GET && ~/next-box/scripts/move-in.sh ~/$(basename "$FILE")"
+echo "(The new PC needs git for it: sudo apt install -y git, or on Fedora: sudo dnf install -y git)"
 echo "Changed your mind? scripts/move-out.sh --undo turns Next Box back on here."

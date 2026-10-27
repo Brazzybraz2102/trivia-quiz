@@ -8,14 +8,13 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$HERE"
 
-python3 -m venv .venv
-.venv/bin/pip install -q --upgrade pip setuptools
-# constraints.txt pins every package to the versions this release was tested with.
-# heic: iPhone HEIC photos on Snap. Optional: if it can't be installed here, everything else still is.
-if ! .venv/bin/pip install -q -c constraints.txt -e '.[dev,postgres,heic]'; then
-  echo "Couldn't add iPhone (HEIC) photos, so installing without them: people send JPEGs instead."
-  .venv/bin/pip install -q -c constraints.txt -e '.[dev,postgres]'
+# Python 3.11 or newer (the system's python3, or python3.11+ beside it), then .venv and the packages.
+source scripts/python.sh
+if ! pick_python; then
+  python_help
+  exit 1
 fi
+install_packages || exit 1
 # Moved to another PC with scripts/move-out.sh (the MOVED-AWAY marker in the data folder)? Then the code is
 # updated, but Next Box stays off here, so phones and Home Assistant never get this PC's old lists.
 MOVED=no
@@ -116,15 +115,22 @@ if ! loginctl show-user "$USER" -p Linger | grep -q yes; then
 fi
 sleep 2
 systemctl --user --no-pager status nextbox.service | head -5
-IP="$(hostname -I | awk '{print $1}')"
+# This PC's address on the home network (the route's own, not a Docker or VPN one) and the port from .env.
+ADDR="$(.venv/bin/nextbox move address 2>/dev/null || true)"
+IP="${ADDR% *}"
+PORT="${ADDR##* }"
+if [[ -z "$ADDR" ]]; then
+  IP="<this PC's IP>"
+  PORT=8787
+fi
 echo
 if ! systemctl --user is-active --quiet nextbox.service; then
   echo "The service didn't start. See why with: journalctl --user -u nextbox -n 20 --no-pager"
 fi
-echo "On this computer: http://localhost:8787/app"
-echo "On your phone (same Wi-Fi): http://$IP:8787/app"
+echo "On this computer: http://localhost:$PORT/app"
+echo "On your phone (same Wi-Fi): http://$IP:$PORT/app"
 if command -v ufw >/dev/null && sudo -n ufw status 2>/dev/null | grep -q "Status: active"; then
-  echo "Your firewall is on. To let phones in: sudo ufw allow from 192.168.0.0/16 to any port 8787 proto tcp"
+  echo "Your firewall is on. To let phones in: sudo ufw allow from 192.168.0.0/16 to any port $PORT proto tcp"
 fi
 echo "Check everything any time with: .venv/bin/nextbox doctor"
 if .venv/bin/nextbox user list | grep -q '(no accounts)'; then

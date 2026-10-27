@@ -202,20 +202,27 @@ def _move(settings, args) -> int:
             print("  It's locked with your passphrase. Don't keep the passphrase next to the file.")
             return 0
         if args.move_cmd == "info":
-            about = move.info(args.file)
+            about = move.info(args.file)  # every text in it was checked, so a made-up file can't hide codes here
             print(f"Next Box move file: {args.file} ({move.size_text(about['size'])})")
             print(f"  Made by Next Box {about['app_version']} on {about['made_on']}, "
-                  f"on the PC called {about['from_host']}.")
+                  f"on the PC called {about['from_host']}" + (f" (time zone {about['tz']})." if about["tz"] else "."))
             if about["newer"]:
                 print(f"  This copy is Next Box {app_version()}, which is older. {move.UPDATE_FIRST}")
-                return 1
+                return move.NewerFile.code
             print(f"  This copy (Next Box {app_version()}) can open it.")
             return 0
         if args.move_cmd == "unpack":
-            result = move.unpack(settings, args.file, replace=args.replace)
+            if args.port is not None and not 1 <= args.port <= 65535:
+                print("--port takes a number from 1 to 65535, e.g. --port 8788", file=sys.stderr)
+                return 2
+            result = move.unpack(settings, args.file, replace=args.replace, replace_newer=args.replace_newer,
+                                 port=args.port)
             print()
             for line in move.summary(result, with_next_steps=not args.no_next_steps):
                 print(line)
+            return 0
+        if args.move_cmd == "address":  # scripts: this PC's address on the home network, and Next Box's port
+            print(f"{move.lan_ip()} {settings.port}")
             return 0
         if args.move_cmd == "next-steps":
             ha, public = move.facts_here(settings)
@@ -234,6 +241,8 @@ def _move(settings, args) -> int:
             return 1
         if args.date:
             print(marker["moved_at"][:10])
+        elif args.name:
+            print(marker["file"])
         elif args.turned_off:
             print(" ".join(marker["turned_off"]))
         else:
@@ -241,7 +250,7 @@ def _move(settings, args) -> int:
         return 0
     except move.MoveError as exc:
         print(exc, file=sys.stderr)
-        return 1
+        return exc.code  # scripts/move-in.sh says what to do for each kind (movecheck's exit codes)
     except KeyboardInterrupt:
         print("\nStopped.", file=sys.stderr)
         return 130
@@ -250,7 +259,10 @@ def _move(settings, args) -> int:
         print(f"Couldn't finish: {exc.strerror or type(exc).__name__}{where}", file=sys.stderr)
         return 1
     except Exception as exc:  # its kind only: a database error's words could quote stored data
-        print(f"Couldn't finish ({type(exc).__name__}).", file=sys.stderr)
+        if type(exc).__module__.split(".")[0] in ("sqlalchemy", "psycopg", "sqlite3"):
+            print(move.UNREADABLE, file=sys.stderr)
+        else:
+            print(f"Couldn't finish ({type(exc).__name__}).", file=sys.stderr)
         return 1
 
 
@@ -343,14 +355,19 @@ def main(argv: list[str] | None = None) -> int:
     mu.add_argument("file", type=Path)
     mu.add_argument("--replace", action="store_true",
                     help="put it in place of the Next Box already on this PC (that one is kept in backups/)")
+    mu.add_argument("--replace-newer", action="store_true",
+                    help="even when the Next Box on this PC has newer lists than the file (only for a test copy)")
+    mu.add_argument("--port", type=int, help="run Next Box on this port here (NEXTBOX_PORT in .env)")
     mu.add_argument("--no-next-steps", action="store_true", help=argparse.SUPPRESS)
     mvs.add_parser("next-steps", help="after a move: the phone address, Home Assistant's new address, the tunnel")
+    mvs.add_parser("address", help=argparse.SUPPRESS)  # scripts: "<this PC's IP> <port>"
     mk = mvs.add_parser("marker", help="the MOVED-AWAY marker that keeps Next Box off here (scripts/move-out.sh)")
     mk.add_argument("marker_cmd", choices=["set", "show", "clear"])
     mk.add_argument("--file", help="set: the move file's name")
     mk.add_argument("--off", action="append", default=[], choices=["service", "tray", "cloudflared"],
                     help="set: something move-out.sh turned off (--undo turns it back on)")
     mk.add_argument("--date", action="store_true", help="show: only the day it moved")
+    mk.add_argument("--name", action="store_true", help="show: only the move file's name")
     mk.add_argument("--turned-off", action="store_true", help="show: only what was turned off")
     us = sub.add_parser("user", help="manage web sign-in accounts")
     us.add_argument("action", choices=["add", "passwd", "role", "enable", "disable", "remove", "list",

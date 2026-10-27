@@ -989,64 +989,112 @@ list, so "Your own" brings it back; changing a preset's marks makes them their o
   redraws the rows at once as they will be saved, and an older answer never redraws them.
 
 ## 33. Move to another PC
-`nextbox/move.py`, `scripts/move-out.sh` (old PC) and `scripts/move-in.sh` (new PC); README "Move Next Box to another
-PC". Everything moves in ONE locked file; nothing is deleted on the old PC, and `move-out.sh --undo` puts it back.
+`nextbox/move.py`, `nextbox/movecheck.py`, `scripts/move-out.sh` (old PC) and `scripts/move-in.sh` (new PC); README
+"Move Next Box to another PC". Everything moves in ONE locked file; nothing is deleted on the old PC until
+`move-out.sh --forget`, and `move-out.sh --undo` puts it back. Moving back is the same move the other way round.
 - **`nextbox move pack [--out PATH] [--while-running]`** makes `~/nextbox-move-YYYY-MM-DD.nbmove` (never over a file:
   -2, -3 ...; mode 600). It refuses while Next Box answers on `http://127.0.0.1:<port>/version` ("Stop Next Box first
-  ..."), unless `--while-running`. Inside: `nextbox.db`, always SQLite (SQLite: the online backup API; PostgreSQL:
-  `dbtools.copy_database` into a fresh SQLite file, one REPEATABLE READ snapshot, rows streamed), `secret.key`, the
-  `.env` Settings loaded (`PROJECT_DIR/.env` or `NEXTBOX_ENV_FILE`) and `manifest.json` (format, app version,
-  made_at, from_host, db_was, counts of accounts/households/printers/My list tasks/journal pages, had_public_url,
-  sha256 and size of each file: no secret value, no username). Left out: `png/` (a cache), `backups/`,
-  `practice/`, `.printer.lock`, the `app` link, `-wal`/`-shm`. The temporary copy lives in a 700 folder in the
-  data folder and is always removed; a half-written move file is deleted.
-- **The passphrase** is asked with getpass (twice on pack, at least 10 characters, "four random words"); never from
-  arguments, the environment or a log. Typed forms are made equal (Unicode NFC, spaces collapsed). Unpack allows 3
-  tries when interactive.
+  ..."), unless `--while-running`, and checks the database can be read before the passphrase is asked ("Couldn't
+  read the database. Check it with: .venv/bin/nextbox doctor"; a database error's own words are never shown).
+  Inside: `nextbox.db`, always SQLite (SQLite: the online backup API; PostgreSQL: `dbtools.copy_database` into a
+  fresh SQLite file, one REPEATABLE READ snapshot, rows streamed, 5 at a time for tables with pictures:
+  `dbtools.batch_for`), `secret.key`, the `.env` Settings loaded (`PROJECT_DIR/.env` or `NEXTBOX_ENV_FILE`) and
+  `manifest.json` (format, app version, made_at, from_host, db_was, counts of accounts/households/printers/My list
+  tasks/journal pages, had_public_url, sha256 and size of each file: no secret value, no username). Left out: `png/`
+  (a cache: `GET /printed/{id}/png` falls back to `tickets.png` in the database), `backups/`, `practice/`,
+  `.printer.lock`, the `app` link, `-wal`/`-shm`. The temporary copy lives in a 700 folder in the data folder and is
+  always removed; a half-written move file is deleted. SIGHUP and SIGTERM during pack or unpack act like Ctrl+C (so
+  that cleanup runs), the steps that put files in place hold them until done, and `.move-out-*`/`.move-in-*` folders
+  an hour old (a kill -9) are removed by the next pack or unpack.
+- **The passphrase** is asked with getpass (twice on pack); never from arguments, the environment or a log. It must
+  be 10+ characters, not the same few characters over and over, not only digits, and three or more words when it's
+  shorter than 16 characters; pack suggests four random words (`move.WORDS`, 476 words). Typed forms are made equal
+  (Unicode NFC, spaces collapsed). Unpack allows 3 tries when interactive; the last one says how to get a new file
+  ("Forgot it? ... run scripts/move-out.sh again").
 - **Encryption** (the STREAM construction of Hoang, Reyhanitabar, Rogaway and Vizár, as in Tink and age): a plain
-  header `NBMOVE` + 4-byte length + JSON {format, app_version, made_on, from_host, kdf {scrypt, n=2^15, r=8, p=1,
-  16-byte salt}, cipher, chunk, nonce_prefix, check}. scrypt gives 48 bytes: an AES-256-GCM key and a 16-byte
-  `check` that tells a wrong passphrase ("That passphrase didn't open this move file.") from damage. The body is a
-  tar stream (owner 0, no user names) in 1 MiB chunks, each sealed with AES-256-GCM: nonce = 7-byte random prefix ‖
-  4-byte chunk number ‖ 1 byte (1 on the last chunk), associated data = the whole header. A changed byte (header
-  included), reordered, missing or extra chunks, or a file cut anywhere (also between chunks) give "This move file
-  is damaged or incomplete. Copy it again." Nothing is ever shown as a traceback.
-- **`nextbox move info FILE`**: the plain header (version, day, which PC), no passphrase.
-- **`nextbox move unpack FILE [--replace]`**: refuses a file made by a newer Next Box ("Update this copy first:
-  scripts/update.sh"); an older one is fine (the server's start adds tables and columns and runs upkeep). Refuses
-  while a Next Box answers on this PC's port. The target is this PC's data folder (700). It holds data when its
-  `nextbox.db` has an account, or there's a `secret.key` with no database beside it: then `--replace` is needed,
-  and what's there (the database with its -wal/-shm, `secret.key`) goes to `backups/before-move-<stamp>/` (700).
-  A database with no accounts (install.sh ran first) and its key are set aside without asking. It decrypts into a
-  700 temp folder (always removed), checks each sha256 against the manifest, `PRAGMA quick_check` and that the vault
-  key opens every saved linked-app and calendar secret (counted, never shown), and only then changes anything:
-  `nextbox.db` and `secret.key` (600), and `.env` (600; a different one already there is kept as
-  `.env.before-move`, 600) with `DATABASE_URL` and `NEXTBOX_DATA_DIR` commented out, each with a line saying why
-  (setup-postgres.sh moves to PostgreSQL again). No value is ever printed. The summary: what moved (counts), the
-  linked apps that unlock, each network printer from the printers table and `PRINTER_IP` tried with a TCP connect
-  only (2 s, nothing sent; "This PC may not be on the same network as the printer."), USB/CUPS printers named as
-  staying behind, and the next steps (`nextbox move next-steps`): the phone address, Home Assistant's exact new
-  `nextbox_print_today_url` line when it has printed (auto_guard or a `source="auto"` ticket in the last 60 days),
-  and `scripts/go-online.sh` when `NEXTBOX_PUBLIC_URL` is set. `auto_guard` moves too, so the once-a-day print
-  can't happen twice on moving day.
-- **`scripts/move-out.sh [--undo]`** (old PC): says what happens in 3 lines and asks for `MOVE`; stops the service,
-  packs (if that fails the service starts again and nothing else changes), writes the `MOVED-AWAY` marker (JSON:
-  moved_at, file, turned_off), disables the service, removes the status square (`install-tray.sh --remove`) and,
-  if cloudflared is active, `sudo systemctl disable --now cloudflared` (two connectors would split visitors). It
-  ends with the file and its size, how to copy it (USB stick, or `scp`/`move-in.sh user@ip:path` with
-  openssh-server) and how to undo. `--undo` warns that the new PC's copy must be off first, asks for `UNDO`, removes
-  the marker and turns back on exactly what it lists.
-- **`scripts/move-in.sh FILE|user@host:path [--replace]`** (new PC, in a fresh copy of the code): checks first, each
-  failure saying what to do: not root, Linux, systemd with a working `systemctl --user`, python3 >= 3.10 with
-  venv/ensurepip (apt/dnf/pacman hints), no Next Box already running (else `--replace`, which stops it), port 8787
-  free (else the program, its pid and `systemctl [--user] disable --now <unit>` from `ss -ltnp`). Then scp if
-  needed, the venv, `move info`, `move unpack`, `scripts/install.sh` (keeps the `.env`), `nextbox doctor`, the next
-  steps, the tunnel offered (y/N; the token only ever goes into go-online.sh's silent prompt), the status square
-  suggested on a desktop, and deleting the move file offered.
+  header `NBMOVE` + 4-byte length + JSON {format, app_version, made_on, from_host, tz and utc_offset (the old PC's
+  time zone), made_ts, data_ts (the newest change in its database: sign-ins, devices, tasks, journal, wins, prints;
+  not the events log), kdf {scrypt, n=2^17, r=8, p=1, 16-byte salt}, cipher, chunk, nonce_prefix, check}. Only r=8,
+  p=1 and n from 2^15 to 2^18 are ever opened (at most 256 MiB), so a made-up header can't ask scrypt for gigabytes.
+  Every text in the header must be plain (version, date, host `[A-Za-z0-9._-]`, zone name), so `move info` never
+  shows terminal codes. scrypt gives 48 bytes: an AES-256-GCM key and a 16-byte `check` that tells a wrong passphrase
+  ("That passphrase didn't open this move file.") from damage. The body is a tar stream (owner 0, no user names) in
+  1 MiB chunks, each sealed with AES-256-GCM: nonce = 7-byte random prefix ‖ 4-byte chunk number ‖ 1 byte (1 on the
+  last chunk), associated data = the whole header. A changed byte (header included), reordered, missing or extra
+  chunks, or a file cut anywhere (also between chunks) give "This move file is damaged or incomplete. Copy it
+  again."; an empty file "The move file is empty: the copy didn't finish. Copy it again." Never a traceback.
+- **`nextbox/movecheck.py`** (standard library only) reads and checks the header, and what's on this PC.
+  `move-in.sh` runs it with the system's python3 before anything is installed (`python3 -I nextbox/movecheck.py
+  FILE DATA_DIR [--replace] [--replace-newer]`); `move unpack` uses the same functions. Exit codes, also `nextbox
+  move unpack`'s and (3, 4) `move info`'s: 0 go on, 3 the file is from a newer Next Box (get the newest code),
+  4 empty/damaged/not found (copy it again), 5 another time zone, 6 this very file is already in place here
+  (`MOVED-IN`), 7 a Next Box with accounts is here (`--replace`), 8 that one was used after the file's data_ts
+  (60 s slack; `--replace-newer`).
+- **The time zone**: "today" and `Store.claim_auto` go by the PC's local date, so unpack refuses a PC whose zone
+  (`TZ`, else `timedatectl`, else /etc/localtime, else /etc/timezone) keeps a different clock than the file's `tz`
+  (aliases such as US/Eastern are the same), with the exact fix: `sudo timedatectl set-timezone <old PC's zone>`.
+  `nextbox doctor` notes a clock on UTC.
+- **`nextbox move info FILE`**: the plain header (version, day, which PC, time zone), no passphrase.
+- **`nextbox move unpack FILE [--replace] [--replace-newer] [--port N]`**: refuses a file made by a newer Next Box
+  ("Update this copy first: scripts/update.sh"); an older one is fine (the server's start adds tables and columns and
+  runs upkeep). Refuses another time zone, the same file twice ("This move file is already in place here (since
+  <day>). Nothing to do."), and while a Next Box answers on this PC's port. The target is this PC's data folder
+  (700). It holds data when its `nextbox.db` has an account, or there's a `secret.key` with no database beside it:
+  then `--replace` is needed, and when that Next Box was used after the file's last change, `--replace-newer` (the
+  file is older than what's here). What's there (the database with its -wal/-shm, `secret.key`) goes to
+  `backups/before-move-<stamp>/` (700). A database with no accounts (install.sh ran first) and its key are set aside
+  without asking. It decrypts into a 700 temp folder (always removed), checks each sha256 against the manifest,
+  `PRAGMA quick_check` and that the vault key opens every saved linked-app and calendar secret (counted, never
+  shown), and only then changes anything: `nextbox.db` and `secret.key` (600), and `.env` (600; a different one
+  already there is kept as `.env.before-move`, 600) with `DATABASE_URL` and `NEXTBOX_DATA_DIR` commented out, each
+  with a line saying why (setup-postgres.sh moves to PostgreSQL again), `NEXTBOX_PORT=N` with `--port N`, the
+  `MOVED-IN` file (600: the header's salt, made_on, from_host, when) and, on a PC Next Box had moved away from, the
+  `MOVED-AWAY` marker is removed (it's back). No value is ever printed. The summary: what moved (counts), the linked
+  apps that unlock, each network printer from the printers table and `PRINTER_IP` tried with a TCP connect only
+  (2 s, nothing sent; "This PC may not be on the same network as the printer." and what to do), USB/CUPS printers
+  named as staying behind, and the next steps (`nextbox move next-steps`): the phone address, Home Assistant's exact
+  new `nextbox_print_today_url` line when it has printed (auto_guard or a `source="auto"` ticket in the last 60
+  days), and `scripts/go-online.sh` when `NEXTBOX_PUBLIC_URL` is set (with the public hostname's new
+  `localhost:<port>` when it isn't 8787). `auto_guard` moves too, so the once-a-day print can't happen twice on
+  moving day.
+- **`scripts/move-out.sh [--undo | --forget]`** (old PC; refuses root): says what happens in 3 lines and asks for
+  `MOVE` (any case). Already moved away (the marker)? It says so, with the day and file, and asks again before a
+  second file (only if the first or its passphrase is lost). It stops the service, packs (if that fails, or the
+  terminal closes or it's killed before the marker is written, the service starts again and nothing else changes),
+  writes the `MOVED-AWAY` marker (JSON: moved_at, file, turned_off), disables the service, removes the status
+  square (`install-tray.sh --remove`) and, if cloudflared is active or enabled, `sudo systemctl disable --now
+  cloudflared` (two connectors would split visitors). It ends with the file and the one line to paste on the new PC
+  (get the code into `~/next-box` + `move-in.sh user@ip:path`, the address from `nextbox move address`, the route's
+  own; or `move-in.sh ~/<file>` after a USB stick). `--undo` is for "changed my mind before using the new PC": it
+  says how to move back instead and to switch the new PC off with its own `move-out.sh`, asks for `UNDO`, removes
+  the marker and turns back on exactly what it lists. `--forget` (after a week) refuses without the marker ("this
+  is a PC it runs on, so nothing was deleted"), asks for the PC's name, then removes the data folder, the code, the
+  unit (+ daemon-reload), the status square, the hotkey and the move files in `~`, and offers `sudo cloudflared
+  service uninstall` (when it had turned the tunnel off) and dropping the local PostgreSQL `nextbox` and
+  `nextbox_practice` databases (when DATABASE_URL pointed at them).
+- **`scripts/move-in.sh [--check] FILE|user@host:path [--replace] [--replace-newer] [--port N]`** (new PC, in a copy
+  of the code; a relative FILE is found from the folder it's run in): checks first, each failure saying what to
+  do: not root, Linux, systemd with a working `systemctl --user`, Python 3.11+ with venv (`scripts/python.sh`: the
+  system's python3, else the newest python3.14..3.11; Ubuntu 22.04 needs `python3.11 python3.11-venv`), port 8787
+  (or N) free: else the program, its pid and service (via `sudo ss` when needed), "If you don't know what it is,
+  don't stop it", and `--port` with a free port. On a PC Next Box moved away from it explains `--undo` or moving
+  back with `--replace`. `--check` stops there (plus the time zone and pypi.org) and changes nothing. Then scp if
+  needed ("type yes"), `movecheck.py` (seconds), the packages (`install_packages`: a pip failure says whether
+  Python is too old, pypi.org can't be reached, or neither), `move info`, stopping a Next Box already running here
+  (only now), `move unpack` (a failure restarts what it stopped), `scripts/install.sh` (keeps the `.env`), turning
+  the tunnel back on when the marker listed it, `nextbox doctor`, the next steps with every ✗ from the summary
+  repeated, the tunnel offered (y/N; the token only ever goes into go-online.sh's silent prompt), the status square
+  suggested on a desktop, and when to `--forget` and delete the move file.
+- **`scripts/go-online.sh`** installs cloudflared with apt (no apt: it says where to get it and stops before asking
+  for the token), and when a tunnel already runs here compares its tunnel id (the token's `t`, from `systemctl cat
+  cloudflared`) with the pasted one. It always ends by fetching `$PUBLIC/version`: "Done" only when that's Next
+  Box; otherwise what to set in the dashboard (`<host> → HTTP → localhost:<port>`), or how to add the hostname to
+  the other tunnel this PC already runs.
 - **The MOVED-AWAY guard** (`<data dir>/MOVED-AWAY`, 600): `nextbox serve` (and `server.build_default_app`) exit with
   78 and "Next Box was moved to another PC on <day>, so it doesn't start here ... scripts/move-out.sh --undo";
   install.sh's unit has `RestartPreventExitStatus=78`, and with the marker install.sh skips the tests, leaves the
   service disabled and says why (so `update.sh` out of habit can't bring it back); `nextbox doctor` (and `--json`,
   for the status square) shows it as the first ✗ and stops there. Every other CLI command that could print, serve
-  or change data refuses too (exit 78; `clip` says it with notify-send for the hotkey); `move`, `doctor`, `db`,
-  `status` and `printed` still work. A marker that can't be read still counts.
+  or change data refuses too (exit 78; `clip` says it with notify-send for the hotkey; tests never call the real
+  notify-send, a conftest fixture records it); `move`, `doctor`, `db`, `status` and `printed` still work. A marker
+  that can't be read still counts.

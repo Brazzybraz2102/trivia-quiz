@@ -291,7 +291,8 @@ def test_heic_is_an_installable_extra_and_its_help_names_the_settings_app():
     assert "Settings app" in scan.HEIC_HELP and "In Settings →" not in scan.HEIC_HELP
     assert "heic = [" in (PROJECT_DIR / "pyproject.toml").read_text()
     assert any(line.startswith("pillow-heif==") for line in (PROJECT_DIR / "constraints.txt").read_text().splitlines())
-    install = (PROJECT_DIR / "scripts" / "install.sh").read_text()
+    # install.sh (and move-in.sh) install the packages with scripts/python.sh's install_packages.
+    install = (PROJECT_DIR / "scripts" / "install.sh").read_text() + (PROJECT_DIR / "scripts" / "python.sh").read_text()
     assert "-e '.[dev,postgres,heic]'" in install
     # Optional: where pillow-heif can't be installed, everything else still is.
     assert "if ! .venv/bin/pip install" in install and "-e '.[dev,postgres]'" in install

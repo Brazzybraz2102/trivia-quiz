@@ -114,6 +114,16 @@ def no_real_printer(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_desktop_notifications(monkeypatch):
+    """install.sh runs these tests on Mike's desktop: never pop up a real notification (notify-send) there.
+    Tests that want to see what would have been shown read this list."""
+    from nextbox import cli
+    shown: list[tuple] = []
+    monkeypatch.setattr(cli, "_notify", lambda *a: shown.append(a))
+    return shown
+
+
+@pytest.fixture(autouse=True)
 def no_anthropic_key(monkeypatch):
     """Tests never reach Anthropic: they use a fake vision and a fake coach, and a key in the
     developer's environment is hidden from them."""
