@@ -49,6 +49,8 @@ sudo apt install -y python3-venv wl-clipboard libnotify-bin   # Fedora: sudo dnf
 scripts/install.sh          # builds everything, makes your NEXTBOX_KEY, starts the service
 .venv/bin/nextbox doctor    # checks it all and says what to fix
 ```
+Next Box needs Python 3.11 or newer. Ubuntu 24.04 and Debian 12 have it. On Ubuntu 22.04 also run
+`sudo apt install -y python3.11 python3.11-venv`: `install.sh` then uses that one.
 Later, when you have it, put `ANTHROPIC_API_KEY` (for Snap and the AI helpers) in `.env` with
 `nano .env`. When you're ready to print, delete the `NEXTBOX_DRY_RUN=1` line there and run
 `systemctl --user restart nextbox`. Until then Next Box makes previews instead of printing.
@@ -177,6 +179,7 @@ scripts/hotkey.sh '<Super><Shift>t'             # then for real
 1. Copy `ha/nextbox.yaml` to `<ha config>/packages/nextbox.yaml`, and make sure
    `configuration.yaml` has `homeassistant: { packages: !include_dir_named packages }`.
 2. Add `nextbox_print_today_url: http://<desktop-ip>:8787/print/today` and `nextbox_key: ...` to `secrets.yaml`.
+   (Moved Next Box to another PC? Only this address changes: see [Move Next Box to another PC](#move-next-box-to-another-pc).)
 3. Replace `binary_sensor.CHANGEME_office_presence` and `input_button.CHANGEME_nextbox_button`
    with your entity IDs, then reload YAML.
 4. Test that the guard works. The first call prints, the second returns `skipped`:
@@ -298,7 +301,9 @@ use each visitor's real address.
 5. Open `https://nextbox.braznarkel.com/app/` on your phone with Wi-Fi off.
 
 Steps 2 and 4 in one go, after steps 1 and 3: `scripts/go-online.sh` installs `cloudflared`, asks
-you to paste the command from step 2 (it's never shown), and adds both lines to `.env`.
+you to paste the command from step 2 (it's never shown), and adds both lines to `.env`. Then it checks
+from the internet that `https://nextbox.braznarkel.com` really reaches Next Box, and if not, says what to
+fix in the dashboard (also when this PC already runs another tunnel for something else).
 
 Later projects: add another public hostname to the same tunnel (e.g. `next` → `localhost:9000`).
 
@@ -496,6 +501,123 @@ data folder (`~/.local/share/nextbox`: accounts, lists, journals, tickets and `s
 check it with `~/.local/share/nextbox/app/.venv/bin/nextbox doctor`, whose first line is the version
 you now have (`nextbox --version` says it too).
 
+## Move Next Box to another PC
+For example from your desktop to the EMNet Server PC. Everything comes along in one locked file:
+accounts, lists, journals, printers, settings (`.env`) and `secret.key`. Nothing is deleted on the old
+PC until you say so, and you can undo it. About 20 minutes.
+
+The new PC needs Linux with Python 3.11 or newer (Ubuntu 24.04 or Debian 12 is easiest), the same
+network as your printer and Home Assistant, the same time zone as the old PC, and you logged in as
+yourself (on its screen, or with ssh). Step 1 checks all of this before anything changes.
+
+### 1. On the new PC: get the code and check the PC
+Paste this one line (on Fedora, use `sudo dnf install -y git python3` for the first part):
+```bash
+sudo apt install -y git python3-venv && rm -rf ~/nb-src && git clone --depth 1 -b claude/ticket-todoist-printer-nldz8a https://github.com/brazzybraz2102/trivia-quiz.git ~/nb-src && mkdir -p ~/next-box && cp -a ~/nb-src/next-box/. ~/next-box/ && rm -rf ~/nb-src && ~/next-box/scripts/move-in.sh --check
+```
+It also works when there's a `~/next-box` already (its `.env` and `.venv` are kept). It ends with
+"This PC is ready" or says exactly what to fix, for example:
+- Ubuntu 22.04's Python 3.10 is too old: `sudo apt install -y python3.11 python3.11-venv`.
+- The clock is on UTC: `sudo timedatectl set-timezone America/New_York` (the old PC's time zone).
+  Otherwise "today" and Home Assistant's once-a-day print would change day at the wrong hour.
+- Port 8787 is used by another program: don't stop a program you don't know. Add `--port 8788` in step 3.
+
+Nothing is changed by `--check`.
+
+### 2. On the old PC: move out
+```bash
+~/.local/share/nextbox/app/scripts/update.sh && ~/.local/share/nextbox/app/scripts/move-out.sh
+```
+It gets the newest Next Box first, then says what will happen and asks you to type `MOVE`. Then:
+- Next Box stops here and stays off, even after a restart or an update.
+- You pick a **passphrase**: three or more random words (it suggests four). You type it again on the
+  new PC. Write it down, but not on the USB stick.
+- It makes one locked file in your home folder, like `~/nextbox-move-2026-10-27.nbmove`.
+- It removes the status square and turns off the internet tunnel here (it may ask for your password).
+- It ends with **one line to paste on the new PC**.
+
+Ran it twice by mistake? The second time it says Next Box already moved, and asks before making another file.
+
+### 3. On the new PC: move in
+Paste the line `move-out.sh` printed. It fetches the file from the old PC over the network (`scp`): it asks for
+the old PC's password, and if it asks "Are you sure you want to continue connecting", type `yes`. (The
+old PC needs SSH for that: there, `sudo apt install -y openssh-server`.)
+
+With a USB stick instead: copy the file into the new PC's home folder, then:
+```bash
+~/next-box/scripts/move-in.sh ~/nextbox-move-2026-10-27.nbmove
+```
+It checks the file first (seconds), asks for the passphrase, puts everything in place, installs the
+service (the checks take about 3 minutes) and ends with what's left to do. Nothing is changed until the
+file is unlocked and checked.
+- Run it again with the same file? It says "already in place" and changes nothing.
+- Already tried Next Box on the new PC? If it has no accounts, it's set aside by itself (also while it
+  runs). If it has accounts, add `--replace`, but only if that was a test copy: what's there goes to
+  `~/.local/share/nextbox/backups/before-move-...`. A Next Box that was used after the move file was
+  made is never replaced, unless you add `--replace-newer`.
+- Another port: add `--port 8788`. It goes into `.env`, and Home Assistant, phones and the Cloudflare
+  public hostname use 8788 instead of 8787 (`move-in.sh` prints each one).
+- Forgot the passphrase? Run `move-out.sh` on the old PC again: it makes a new file with a new passphrase.
+
+### 4. The internet address (nextbox.braznarkel.com)
+`move-in.sh` offers to do this. Open dash.cloudflare.com → **Zero Trust** → **Networks → Tunnels** →
+your tunnel → **Configure**, and keep the page with its install command (Debian) open. Then on the new
+PC run `scripts/go-online.sh` and paste the command when it asks (nothing shows; that's on purpose).
+It ends by checking that `https://nextbox.braznarkel.com` reaches Next Box on the new PC. If the new PC
+already runs another tunnel (for something else), it says how to add Next Box's address to that one.
+The public hostname (`localhost:8787`) stays as it is. Only one PC may run the tunnel: with two,
+Cloudflare splits visitors between them. That's why `move-out.sh` turned it off on the old PC.
+
+### 5. Home Assistant
+The key stays the same; only the address changes. `move-in.sh` prints the exact line for Home
+Assistant's `secrets.yaml`, with the new PC's address:
+```yaml
+nextbox_print_today_url: http://<new PC's IP>:8787/print/today
+```
+Then restart Home Assistant. Today's once-a-day print moved too, and both PCs use the same time zone,
+so it never prints twice in one day. Tip: give the new PC a fixed address (a DHCP reservation in your
+router).
+
+### 6. Phones and the status square
+- Phones on Wi-Fi: open `http://<new PC's IP>:8787/app` and sign in as before (add it to the home
+  screen again). Through `https://nextbox.braznarkel.com` nothing changes.
+- The status square: on the new PC's desktop run `scripts/install-tray.sh`.
+- Not in the move file: the label-image cache (the web app shows each ticket's picture from the
+  database), `backups/`, the practice database (`nextbox db backup`, `nextbox db demo` make new ones)
+  and the hotkey (`scripts/hotkey.sh`). A USB printer stays with the old PC: set it up on the new one.
+- PostgreSQL on the old PC? The new PC starts on SQLite; `scripts/setup-postgres.sh` moves it over.
+
+### Undo, or move back
+- **Changed your mind before using the new PC:** if `move-in.sh` ran there, first switch it off there for
+  good with `~/next-box/scripts/move-out.sh` (delete the file it makes). Then on the old PC:
+  `~/.local/share/nextbox/app/scripts/move-out.sh --undo`. It turns back on exactly what
+  `move-out.sh` turned off, with the lists from moving day.
+- **Used the new PC already:** move back the same way, the other way round. On the new PC:
+  `~/next-box/scripts/move-out.sh`. Then on the old PC:
+  `~/.local/share/nextbox/app/scripts/move-in.sh <that file> --replace`. Next Box comes back on there,
+  with the tunnel if it was there before.
+
+### Get back what was set aside
+`--replace` keeps what was on the PC in `~/.local/share/nextbox/backups/before-move-<date and time>/`.
+To put it back:
+```bash
+systemctl --user stop nextbox
+cp ~/.local/share/nextbox/backups/before-move-<date and time>/* ~/.local/share/nextbox/
+systemctl --user start nextbox
+```
+If the move kept an `.env.before-move` in the Next Box folder, rename it back to `.env` before the start.
+
+### After a week
+When everything works on the new PC, run this on the **old** PC:
+```bash
+~/.local/share/nextbox/app/scripts/move-out.sh --forget
+```
+It only works on the PC Next Box moved away from: on any other PC it refuses and deletes nothing. It
+asks you to type the PC's name, then deletes Next Box there for good: the old lists, the code, the
+service, the status square, the hotkey and the move file. It offers to remove the tunnel program and,
+if you used PostgreSQL there, Next Box's PostgreSQL databases. Last, delete the move file on the new PC
+(`rm ~/nextbox-move-*.nbmove`) and on the USB stick.
+
 ## Troubleshooting
 - **Start here:** `.venv/bin/nextbox doctor` says the version and checks the database, `NEXTBOX_KEY`,
   `ANTHROPIC_API_KEY`, accounts, service, web page, firewall, sign-in apps and printers (including a
@@ -510,3 +632,6 @@ you now have (`nextbox --version` says it too).
 - "Connect your to-do app in Settings first": that person hasn't linked one yet (Settings → Linked app).
 - Old tickets and scans are deleted after 90 days (`NEXTBOX_RETENTION_DAYS`). Run `nextbox prune` to clean up now.
 - After changing code or `.env`: `systemctl --user restart nextbox`
+- "Next Box was moved to another PC": this PC's copy stays off on purpose after `scripts/move-out.sh`
+  (so Home Assistant and phones never get old lists). Use the new PC, or bring it back here with
+  `scripts/move-out.sh --undo`.

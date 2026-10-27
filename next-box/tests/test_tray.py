@@ -629,6 +629,7 @@ def _scenario(name, tmp, mp):
     mp.delenv("NEXTBOX_HOSTING", raising=False)
     mp.setattr(scan, "heic_supported", lambda: True)
     mp.setattr(doctor, "_lan_ip", lambda: "192.168.1.20")
+    mp.setattr("nextbox.movecheck.local_zone", lambda: "America/New_York")  # a home PC (a UTC clock adds a note)
     mp.setattr(doctor, "_last_error", lambda: "")
     mp.setattr(doctor.shutil, "which", lambda n: None)
     mp.setattr(printer, "is_reachable", lambda p: True)

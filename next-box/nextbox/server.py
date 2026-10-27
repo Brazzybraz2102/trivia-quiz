@@ -1650,16 +1650,22 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         `download=1` is Save label image: the same picture as a file named after the ticket, to open in a
         label printer's own app. Nothing is printed."""
         label_id = normalize_id(label_id)
-        path = ctx.store.png_path(label_id)
-        if not re.fullmatch(r"[A-Z0-9-]{4,16}", label_id) or not path.exists():
+        if not re.fullmatch(r"[A-Z0-9-]{4,16}", label_id):
             raise HTTPException(404)
         rec = ctx.store.get_printed(label_id)
         # People see their own tickets; the superadmin sees everyone's (everyone agreed, see DATA_NOTICE).
         if not rec or (rec.get("by") != acting_as(caller) and caller.role != "superadmin"):
             raise HTTPException(404)
         how = "attachment" if download else "inline"
-        return FileResponse(path, media_type="image/png",
-                            headers={"Content-Disposition": f'{how}; filename="next-box-{label_id}.png"', **PRIVATE})
+        headers = {"Content-Disposition": f'{how}; filename="next-box-{label_id}.png"', **PRIVATE}
+        path = ctx.store.png_path(label_id)
+        if path.exists():
+            return FileResponse(path, media_type="image/png", headers=headers)
+        # png/ is only a cache (it isn't moved to a new PC, for one): the database keeps every ticket's picture.
+        data = ctx.store.get_png(label_id)
+        if not data:
+            raise HTTPException(404)
+        return Response(content=data, media_type="image/png", headers=headers)
 
     @app.get("/printed/{label_id}/pdf")
     def printed_pdf(label_id: str, paper: str = "", caller: Caller = Depends(auth)):
@@ -3269,6 +3275,11 @@ def build_default_app() -> FastAPI:
 
     os.umask(0o077)  # every file Next Box writes is readable by this desktop user only
     settings = load_settings()
+    from .move import MOVED_EXIT, moved_away_message, read_marker
+    marker = read_marker(settings.data_dir)
+    if marker is not None:  # moved to another PC (scripts/move-out.sh): this copy's data is old
+        print(moved_away_message(marker), file=sys.stderr)
+        raise SystemExit(MOVED_EXIT)
     if not settings.server_key:
         raise SystemExit("NEXTBOX_KEY is not set in .env; refusing to start an unauthenticated server")
     store = Store(settings.data_dir)

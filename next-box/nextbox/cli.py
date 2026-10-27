@@ -187,6 +187,89 @@ def _db(data_dir, args) -> int:
         return 1
 
 
+def _move(settings, args) -> int:
+    """`nextbox move ...`: never opens this PC's database before it's needed, never prints a .env value."""
+    from . import move
+    try:
+        if args.move_cmd == "pack":
+            packed = move.pack(settings, args.out, while_running=args.while_running)
+            if args.path_file:  # scripts/move-out.sh reads where it went
+                Path(args.path_file).write_text(f"{packed.path}\n")
+            extra = {move.KEY: "secret.key", move.ENV: "your settings (.env)"}
+            print(f"Saved the move file: {packed.path} ({move.size_text(packed.size)})")
+            print(f"  In it: {move.what_moved(packed.manifest['counts'])}"
+                  + "".join(f", {extra[f]}" for f in extra if f in packed.manifest["files"]) + ".")
+            print("  It's locked with your passphrase. Don't keep the passphrase next to the file.")
+            return 0
+        if args.move_cmd == "info":
+            about = move.info(args.file)  # every text in it was checked, so a made-up file can't hide codes here
+            print(f"Next Box move file: {args.file} ({move.size_text(about['size'])})")
+            print(f"  Made by Next Box {about['app_version']} on {about['made_on']}, "
+                  f"on the PC called {about['from_host']}" + (f" (time zone {about['tz']})." if about["tz"] else "."))
+            if about["newer"]:
+                print(f"  This copy is Next Box {app_version()}, which is older. {move.UPDATE_FIRST}")
+                return move.NewerFile.code
+            print(f"  This copy (Next Box {app_version()}) can open it.")
+            return 0
+        if args.move_cmd == "unpack":
+            if args.port is not None and not 1 <= args.port <= 65535:
+                print("--port takes a number from 1 to 65535, e.g. --port 8788", file=sys.stderr)
+                return 2
+            result = move.unpack(settings, args.file, replace=args.replace, replace_newer=args.replace_newer,
+                                 port=args.port)
+            print()
+            for line in move.summary(result, with_next_steps=not args.no_next_steps):
+                print(line)
+            return 0
+        if args.move_cmd == "address":  # scripts: this PC's address on the home network, and Next Box's port
+            print(f"{move.lan_ip()} {settings.port}")
+            return 0
+        if args.move_cmd == "next-steps":
+            ha, public = move.facts_here(settings)
+            for line in move.next_steps(settings.port, ha, public):
+                print(line)
+            return 0
+        # marker (scripts/move-out.sh and install.sh)
+        if args.marker_cmd == "set":
+            move.set_marker(settings.data_dir, file=args.file, off=args.off)
+            return 0
+        if args.marker_cmd == "clear":
+            move.clear_marker(settings.data_dir)
+            return 0
+        marker = move.read_marker(settings.data_dir)
+        if marker is None:
+            return 1
+        if args.date:
+            print(marker["moved_at"][:10])
+        elif args.name:
+            print(marker["file"])
+        elif args.turned_off:
+            print(" ".join(marker["turned_off"]))
+        else:
+            print(json.dumps(marker))
+        return 0
+    except move.MoveError as exc:
+        print(exc, file=sys.stderr)
+        return exc.code  # scripts/move-in.sh says what to do for each kind (movecheck's exit codes)
+    except KeyboardInterrupt:
+        print("\nStopped.", file=sys.stderr)
+        return 130
+    except OSError as exc:  # a full disk, a folder that can't be written: say which, plainly
+        where = f" ({exc.filename})" if getattr(exc, "filename", None) else ""
+        print(f"Couldn't finish: {exc.strerror or type(exc).__name__}{where}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # its kind only: a database error's words could quote stored data
+        if type(exc).__module__.split(".")[0] in ("sqlalchemy", "psycopg", "sqlite3"):
+            print(move.UNREADABLE, file=sys.stderr)
+        else:
+            print(f"Couldn't finish ({type(exc).__name__}).", file=sys.stderr)
+        return 1
+
+
+# Still allowed once Next Box has moved to another PC: none of them serves, prints or changes anything.
+WHEN_MOVED_AWAY = {"move", "doctor", "db", "status", "printed"}
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="nextbox", description="Your to-do list on label printers and paper")
     ap.add_argument("--version", action="version", version=f"Next Box {app_version()}")
@@ -259,6 +342,33 @@ def main(argv: list[str] | None = None) -> int:
     iv.add_argument("--note", default="", help="who it's for, e.g. 'Sam from work'")
     pn = sub.add_parser("prune", help="delete tickets and scans older than N days")
     pn.add_argument("--days", type=int, default=None)
+    mv = sub.add_parser("move", help="move Next Box to another PC (README: Move Next Box to another PC)")
+    mvs = mv.add_subparsers(dest="move_cmd", required=True)
+    pk = mvs.add_parser("pack", help="on the old PC: make one locked file with everything (asks for a passphrase)")
+    pk.add_argument("--out", type=Path, help="a folder or file name for it (default: your home folder)")
+    pk.add_argument("--while-running", action="store_true",
+                    help="copy while Next Box runs (consistent, but what changes later stays behind)")
+    pk.add_argument("--path-file", help=argparse.SUPPRESS)
+    mi = mvs.add_parser("info", help="which Next Box made a move file, when and on which PC (no passphrase)")
+    mi.add_argument("file", type=Path)
+    mu = mvs.add_parser("unpack", help="on the new PC: put a move file's Next Box here")
+    mu.add_argument("file", type=Path)
+    mu.add_argument("--replace", action="store_true",
+                    help="put it in place of the Next Box already on this PC (that one is kept in backups/)")
+    mu.add_argument("--replace-newer", action="store_true",
+                    help="even when the Next Box on this PC has newer lists than the file (only for a test copy)")
+    mu.add_argument("--port", type=int, help="run Next Box on this port here (NEXTBOX_PORT in .env)")
+    mu.add_argument("--no-next-steps", action="store_true", help=argparse.SUPPRESS)
+    mvs.add_parser("next-steps", help="after a move: the phone address, Home Assistant's new address, the tunnel")
+    mvs.add_parser("address", help=argparse.SUPPRESS)  # scripts: "<this PC's IP> <port>"
+    mk = mvs.add_parser("marker", help="the MOVED-AWAY marker that keeps Next Box off here (scripts/move-out.sh)")
+    mk.add_argument("marker_cmd", choices=["set", "show", "clear"])
+    mk.add_argument("--file", help="set: the move file's name")
+    mk.add_argument("--off", action="append", default=[], choices=["service", "tray", "cloudflared"],
+                    help="set: something move-out.sh turned off (--undo turns it back on)")
+    mk.add_argument("--date", action="store_true", help="show: only the day it moved")
+    mk.add_argument("--name", action="store_true", help="show: only the move file's name")
+    mk.add_argument("--turned-off", action="store_true", help="show: only what was turned off")
     us = sub.add_parser("user", help="manage web sign-in accounts")
     us.add_argument("action", choices=["add", "passwd", "role", "enable", "disable", "remove", "list",
                                        "protect", "unprotect", "owner"])
@@ -269,6 +379,17 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     os.umask(0o077)  # files Next Box writes stay private to this desktop user
     settings = load_settings()
+    if args.cmd == "move":
+        return _move(settings, args)
+    if args.cmd not in WHEN_MOVED_AWAY:
+        from .move import MOVED_EXIT, moved_away_message, read_marker
+        marker = read_marker(settings.data_dir)
+        if marker is not None:  # this PC's copy is old now: nothing may serve, print or change it
+            message = moved_away_message(marker, serving=args.cmd == "serve")
+            print(message, file=sys.stderr)
+            if args.cmd == "clip":  # the hotkey has no terminal to show it in
+                _notify("Next Box", message)
+            return MOVED_EXIT
     if args.cmd == "doctor" and (args.doctor_json or args.json):
         # Before anything opens the database: a database that's down is then one of its answers (with its
         # fix), and the status icon still gets one JSON object, not a traceback.

@@ -511,6 +511,20 @@ def build_practice(data_dir: Path, seed: int = 7) -> dict:
 
 
 # --- moving to another database ----------------------------------------------------------------
+# Rows at a time from a table with pictures in it (journal photos are up to about 2 MB each). Measured with 70 x 2 MB
+# photos on PostgreSQL: 500 at a time peaked at 496 MB for `nextbox move pack`, 5 at a time at 205 MB (scrypt's own
+# 128 MiB included), and fewer didn't help.
+BINARY_BATCH = 5
+
+
+def batch_for(table, batch: int) -> int:
+    """How many rows to hold at once: few for tables with pictures (journal, tickets), so a copy of a
+    database full of journal photos never needs much memory."""
+    if any(isinstance(col.type, db.LargeBinary) for col in table.columns):
+        return max(1, min(batch, BINARY_BATCH))
+    return batch
+
+
 def copy_database(source_url: str, target_url: str, batch: int = 500) -> dict:
     """Copy every row from one database to another (e.g. the SQLite file into a new, empty
     PostgreSQL database). The target must be empty, so nothing is ever overwritten."""
@@ -522,11 +536,16 @@ def copy_database(source_url: str, target_url: str, batch: int = 500) -> dict:
         raise RuntimeError(f"the target database isn't empty (it has {', '.join(busy)}); "
                            "nothing was copied")
     counts = {}
+    # PostgreSQL: every table is read from one snapshot (REPEATABLE READ), so a copy taken while Next Box
+    # runs still fits together, and rows stream from the server instead of all sitting in memory.
     with src.connect() as s_conn, dst.begin() as d_conn:  # all or nothing
+        if src.dialect.name == "postgresql":
+            s_conn = s_conn.execution_options(isolation_level="REPEATABLE READ")
         for table in db.metadata.sorted_tables:
             n = 0
-            result = s_conn.execute(select(table)).mappings()
-            while rows := result.fetchmany(batch):
+            size = batch_for(table, batch)
+            result = s_conn.execute(select(table).execution_options(stream_results=True, yield_per=size)).mappings()
+            while rows := result.fetchmany(size):
                 d_conn.execute(insert(table), [dict(r) for r in rows])
                 n += len(rows)
             counts[table.name] = n

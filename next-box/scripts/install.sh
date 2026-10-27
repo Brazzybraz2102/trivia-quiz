@@ -8,16 +8,24 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$HERE"
 
-python3 -m venv .venv
-.venv/bin/pip install -q --upgrade pip setuptools
-# constraints.txt pins every package to the versions this release was tested with.
-# heic: iPhone HEIC photos on Snap. Optional: if it can't be installed here, everything else still is.
-if ! .venv/bin/pip install -q -c constraints.txt -e '.[dev,postgres,heic]'; then
-  echo "Couldn't add iPhone (HEIC) photos, so installing without them: people send JPEGs instead."
-  .venv/bin/pip install -q -c constraints.txt -e '.[dev,postgres]'
+# Python 3.11 or newer (the system's python3, or python3.11+ beside it), then .venv and the packages.
+source scripts/python.sh
+if ! pick_python; then
+  python_help
+  exit 1
 fi
-echo "Checking everything works (about 3 minutes)..."
-.venv/bin/python -m pytest -q
+install_packages || exit 1
+# Moved to another PC with scripts/move-out.sh (the MOVED-AWAY marker in the data folder)? Then the code is
+# updated, but Next Box stays off here, so phones and Home Assistant never get this PC's old lists.
+MOVED=no
+if .venv/bin/nextbox move marker show >/dev/null 2>&1; then
+  MOVED=yes
+  MOVED_ON="$(.venv/bin/nextbox move marker show --date 2>/dev/null || true)"
+fi
+if [[ $MOVED == no ]]; then
+  echo "Checking everything works (about 3 minutes)..."
+  .venv/bin/python -m pytest -q
+fi
 
 # Labels draw emoji, Chinese/Japanese and Hindi with these fonts. Without them those characters are
 # left off the label (never printed as empty boxes), so this only suggests; it doesn't install anything.
@@ -78,6 +86,8 @@ Environment=NEXTBOX_ENV_FILE=%h/.local/share/nextbox/app/.env
 ExecStart=%h/.local/share/nextbox/app/.venv/bin/nextbox serve
 Restart=always
 RestartSec=5
+# 78: Next Box was moved to another PC (scripts/move-out.sh), so it refuses to start: don't keep retrying.
+RestartPreventExitStatus=78
 UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes
@@ -89,6 +99,14 @@ WantedBy=default.target
 EOF
 
 systemctl --user daemon-reload
+if [[ $MOVED == yes ]]; then
+  systemctl --user disable --now nextbox.service 2>/dev/null || true
+  echo
+  echo "Next Box was moved to another PC${MOVED_ON:+ on $MOVED_ON}, so it stays off on this one"
+  echo "(phones and Home Assistant use the new PC). The code here is updated anyway."
+  echo "To bring Next Box back to this PC instead: scripts/move-out.sh --undo"
+  exit 0
+fi
 systemctl --user enable --now nextbox.service
 systemctl --user restart nextbox.service
 if ! loginctl show-user "$USER" -p Linger | grep -q yes; then
@@ -97,15 +115,22 @@ if ! loginctl show-user "$USER" -p Linger | grep -q yes; then
 fi
 sleep 2
 systemctl --user --no-pager status nextbox.service | head -5
-IP="$(hostname -I | awk '{print $1}')"
+# This PC's address on the home network (the route's own, not a Docker or VPN one) and the port from .env.
+ADDR="$(.venv/bin/nextbox move address 2>/dev/null || true)"
+IP="${ADDR% *}"
+PORT="${ADDR##* }"
+if [[ -z "$ADDR" ]]; then
+  IP="<this PC's IP>"
+  PORT=8787
+fi
 echo
 if ! systemctl --user is-active --quiet nextbox.service; then
   echo "The service didn't start. See why with: journalctl --user -u nextbox -n 20 --no-pager"
 fi
-echo "On this computer: http://localhost:8787/app"
-echo "On your phone (same Wi-Fi): http://$IP:8787/app"
+echo "On this computer: http://localhost:$PORT/app"
+echo "On your phone (same Wi-Fi): http://$IP:$PORT/app"
 if command -v ufw >/dev/null && sudo -n ufw status 2>/dev/null | grep -q "Status: active"; then
-  echo "Your firewall is on. To let phones in: sudo ufw allow from 192.168.0.0/16 to any port 8787 proto tcp"
+  echo "Your firewall is on. To let phones in: sudo ufw allow from 192.168.0.0/16 to any port $PORT proto tcp"
 fi
 echo "Check everything any time with: .venv/bin/nextbox doctor"
 if .venv/bin/nextbox user list | grep -q '(no accounts)'; then
