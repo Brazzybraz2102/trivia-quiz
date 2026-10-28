@@ -84,7 +84,7 @@ DEFAULT_PORT = 8787
 WRONG = "That passphrase didn't open this move file."
 FORGOT = ("Forgot it? On the PC the file was made on, run ~/.local/share/nextbox/app/scripts/move-out.sh again: it makes a new move file "
           "with a new passphrase.")
-UNREADABLE = "Couldn't read the database. Check it with: .venv/bin/nextbox doctor"
+UNREADABLE = "Couldn't read the database. Check it with: ~/.local/share/nextbox/app/.venv/bin/nextbox doctor"
 RUNNING = ("Stop Next Box first so nothing changes after the copy: systemctl --user stop nextbox "
            "(scripts/move-out.sh does this for you).")
 RUNNING_HERE = ("Next Box is running on this PC. Stop it first: systemctl --user stop nextbox "
@@ -889,8 +889,13 @@ def what_moved(c: dict) -> str:
 
 def home_path(path) -> str:
     """A path as Mike would type it from his home folder: ~/next-box rather than /home/mike/next-box."""
-    path, home = str(path), str(Path.home())
-    return "~" + path[len(home):] if path == home or path.startswith(home + "/") else path
+    import shlex
+    path, home = str(path), str(Path.home()).rstrip("/")
+    if path == home:
+        return "~"
+    if home and path.startswith(home + "/"):
+        return "~/" + shlex.quote(path[len(home) + 1:])  # quoted, so a space in a folder name pastes
+    return shlex.quote(path)
 
 
 def lan_ip() -> str:
@@ -942,7 +947,7 @@ def summary(result: Unpacked, with_next_steps: bool = True, ip: str | None = Non
         lines.append("  The move file had no .env, so this PC's own is kept (scripts/install.sh makes one).")
     if m.get("db_was") == "postgresql":
         lines.append("  It was PostgreSQL there; here it's the SQLite file in the data folder "
-                     "(scripts/setup-postgres.sh moves it to PostgreSQL again).")
+                     f"({home_path(PROJECT_DIR)}/scripts/setup-postgres.sh moves it to PostgreSQL again).")
     if result.set_aside:
         lines.append(f"  What was here before is kept in {result.set_aside}")
     if result.was_away is not None:

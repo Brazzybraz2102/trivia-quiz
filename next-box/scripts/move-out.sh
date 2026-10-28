@@ -8,7 +8,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$HERE"
-S="${HERE/#"$HOME"/\~}/scripts"  # how hints name this folder's scripts: Mike types them from his home folder
+S="~/.local/share/nextbox/app/scripts"  # how hints name these scripts: the app link every install has (no spaces)
 NB="$HERE/.venv/bin/nextbox"
 AUTOSTART="$HOME/.config/autostart/nextbox-tray.desktop"
 BRANCH=claude/ticket-todoist-printer-nldz8a

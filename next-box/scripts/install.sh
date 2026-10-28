@@ -22,18 +22,24 @@ if .venv/bin/nextbox move marker show >/dev/null 2>&1; then
   MOVED=yes
   MOVED_ON="$(.venv/bin/nextbox move marker show --date 2>/dev/null || true)"
 fi
-S="${HERE/#"$HOME"/\~}/scripts"  # how hints name this folder's scripts, typed from the home folder
+# How hints name this folder's scripts, typed from the home folder (quoted, so a space in a folder name pastes).
+if [[ "$HERE" == "$HOME"/* ]]; then printf -v S '~/%q/scripts' "${HERE#"$HOME"/}"; else printf -v S '%q/scripts' "$HERE"; fi
 if [[ $MOVED == no ]]; then
   # Asked now, not after the checks: a password prompt minutes later is easy to miss (and sudo's wait runs out).
   if command -v loginctl >/dev/null && ! loginctl show-user "$USER" -p Linger 2>/dev/null | grep -q yes; then
     echo "Enabling linger so Next Box starts at boot without a login (may ask for your password)."
-    sudo loginctl enable-linger "$USER"
+    sudo loginctl enable-linger "$USER" \
+      || echo "Couldn't turn that on, so Next Box starts only once you log in. Later: sudo loginctl enable-linger $USER"
   fi
   echo "Checking everything works (about 5-10 minutes)..."
   if ! .venv/bin/python -m pytest -q; then
     echo
-    echo "Some checks failed (the lines above), so Next Box wasn't restarted: it keeps running as it was."
-    echo "Run the same command again. If it fails the same way, send Claude the lines above."
+    if systemctl --user is-active --quiet nextbox.service 2>/dev/null; then
+      echo "Some checks failed (the lines above), so Next Box wasn't restarted: it keeps running as it was."
+    else
+      echo "Some checks failed (the lines above), so Next Box wasn't started."
+    fi
+    echo "Run $S/install.sh again. If it fails the same way, send Claude the lines above."
     exit 1
   fi
 fi
@@ -139,9 +145,9 @@ echo "On your phone (same Wi-Fi): http://$IP:$PORT/app"
 if command -v ufw >/dev/null && sudo -n ufw status 2>/dev/null | grep -q "Status: active"; then
   echo "Your firewall is on. To let phones in: sudo ufw allow from 192.168.0.0/16 to any port $PORT proto tcp"
 fi
-echo "Check everything any time with: .venv/bin/nextbox doctor"
+echo "Check everything any time with: ${S%/scripts}/.venv/bin/nextbox doctor"
 if .venv/bin/nextbox user list | grep -q '(no accounts)'; then
-  echo "No sign-in accounts yet. Create yours with: .venv/bin/nextbox user add <name>"
+  echo "No sign-in accounts yet. Create yours with: ${S%/scripts}/.venv/bin/nextbox user add <name>"
 fi
 # The top-bar status square is optional, so it's never added here. Once added, it updates itself.
 if [[ -n "${XDG_CURRENT_DESKTOP:-}${DISPLAY:-}${WAYLAND_DISPLAY:-}" && ! -f "$HOME/.config/autostart/nextbox-tray.desktop" ]]; then

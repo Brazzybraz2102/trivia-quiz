@@ -37,7 +37,7 @@ DAMAGED = "This move file is damaged or incomplete. Copy it again."
 EMPTY = "The move file is empty: the copy didn't finish. Copy it again."
 NOT_A_MOVE_FILE = "This isn't a Next Box move file."
 UPDATE_FIRST = ("Get the newest Next Box code first (README \"Move Next Box to another PC\", step 1; "
-                "where Next Box is already installed: scripts/update.sh)")
+                "where Next Box is already installed: ~/.local/share/nextbox/app/scripts/update.sh)")
 
 # Exit codes (also `nextbox move unpack`'s): what scripts/move-in.sh tells Mike to do.
 GO, FAILED, NEWER_FILE, BAD_FILE, OTHER_ZONE, ALREADY_HERE, HAS_DATA, NEWER_HERE = 0, 1, 3, 4, 5, 6, 7, 8

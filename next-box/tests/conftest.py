@@ -114,6 +114,14 @@ def no_real_printer(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_networks(monkeypatch):
+    """Doctor's printer hint depends on this PC's own networks (`ip -4 -o addr`). Tests see none, so they
+    pass the same on every PC (install.sh runs them on Mike's), unless a test gives its own."""
+    from nextbox import doctor
+    monkeypatch.setattr(doctor, "_networks", lambda: [])
+
+
+@pytest.fixture(autouse=True)
 def no_desktop_notifications(monkeypatch):
     """install.sh runs these tests on Mike's desktop: never pop up a real notification (notify-send) there.
     Tests that want to see what would have been shown read this list."""

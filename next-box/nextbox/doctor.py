@@ -70,7 +70,7 @@ def printer_hint(address: str, networks: list | None = None) -> str:
         ip = ipaddress.ip_address(printer._host_port(address)[0])
     except ValueError:
         ip = None
-    nets = (_networks() if networks is None else networks) if ip else []
+    nets = [n for n in (_networks() if networks is None else networks) if n.version == ip.version] if ip else []
     if ip and any(ip in net for net in nets):
         return (f"this PC is on the printer's network, so check the printer is switched on and awake, and still at "
                 f"{ip}: hold its info (i) button to print its settings. If its address changed, open Admin → "

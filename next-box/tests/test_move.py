@@ -689,7 +689,8 @@ def test_a_database_that_cant_be_read_says_so_before_the_passphrase(old, tmp_pat
     ask = asks(PASS, PASS)
     with pytest.raises(move.MoveError) as err:
         move.pack(old["settings"], tmp_path, ask=ask, answers=no, env_file=old["env"], say=lambda *_: None)
-    assert str(err.value) == "Couldn't read the database. Check it with: .venv/bin/nextbox doctor"
+    assert str(err.value) == ("Couldn't read the database. Check it with: "
+                              "~/.local/share/nextbox/app/.venv/bin/nextbox doctor")
     assert not ask.asked and not list(tmp_path.glob("*.nbmove"))
     monkeypatch.setenv("NEXTBOX_DATA_DIR", str(old["data"]))
     monkeypatch.setattr(move, "server_answers", no)
@@ -1592,3 +1593,31 @@ def test_doctor_checks_each_printer_address_once(tmp_path, monkeypatch, capsys):
     doctor._printer_checks(Settings, lambda mark, text, fix="": said.append((mark, text)))
     assert knocks == ["192.168.68.110", "192.168.68.120"]
     assert ("✗", "printer Label printer / Brother QL-1110NWB (192.168.68.110) does not answer") in said
+
+
+def test_hint_paths_paste_even_with_a_space_in_a_folder_name(tmp_path):
+    """Mike's old app lived in ~/Desktop/"Custom Projects": a hint has to paste and run as it's shown."""
+    home = tmp_path / "home"
+    here = home / "Desktop" / "custom projects" / "next-box"
+    (here / "scripts").mkdir(parents=True)
+    probe = here / "scripts" / "probe.sh"
+    script = (SCRIPTS / "install.sh").read_text()
+    line = next(x for x in script.splitlines() if x.startswith("if [[ \"$HERE\" == \"$HOME\"/* ]]"))
+    probe.write_text(f'HERE="{here}"\n{line}\necho "$S"\n')
+    shown = subprocess.run(["bash", str(probe)], capture_output=True, text=True, env={"HOME": str(home)}).stdout.strip()
+    assert shown == "~/Desktop/custom\\ projects/next-box/scripts"
+    ran = subprocess.run(["bash", "-c", f"ls -d {shown}"], capture_output=True, text=True, env={"HOME": str(home)})
+    assert ran.returncode == 0, ran.stderr  # the shown path, pasted as is, works
+    assert (SCRIPTS / "move-in.sh").read_text().count(line) == 1
+    elsewhere = subprocess.run(["bash", "-c", f'HERE=/opt/next\\ box; HOME=/home/mike; {line}; echo "$S"'],
+                               capture_output=True, text=True).stdout.strip()
+    assert elsewhere == "/opt/next\\ box/scripts"
+    import os as _os
+    from nextbox import move
+    old_home = _os.environ.get("HOME")
+    try:
+        _os.environ["HOME"] = str(home)
+        assert move.home_path(here) == "~/'Desktop/custom projects/next-box'"
+        assert move.home_path(home / "next-box") == "~/next-box" and move.home_path(home) == "~"
+    finally:
+        _os.environ["HOME"] = old_home or ""

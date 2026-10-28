@@ -14,7 +14,8 @@ set -euo pipefail
 START="$PWD"  # a move file given as a path from the folder Mike is in
 HERE="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$HERE"
-S="${HERE/#"$HOME"/\~}/scripts"  # how hints name this folder's scripts: Mike types them from his home folder
+# How hints name this folder's scripts, typed from the home folder (quoted, so a space in a folder name pastes).
+if [[ "$HERE" == "$HOME"/* ]]; then printf -v S '~/%q/scripts' "${HERE#"$HOME"/}"; else printf -v S '%q/scripts' "$HERE"; fi
 source scripts/python.sh
 DATA="${NEXTBOX_DATA_DIR:-$HOME/.local/share/nextbox}"
 
@@ -98,7 +99,7 @@ if [[ -f "$DATA/MOVED-AWAY" ]]; then
     stop "Next Box moved away from this PC before. There are two ways to bring it back:" \
          "- Changed your mind before using the new PC? Then: $S/move-out.sh --undo" \
          "  (it turns Next Box on here again, with the lists it had on moving day)." \
-         "- Moving back with a newer move file (made on the other PC with $S/move-out.sh)? Then:" \
+         "- Moving back with a newer move file (made on the other PC with ~/.local/share/nextbox/app/scripts/move-out.sh)? Then:" \
          "  $S/move-in.sh $SHOW --replace" \
          "  (this PC's old lists are kept in $DATA/backups/)."
   fi
@@ -297,7 +298,7 @@ fi
 echo
 if ! scripts/install.sh; then
   stop "Your lists and accounts are in place, but the install didn't finish." \
-       "Fix what it says above, then run: $S/install.sh"
+       "Do what it says above."
 fi
 if [[ " $TURNED_OFF " == *" cloudflared "* ]]; then
   echo "Turning the internet tunnel back on here (it may ask for this PC's password)."
