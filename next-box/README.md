@@ -496,7 +496,8 @@ Box computer run:
 ~/.local/share/nextbox/app/scripts/update.sh
 ```
 It downloads the newest Next Box into the same folder, updates the packages in `.venv`, runs the
-tests (about 3 minutes) and restarts the service. It keeps `.env` (your settings and keys) and the
+tests (about 5-10 minutes) and restarts the service. If a check fails, it says so and leaves Next Box
+running as it was: run it again, and if it fails the same way, send Claude the lines it shows. It keeps `.env` (your settings and keys) and the
 data folder (`~/.local/share/nextbox`: accounts, lists, journals, tickets and `secret.key`). Then
 check it with `~/.local/share/nextbox/app/.venv/bin/nextbox doctor`, whose first line is the version
 you now have (`nextbox --version` says it too).
@@ -508,7 +509,9 @@ PC until you say so, and you can undo it. About 20 minutes.
 
 The new PC needs Linux with Python 3.11 or newer (Ubuntu 24.04 or Debian 12 is easiest), the same
 network as your printer and Home Assistant, the same time zone as the old PC, and you logged in as
-yourself (on its screen, or with ssh). Step 1 checks all of this before anything changes.
+yourself (on its screen, or with ssh). Step 1 checks all of this before anything changes, except the
+printer. Test that on the new PC with your printer's address:
+`timeout 3 bash -c '</dev/tcp/192.168.68.110/9100' && echo printer OK || echo "printer NOT reachable"`.
 
 ### 1. On the new PC: get the code and check the PC
 Paste this one line (on Fedora, use `sudo dnf install -y git python3` for the first part):
@@ -550,8 +553,10 @@ With a USB stick instead: copy the file into the new PC's home folder, then:
 ```bash
 ~/next-box/scripts/move-in.sh ~/nextbox-move-2026-10-27.nbmove
 ```
-It checks the file first (seconds), asks for the passphrase, puts everything in place, installs the
-service (the checks take about 3 minutes) and ends with what's left to do. Nothing is changed until the
+It checks the file first (seconds), sets up Next Box's Python packages (a minute or two), asks for the
+passphrase, puts everything in place, asks for this PC's password (so Next Box starts with the PC), runs
+the checks (about 5-10 minutes) and ends with a question about the internet address and what's left to
+do. Stay nearby until that last question. Nothing is changed until the
 file is unlocked and checked.
 - Run it again with the same file? It says "already in place" and changes nothing. If the first run
   stopped before the install finished, it finishes the setup instead.

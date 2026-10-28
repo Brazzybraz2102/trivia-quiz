@@ -82,7 +82,7 @@ EXAMPLE_PRINTER_IP = "192.168.1.50"
 DEFAULT_PORT = 8787
 
 WRONG = "That passphrase didn't open this move file."
-FORGOT = ("Forgot it? On the PC the file was made on, run scripts/move-out.sh again: it makes a new move file "
+FORGOT = ("Forgot it? On the PC the file was made on, run ~/.local/share/nextbox/app/scripts/move-out.sh again: it makes a new move file "
           "with a new passphrase.")
 UNREADABLE = "Couldn't read the database. Check it with: .venv/bin/nextbox doctor"
 RUNNING = ("Stop Next Box first so nothing changes after the copy: systemctl --user stop nextbox "
@@ -887,6 +887,12 @@ def what_moved(c: dict) -> str:
                       _n(c.get("printers", 0), "printer"), tasks, _n(c.get("journal_pages", 0), "journal page")])
 
 
+def home_path(path) -> str:
+    """A path as Mike would type it from his home folder: ~/next-box rather than /home/mike/next-box."""
+    path, home = str(path), str(Path.home())
+    return "~" + path[len(home):] if path == home or path.startswith(home + "/") else path
+
+
 def lan_ip() -> str:
     from .doctor import _lan_ip
     return _lan_ip()
@@ -904,7 +910,8 @@ def next_steps(port: int, home_assistant: bool, public_url: bool, ip: str | None
         lines += [f"The internet tunnel is on again here. Check it with: curl {tunnel_here.rstrip('/')}/version"]
     elif public_url:
         lines += ["Your internet address (NEXTBOX_PUBLIC_URL) has to move here too: the old PC's tunnel is off now.",
-                  "Run scripts/go-online.sh on this PC (README \"Move Next Box to another PC\", step 4)."]
+                  f"Run {home_path(PROJECT_DIR)}/scripts/go-online.sh on this PC (README \"Move Next Box to another PC\", "
+                  "step 4)."]
         if int(port) != DEFAULT_PORT:
             lines += [f"Next Box uses port {port} here, so in the Cloudflare dashboard set your public hostname's "
                       f"service to: http://localhost:{port}"]
@@ -948,10 +955,10 @@ def summary(result: Unpacked, with_next_steps: bool = True, ip: str | None = Non
             elif ok:
                 lines.append(f"  ✓ {name} ({address}) answers.")
             else:
-                lines.append(f"  ✗ {name} ({address}) doesn't answer. This PC may not be on the same network as "
-                             "the printer.")
-                lines.append("    Connect this PC to the same router or Wi-Fi as the printer and check the printer "
-                             "is on, then: .venv/bin/nextbox doctor")
+                from .doctor import printer_hint
+                hint = printer_hint(address)
+                lines.append(f"  ✗ {name} ({address}) doesn't answer.")
+                lines.append(f"    → {hint[0].upper()}{hint[1:]}. Then check again: {home_path(PROJECT_DIR)}/.venv/bin/nextbox doctor")
     if with_next_steps:
         lines.append("Next:")
         lines += ["  " + line for line in next_steps(result.port, result.home_assistant, result.public_url, ip)]
@@ -1017,7 +1024,7 @@ def moved_on(marker: dict) -> str:
     return f" on {day}" if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else ""
 
 
-UNDO_HINT = "To bring it back to this PC: scripts/move-out.sh --undo"
+UNDO_HINT = "To bring it back to this PC: ~/.local/share/nextbox/app/scripts/move-out.sh --undo"
 
 
 def moved_away_message(marker: dict, serving: bool = True) -> str:

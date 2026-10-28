@@ -8,6 +8,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$HERE"
+S="${HERE/#"$HOME"/\~}/scripts"  # how hints name this folder's scripts: Mike types them from his home folder
 NB="$HERE/.venv/bin/nextbox"
 AUTOSTART="$HOME/.config/autostart/nextbox-tray.desktop"
 BRANCH=claude/ticket-todoist-printer-nldz8a
@@ -37,9 +38,9 @@ undo() {
   off="$("$NB" move marker show --turned-off)"
   echo "This turns Next Box back on here, with the lists it had when it moved${day:+ ($day)}."
   echo "It's for when Next Box on the new PC wasn't used yet: what was added there doesn't come back here."
-  echo "  Used the new PC already? Move back instead: run scripts/move-out.sh on the new PC, then here:"
+  echo "  Used the new PC already? Move back instead: run ~/next-box/scripts/move-out.sh on the new PC, then here:"
   echo "  ~/.local/share/nextbox/app/scripts/move-in.sh <the file it made> --replace"
-  echo "Ran move-in.sh on the new PC? First switch Next Box off there for good: scripts/move-out.sh there"
+  echo "Ran move-in.sh on the new PC? First switch Next Box off there for good: ~/next-box/scripts/move-out.sh there"
   echo "(delete the file it makes), or there would be two copies."
   read -r -p "Type UNDO to turn it back on here: " answer || answer=""
   if [[ "${answer^^}" != "UNDO" ]]; then
@@ -173,7 +174,7 @@ case "${1:-}" in
   "") ;;
   --undo) undo; exit $? ;;
   --forget) forget; exit $? ;;
-  *) echo "Usage: scripts/move-out.sh [--undo | --forget]"; exit 2 ;;
+  *) echo "Usage: $S/move-out.sh [--undo | --forget]"; exit 2 ;;
 esac
 
 if "$NB" move marker show >/dev/null 2>&1; then
@@ -183,13 +184,13 @@ if "$NB" move marker show >/dev/null 2>&1; then
   echo "Next Box already moved away from this PC${DAY:+ on $DAY}${NAME:+ (file $NAME)}."
   echo "Its lists here are from that day: anything added on the new PC since isn't in them."
   echo "Make a new move file only if the first one or its passphrase is lost, and Next Box on the new PC"
-  echo "wasn't used yet. (To use Next Box on this PC again instead: scripts/move-out.sh --undo)"
+  echo "wasn't used yet. (To use Next Box on this PC again instead: $S/move-out.sh --undo)"
   read -r -p "Type MOVE to make a new move file anyway: " ANSWER || ANSWER=""
 else
   echo "This moves Next Box off this PC ($(hostname 2>/dev/null || echo "this computer")):"
   echo "  1. Next Box goes offline here, and stays off (also after a restart or an update)."
   echo "  2. It makes one locked file with everything in it, for the new PC. You pick its passphrase."
-  echo "  3. Nothing is deleted. Changed your mind later? scripts/move-out.sh --undo puts it back."
+  echo "  3. Nothing is deleted. Changed your mind later? $S/move-out.sh --undo puts it back."
   read -r -p "Type MOVE to go on: " ANSWER || ANSWER=""
 fi
 if [[ "${ANSWER^^}" != "MOVE" ]]; then
@@ -268,11 +269,12 @@ if systemctl is-active --quiet cloudflared 2>/dev/null || systemctl is-enabled -
     echo "     delete only $PUBLIC_HOST (leave the others)."
     echo "  2. On the new PC, Next Box gets its own tunnel: in the same place, Create a tunnel (name it after the"
     echo "     new PC), add $PUBLIC_HOST → HTTP → localhost:8787 to it, and paste its install command"
-    echo "     into scripts/go-online.sh there."
+    echo "     into ~/next-box/scripts/go-online.sh there."
   else
     echo "(It may ask for this PC's password.)"
     if sudo systemctl disable --now cloudflared; then
       "$NB" move marker set --off cloudflared
+      echo "The tunnel is off here."
     else
       echo "Couldn't turn it off. Please run: sudo systemctl disable --now cloudflared"
     fi
@@ -312,4 +314,4 @@ else
 fi
 echo "  $GET && ~/next-box/scripts/move-in.sh ~/$(basename "$FILE")$REPLACE"
 echo "(The new PC needs git for it: sudo apt install -y git, or on Fedora: sudo dnf install -y git)"
-echo "Changed your mind? scripts/move-out.sh --undo turns Next Box back on here."
+echo "Changed your mind? $S/move-out.sh --undo turns Next Box back on here."

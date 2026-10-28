@@ -22,9 +22,20 @@ if .venv/bin/nextbox move marker show >/dev/null 2>&1; then
   MOVED=yes
   MOVED_ON="$(.venv/bin/nextbox move marker show --date 2>/dev/null || true)"
 fi
+S="${HERE/#"$HOME"/\~}/scripts"  # how hints name this folder's scripts, typed from the home folder
 if [[ $MOVED == no ]]; then
-  echo "Checking everything works (about 3 minutes)..."
-  .venv/bin/python -m pytest -q
+  # Asked now, not after the checks: a password prompt minutes later is easy to miss (and sudo's wait runs out).
+  if command -v loginctl >/dev/null && ! loginctl show-user "$USER" -p Linger 2>/dev/null | grep -q yes; then
+    echo "Enabling linger so Next Box starts at boot without a login (may ask for your password)."
+    sudo loginctl enable-linger "$USER"
+  fi
+  echo "Checking everything works (about 5-10 minutes)..."
+  if ! .venv/bin/python -m pytest -q; then
+    echo
+    echo "Some checks failed (the lines above), so Next Box wasn't restarted: it keeps running as it was."
+    echo "Run the same command again. If it fails the same way, send Claude the lines above."
+    exit 1
+  fi
 fi
 
 # Labels draw emoji, Chinese/Japanese and Hindi with these fonts. Without them those characters are
@@ -104,15 +115,11 @@ if [[ $MOVED == yes ]]; then
   echo
   echo "Next Box was moved to another PC${MOVED_ON:+ on $MOVED_ON}, so it stays off on this one"
   echo "(phones and Home Assistant use the new PC). The code here is updated anyway."
-  echo "To bring Next Box back to this PC instead: scripts/move-out.sh --undo"
+  echo "To bring Next Box back to this PC instead: $S/move-out.sh --undo"
   exit 0
 fi
 systemctl --user enable --now nextbox.service
 systemctl --user restart nextbox.service
-if ! loginctl show-user "$USER" -p Linger | grep -q yes; then
-  echo "Enabling linger so Next Box starts at boot without a login (may ask for your password)."
-  sudo loginctl enable-linger "$USER"
-fi
 sleep 2
 systemctl --user --no-pager status nextbox.service | head -5
 # This PC's address on the home network (the route's own, not a Docker or VPN one) and the port from .env.
@@ -138,5 +145,5 @@ if .venv/bin/nextbox user list | grep -q '(no accounts)'; then
 fi
 # The top-bar status square is optional, so it's never added here. Once added, it updates itself.
 if [[ -n "${XDG_CURRENT_DESKTOP:-}${DISPLAY:-}${WAYLAND_DISPLAY:-}" && ! -f "$HOME/.config/autostart/nextbox-tray.desktop" ]]; then
-  echo "Want a status square in the top bar (green, yellow or red)? Run: scripts/install-tray.sh"
+  echo "Want a status square in the top bar (green, yellow or red)? Run: $S/install-tray.sh"
 fi

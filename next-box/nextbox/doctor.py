@@ -20,6 +20,7 @@ from .config import Settings, app_version
 from .printers import EXAMPLE_PRINTER_IP, Printers
 
 OK, BAD, NOTE = "✓", "✗", "•"
+MOVED_AWAY = "Next Box was moved to another"  # the first line on a PC Next Box moved away from (nothing to fix)
 MARKS = {OK: "ok", BAD: "bad", NOTE: "note"}  # in `nextbox doctor --json`
 
 
@@ -47,6 +48,38 @@ def _lan_ip() -> str:
             return s.getsockname()[0]
     except OSError:
         return "<this computer's IP>"
+
+
+def _networks() -> list:
+    """This PC's own IPv4 networks (e.g. 192.168.68.0/22), from `ip -4 -o addr`. Empty when that can't be read."""
+    import ipaddress
+    import re
+    try:
+        out = subprocess.run(["ip", "-4", "-o", "addr", "show", "scope", "global"], capture_output=True, text=True,
+                             timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [ipaddress.ip_interface(m[1]).network for m in re.finditer(r"\binet (\d+\.\d+\.\d+\.\d+/\d+)", out)]
+
+
+def printer_hint(address: str, networks: list | None = None) -> str:
+    """What to check when a network printer doesn't answer, by whether this PC is on the printer's network.
+    Shared by doctor and the move summary, so both say the same."""
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(printer._host_port(address)[0])
+    except ValueError:
+        ip = None
+    nets = (_networks() if networks is None else networks) if ip else []
+    if ip and any(ip in net for net in nets):
+        return (f"this PC is on the printer's network, so check the printer is switched on and awake, and still at "
+                f"{ip}: hold its info (i) button to print its settings. If its address changed, open Admin → "
+                "Printers → Edit in the web app, which finds it again")
+    if ip and nets:
+        return (f"this PC isn't on the printer's network ({ip} isn't in {', '.join(map(str, nets))}): connect it to "
+                "the same router or Wi-Fi as the printer, and check the printer is on")
+    return ("check the printer is switched on and awake, on the same network as this PC, and still at that address: "
+            "hold its info (i) button to print its settings")
 
 
 def _page_answers(port: int) -> bool:
@@ -84,6 +117,9 @@ def run_doctor(settings: Settings, accounts: Accounts | None, as_json: bool = Fa
         return 1
     problems = sum(mark == BAD for mark, _, _ in checks)
     print()
+    if any(text.startswith(MOVED_AWAY) for _, text, _ in checks):
+        print("Nothing to fix here: Next Box runs on the new PC now.")
+        return 0
     print("All good." if not problems else f"{problems} thing(s) to fix above.")
     return 1 if problems else 0
 
@@ -102,7 +138,7 @@ def _checks(settings: Settings, accounts: Accounts | None, say) -> bool:
     from .move import UNDO_HINT, moved_on, read_marker
     marker = read_marker(settings.data_dir)
     if marker is not None:  # scripts/move-out.sh: everything else is off here on purpose, so that's all to say
-        say(BAD, f"Next Box was moved to another PC{moved_on(marker)}, so it stays off on this one",
+        say(NOTE, f"{MOVED_AWAY} PC{moved_on(marker)}, so it stays off on this one",
             f"use Next Box on the new PC. {UNDO_HINT}")
         return True
     from . import db as _db
@@ -175,6 +211,12 @@ def _checks(settings: Settings, accounts: Accounts | None, say) -> bool:
         say(NOTE, "NEXTBOX_PUBLIC_URL is set but NEXTBOX_HOSTING isn't, so the Privacy and About pages "
                   "may not name the service that carries traffic",
             "using a Cloudflare Tunnel? Add NEXTBOX_HOSTING=Cloudflare to .env, then: systemctl --user restart nextbox")
+    _printer_checks(settings, say)
+    return True
+
+
+def _printer_checks(settings: Settings, say) -> None:
+    """Preview-only, the example address, and each printer address knocked on once (nothing is printed)."""
     printers = Printers(settings.data_dir, settings).all()
     if settings.dry_run:
         say(NOTE, "preview only (NEXTBOX_DRY_RUN=1): nothing is sent to a printer")
@@ -190,14 +232,16 @@ def _checks(settings: Settings, accounts: Accounts | None, say) -> bool:
             "delete that line, or put your printer's IP there")
     elif not printers:
         say(NOTE, "no printer added yet: add one in the web app under Admin → Printers")
+    same: dict[str, list] = {}  # one check per address (the .env printer and an added one are often the same)
     for p in printers:
-        if p.address == EXAMPLE_PRINTER_IP:  # knocking on it would only time out
+        same.setdefault(p.address, []).append(p)
+    for address, group in same.items():
+        names = " / ".join(dict.fromkeys(p.name for p in group))
+        if address == EXAMPLE_PRINTER_IP:  # knocking on it would only time out
             if settings.printer_ip != EXAMPLE_PRINTER_IP:
-                say(BAD, f"printer {p.name} still has the example address ({p.address})",
+                say(BAD, f"printer {names} still has the example address ({address})",
                     "change it to your printer's address, or remove it, in Admin → Printers")
             continue
-        up = printer.is_reachable(p)
-        say(OK if up else BAD, f"printer {p.name} ({p.address}) {'answers' if up else 'does not answer'}",
-            "" if up else "turn it on, check it's on the same Wi-Fi, and check the address "
-                          "(hold the printer's info button to print its settings)")
-    return True
+        up = printer.is_reachable(group[0])
+        say(OK if up else BAD, f"printer {names} ({address}) {'answers' if up else 'does not answer'}",
+            "" if up else printer_hint(address))

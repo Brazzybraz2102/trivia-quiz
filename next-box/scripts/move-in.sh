@@ -14,14 +14,15 @@ set -euo pipefail
 START="$PWD"  # a move file given as a path from the folder Mike is in
 HERE="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$HERE"
+S="${HERE/#"$HOME"/\~}/scripts"  # how hints name this folder's scripts: Mike types them from his home folder
 source scripts/python.sh
 DATA="${NEXTBOX_DATA_DIR:-$HOME/.local/share/nextbox}"
 
 usage() {
-  echo "Usage: scripts/move-in.sh <move file> [--replace] [--port N]"
-  echo "  e.g. scripts/move-in.sh ~/nextbox-move-2026-10-27.nbmove"
-  echo "  or   scripts/move-in.sh mike@192.168.68.50:/home/mike/nextbox-move-2026-10-27.nbmove"
-  echo "  or   scripts/move-in.sh --check      (is this PC ready? nothing is changed)"
+  echo "Usage: $S/move-in.sh <move file> [--replace] [--port N]"
+  echo "  e.g. $S/move-in.sh ~/nextbox-move-2026-10-27.nbmove"
+  echo "  or   $S/move-in.sh mike@192.168.68.50:/home/mike/nextbox-move-2026-10-27.nbmove"
+  echo "  or   $S/move-in.sh --check      (is this PC ready? nothing is changed)"
 }
 
 # Say what's wrong and exactly what to do, then stop.
@@ -71,7 +72,7 @@ SHOW="${SRC:-<move file>}"  # for the lines that say what to type next
 echo "Checking this PC ($(hostname 2>/dev/null || echo "this computer"))..."
 if [[ "$(id -u)" == 0 ]]; then
   stop "Don't run this as root or with sudo." \
-       "Run it as the person who'll look after Next Box on this PC: scripts/move-in.sh ${SRC:---check}"
+       "Run it as the person who'll look after Next Box on this PC: $S/move-in.sh ${SRC:---check}"
 fi
 if [[ "$(uname -s)" != Linux ]]; then
   stop "This PC runs $(uname -s), but Next Box needs Linux (Ubuntu or Debian is easiest)."
@@ -95,10 +96,10 @@ if [[ -f "$DATA/MOVED-AWAY" ]]; then
   AWAY=yes
   if [[ -z "$CHECK" && -z "$REPLACE$NEWER" ]]; then
     stop "Next Box moved away from this PC before. There are two ways to bring it back:" \
-         "- Changed your mind before using the new PC? Then: scripts/move-out.sh --undo" \
+         "- Changed your mind before using the new PC? Then: $S/move-out.sh --undo" \
          "  (it turns Next Box on here again, with the lists it had on moving day)." \
-         "- Moving back with a newer move file (made on the other PC with scripts/move-out.sh)? Then:" \
-         "  scripts/move-in.sh $SHOW --replace" \
+         "- Moving back with a newer move file (made on the other PC with $S/move-out.sh)? Then:" \
+         "  $S/move-in.sh $SHOW --replace" \
          "  (this PC's old lists are kept in $DATA/backups/)."
   fi
 fi
@@ -157,12 +158,12 @@ port_problem() {
     stop "Port $PORT, which Next Box uses, is taken by $prog (process $pid)." \
          "$how" \
          "If you don't know what $prog is, don't stop it. Run Next Box on another port instead:" \
-         "  scripts/move-in.sh $SHOW --port $free"
+         "  $S/move-in.sh $SHOW --port $free"
   fi
   stop "Port $PORT, which Next Box uses, is taken by another program." \
        "See which one with: sudo ss -ltnp 'sport = :$PORT'" \
        "If you don't know what it is, don't stop it. Run Next Box on another port instead:" \
-       "  scripts/move-in.sh $SHOW --port $free"
+       "  $S/move-in.sh $SHOW --port $free"
 }
 
 RUNNING=""
@@ -187,7 +188,7 @@ if [[ -n "$CHECK" ]]; then
   fi
   echo "✓ Linux with systemd, $("$PY" -V), port $PORT${RUNNING:+ (used by the Next Box already here)}, internet."
   if [[ -n "$AWAY" ]]; then
-    echo "• Next Box moved away from this PC before. To move it back here: scripts/move-in.sh <move file> --replace"
+    echo "• Next Box moved away from this PC before. To move it back here: $S/move-in.sh <move file> --replace"
   fi
   echo "This PC is ready for Next Box. Nothing was changed."
   exit 0
@@ -205,14 +206,14 @@ elif [[ "$SRC" == *:* ]]; then
   echo "If it asks \"Are you sure you want to continue connecting\", type yes."
   if ! scp "$SRC" "$HOME/"; then
     stop "Couldn't copy it. Check the address, and that the old PC has SSH (there: sudo apt install -y openssh-server)." \
-         "Or copy the file with a USB stick and run: scripts/move-in.sh ~/<the file's name>"
+         "Or copy the file with a USB stick and run: $S/move-in.sh ~/<the file's name>"
   fi
   FILE="$HOME/$(basename "${SRC#*:}")"
-  [[ -f "$FILE" ]] || stop "The copy didn't arrive at $FILE." "Copy it with a USB stick, then: scripts/move-in.sh ~/<the file's name>"
+  [[ -f "$FILE" ]] || stop "The copy didn't arrive at $FILE." "Copy it with a USB stick, then: $S/move-in.sh ~/<the file's name>"
   chmod 600 "$FILE"
   SHOW="$FILE"
 else
-  stop "Can't find $SRC." "Give the move file's path, e.g.: scripts/move-in.sh ~/nextbox-move-2026-10-27.nbmove"
+  stop "Can't find $SRC." "Give the move file's path, e.g.: $S/move-in.sh ~/nextbox-move-2026-10-27.nbmove"
 fi
 
 # Before anything is installed (seconds, with the system's own Python): the file, the time zone, what's here.
@@ -232,12 +233,11 @@ already_here() {
 }
 case $CODE in
   0) ;;
-  3) stop "This Next Box code is older than the one that made the move file." \
-          "Get the newest code (README \"Move Next Box to another PC\", step 1), then run this again." ;;
+  3) stop "Nothing was changed. Get the newest code as it says above, then run this again." ;;
   4) stop "Copy the move file again (from the old PC, or from the USB stick), then run this again." ;;
   6) already_here ;;
   7) stop "Only if that Next Box was just a test copy: --replace puts its lists aside (in $DATA/backups/):" \
-          "scripts/move-in.sh $SHOW --replace" ;;
+          "$S/move-in.sh $SHOW --replace" ;;
   *) stop "Nothing was changed. Fix what it says above, then run this again." ;;
 esac
 
@@ -254,7 +254,7 @@ if [[ -z "$DONE" ]]; then
   set -e
   case $CODE in
     0) ;;
-    3) stop "This copy of Next Box can't open that file." "Get the newest code (README), then run this again." ;;
+    3) stop "Nothing was changed. Get the newest code as it says above, then run this again." ;;
     *) stop "Copy the move file again (from the old PC, or from the USB stick), then run this again." ;;
   esac
   if [[ -n "$AWAY" ]]; then  # what move-out.sh turned off here: it's turned back on after the move
@@ -297,7 +297,7 @@ fi
 echo
 if ! scripts/install.sh; then
   stop "Your lists and accounts are in place, but the install didn't finish." \
-       "Fix what it says above, then run: scripts/install.sh"
+       "Fix what it says above, then run: $S/install.sh"
 fi
 if [[ " $TURNED_OFF " == *" cloudflared "* ]]; then
   echo "Turning the internet tunnel back on here (it may ask for this PC's password)."
@@ -322,14 +322,14 @@ if [[ " $TURNED_OFF " != *" cloudflared "* ]] && grep -q '^NEXTBOX_PUBLIC_URL=.'
   echo "click your tunnel → Configure, and keep the page with its install command (Debian) open."
   read -r -p "Move the tunnel to this PC now? [y/N] " ANSWER || ANSWER=""
   if [[ "$ANSWER" == [yY]* ]]; then
-    scripts/go-online.sh || echo "When that's done, check it again with: scripts/go-online.sh"
+    scripts/go-online.sh || echo "When that's done, check it again with: $S/go-online.sh"
   else
-    echo "Later, with that page open: scripts/go-online.sh"
+    echo "Later, with that page open: $S/go-online.sh"
   fi
 fi
 if [[ -n "${XDG_CURRENT_DESKTOP:-}${DISPLAY:-}${WAYLAND_DISPLAY:-}" && ! -f "$HOME/.config/autostart/nextbox-tray.desktop" ]]; then
   echo
-  echo "The status square in the top bar: scripts/install-tray.sh"
+  echo "The status square in the top bar: $S/install-tray.sh"
 fi
 echo
 echo "Keep the move file ($FILE) and the old PC as they are for a week. Then, when everything works here:"

@@ -217,7 +217,8 @@ def test_everything_moves_and_works_on_the_new_pc(old, tmp_path, no_printer_knoc
     text = "\n".join(move.summary(result, ip="192.168.68.50"))
     assert "3 accounts, 2 households, 3 printers, 2 My list tasks (1 still to do), 1 journal page" in text
     assert "2 of 2 saved connection(s) unlock here" in text
-    assert "This PC may not be on the same network as the printer." in text
+    assert "✗ Label printer (192.168.68.110) doesn't answer." in text and "info (i) button" in text
+    assert "/.venv/bin/nextbox doctor" in text and "Then check again: .venv" not in text  # a path that works from ~
     assert "nextbox_print_today_url: http://192.168.68.50:8787/print/today" in text
     assert "scripts/go-online.sh" in text and "Desk USB was plugged into the old PC" in text
     if PG:
@@ -354,7 +355,7 @@ def test_a_wrong_passphrase_is_one_plain_sentence(old, tmp_path):
         unpack(new, packed.path, env, ask=asks("maple orbit candle eighteen"))
     # The last try says what to do when it's forgotten.
     assert str(err.value) == ("That passphrase didn't open this move file.\nForgot it? On the PC the file was made "
-                              "on, run scripts/move-out.sh again: it makes a new move file with a new passphrase.")
+                              "on, run ~/.local/share/nextbox/app/scripts/move-out.sh again: it makes a new move file with a new passphrase.")
     assert not (new / "nextbox.db").exists() and not env.exists()
     ask = asks("wrong one here", "also not right", PASS)
     said = []
@@ -921,13 +922,15 @@ def test_after_moving_away_the_old_pc_stays_off(tmp_path, monkeypatch, capsys, n
     # `clip` (the hotkey) says it as a desktop notification. Tests never pop a real one (conftest).
     assert no_desktop_notifications == [("Next Box", move.moved_away_message(move.read_marker(tmp_path), False))]
     # doctor says it first, and nothing else (plain and --json, which the status square reads).
-    assert cli.main(["doctor"]) == 1
+    # It's how things should be after a move, so it's a note, not a problem to fix.
+    assert cli.main(["doctor"]) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out[1].startswith(f"✗ Next Box was moved to another PC on {day}")
-    assert "scripts/move-out.sh --undo" in out[2] and "1 thing(s) to fix above." in out[-1]
-    assert cli.main(["doctor", "--json"]) == 1
+    assert out[1].startswith(f"• Next Box was moved to another PC on {day}")
+    assert "~/.local/share/nextbox/app/scripts/move-out.sh --undo" in out[2]
+    assert out[-1] == "Nothing to fix here: Next Box runs on the new PC now."
+    assert cli.main(["doctor", "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
-    assert report["checks"][1]["mark"] == "bad" and report["problems"] == 1
+    assert report["checks"][1]["mark"] == "note" and report["problems"] == 0 and len(report["checks"]) == 2
     # --undo clears it.
     assert cli.main(["move", "marker", "clear"]) == 0
     assert cli.main(["move", "marker", "show"]) == 1 and move.read_marker(tmp_path) is None
@@ -952,7 +955,7 @@ def test_install_sh_respects_the_marker_and_never_loops():
                                                                              'systemctl --user disable --now')
     moved = install.index("if [[ $MOVED == yes ]]; then\n  systemctl --user disable --now")
     assert moved < install.index("systemctl --user enable --now nextbox.service")
-    assert "scripts/move-out.sh --undo" in install[moved:install.index("systemctl --user enable --now")]
+    assert "$S/move-out.sh --undo" in install[moved:install.index("systemctl --user enable --now")]
     assert move.MOVED_EXIT == 78
     update = (SCRIPTS / "update.sh").read_text()
     assert "--exclude '.env.before-move*'" in update
@@ -1082,8 +1085,14 @@ fi
 
     def run(*args, answer="MOVE\n", **extra):
         return subprocess.run(["bash", str(root / "scripts" / "move-out.sh"), *args], input=answer, text=True,
-                              capture_output=True, env={**env, **extra}, timeout=60)
+                              capture_output=True, env={**env, **extra}, timeout=60, preexec_fn=_hangup_as_usual)
     return run, root, home, log, state
+
+
+def _hangup_as_usual():
+    """A terminal's default for SIGHUP. Under nohup (or a runner that ignores it) bash can't trap a signal that
+    was ignored when it started, and the closed-terminal test would fail for that reason alone."""
+    signal.signal(signal.SIGHUP, signal.SIG_DFL)
 
 
 def test_move_out_sh_switches_everything_off_and_undo_puts_it_back(tmp_path):
@@ -1276,7 +1285,7 @@ def _move_in(tmp_path: Path, **behaviour):
 def test_move_in_sh_checks_the_pc_first_and_says_what_to_do(tmp_path):
     run, root, home, state = _move_in(tmp_path, user_session=1)
     r = run()
-    assert r.returncode == 2 and "Usage: scripts/move-in.sh <move file>" in r.stdout
+    assert r.returncode == 2 and f"Usage: {root}/scripts/move-in.sh <move file>" in r.stdout
     r = run(str(home / "x.nbmove"))
     assert r.returncode == 1 and "systemctl --user doesn't work in this terminal" in r.stdout
     _fake_bin(tmp_path / "bin", tmp_path / "log")  # a working user session from here on
@@ -1544,3 +1553,42 @@ def test_old_time_zone_names_count_as_their_real_zone(monkeypatch):
     assert movecheck.same_zone("US/Eastern", "America/New_York")
     assert movecheck.same_zone("America/Los_Angeles", "US/Pacific")
     assert not movecheck.same_zone("US/Eastern", "America/Chicago")
+
+
+def test_a_printer_that_doesnt_answer_gets_the_hint_for_where_this_pc_is():
+    """On the printer's own network the problem is the printer (asleep, off, a new address), not the network.
+    Mike's server is on 192.168.68.x like his printer, and was told to 'connect to the same Wi-Fi'."""
+    import ipaddress
+
+    from nextbox.doctor import printer_hint
+    home = [ipaddress.ip_network("192.168.68.0/22")]
+    same = printer_hint("192.168.68.110", home)
+    assert same.startswith("this PC is on the printer's network") and "still at 192.168.68.110" in same
+    assert "info (i) button" in same and "Admin → Printers → Edit" in same and "same router" not in same
+    other = printer_hint("192.168.1.60:9100", home)
+    assert other.startswith("this PC isn't on the printer's network (192.168.1.60 isn't in 192.168.68.0/22)")
+    assert "same router or Wi-Fi" in other
+    for unknown in (printer_hint("BRW5413795FE5CF.local", home), printer_hint("192.168.68.110", [])):
+        assert unknown.startswith("check the printer is switched on and awake, on the same network as this PC")
+
+
+def test_doctor_checks_each_printer_address_once(tmp_path, monkeypatch, capsys):
+    """The .env printer and the same printer added in the web app: one knock and one line naming both."""
+    from nextbox import doctor, printer
+    from nextbox.printer import PrinterConfig
+    knocks = []
+    monkeypatch.setattr(printer, "is_reachable", lambda p, timeout=2.0: knocks.append(p.address) or False)
+    monkeypatch.setattr(doctor, "_networks", lambda: [])
+    said = []
+    fake = [PrinterConfig(id=i, name=n, driver="brother_ql", address=a, width_px=1164)
+            for i, n, a in (("env", "Label printer", "192.168.68.110"), ("p1", "Brother QL-1110NWB", "192.168.68.110"),
+                            ("p2", "Kitchen", "192.168.68.120"))]
+
+    class Settings:  # just what the printer part of doctor reads
+        printer_ip = "192.168.68.110"
+        dry_run = False
+        data_dir = tmp_path
+    monkeypatch.setattr(doctor, "Printers", lambda *a: type("P", (), {"all": lambda self: fake})())
+    doctor._printer_checks(Settings, lambda mark, text, fix="": said.append((mark, text)))
+    assert knocks == ["192.168.68.110", "192.168.68.120"]
+    assert ("✗", "printer Label printer / Brother QL-1110NWB (192.168.68.110) does not answer") in said

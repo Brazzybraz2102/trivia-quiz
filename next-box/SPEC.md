@@ -1051,7 +1051,8 @@ list, so "Your own" brings it back; changing a preset's marks makes them their o
   `MOVED-IN` file (600: the header's salt, made_on, from_host, when) and, on a PC Next Box had moved away from, the
   `MOVED-AWAY` marker is removed (it's back). No value is ever printed. The summary: what moved (counts), the linked
   apps that unlock, each network printer from the printers table and `PRINTER_IP` tried with a TCP connect only
-  (2 s, nothing sent; "This PC may not be on the same network as the printer." and what to do), USB/CUPS printers
+  (2 s, nothing sent; one per address; the fix is `doctor.printer_hint`, the same words doctor uses: on this PC's
+  own network (`ip -4 -o addr`) it's the printer: asleep, off or a new address; otherwise the network), USB/CUPS printers
   named as staying behind, and the next steps (`nextbox move next-steps`): the phone address, Home Assistant's exact
   new `nextbox_print_today_url` line when it has printed (auto_guard or a `source="auto"` ticket in the last 60
   days), and `scripts/go-online.sh` when `NEXTBOX_PUBLIC_URL` is set (with the public hostname's new
@@ -1102,7 +1103,8 @@ list, so "Your own" brings it back; changing a preset's marks makes them their o
   78 and "Next Box was moved to another PC on <day>, so it doesn't start here ... scripts/move-out.sh --undo";
   install.sh's unit has `RestartPreventExitStatus=78`, and with the marker install.sh skips the tests, leaves the
   service disabled and says why (so `update.sh` out of habit can't bring it back); `nextbox doctor` (and `--json`,
-  for the status square) shows it as the first ✗ and stops there. Every other CLI command that could print, serve
+  for the status square) shows it as the first line, a note (•, not a problem: exit 0, "Nothing to fix here: Next
+  Box runs on the new PC now."), and stops there. Every other CLI command that could print, serve
   or change data refuses too (exit 78; `clip` says it with notify-send for the hotkey; tests never call the real
   notify-send, a conftest fixture records it); `move`, `doctor`, `db`, `status` and `printed` still work. A marker
   that can't be read still counts.

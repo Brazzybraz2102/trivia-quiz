@@ -751,7 +751,7 @@ All good.
 • PRINTER_IP in .env is still the example address, so it isn't used
     → delete that line, or put your printer's IP there
 ✗ printer Office (192.168.1.77) does not answer
-    → turn it on, check it's on the same Wi-Fi, and check the address (hold the printer's info button to print its settings)
+    → this PC is on the printer's network, so check the printer is switched on and awake, and still at 192.168.1.77: hold its info (i) button to print its settings. If its address changed, open Admin → Printers → Edit in the web app, which finds it again
 
 3 thing(s) to fix above.
 """),
@@ -799,6 +799,8 @@ def test_plain_doctor_output_is_unchanged_and_json_has_the_same_checks(name, tmp
     kind = "PostgreSQL" if is_postgres(db.url_for(tmp_path)) else "SQLite"
     where = describe_location(tmp_path)
     settings, accounts = _scenario(name, tmp_path, monkeypatch)
+    import ipaddress  # this PC is on 192.168.1.x, like the scenarios' printers (the printer hint depends on it)
+    monkeypatch.setattr(doctor, "_networks", lambda: [ipaddress.ip_network("192.168.1.0/24")])
     code = doctor.run_doctor(settings, accounts)
     out = capsys.readouterr().out
     want_code, want = GOLDEN[name]
