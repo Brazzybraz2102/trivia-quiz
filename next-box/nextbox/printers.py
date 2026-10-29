@@ -29,6 +29,7 @@ REASONS = {
     "new_task": "New task from the hotkey or web",
     "focus": "Just one thing",
     "strips": "Tear-off strips",
+    "friend": "Notes from friends",
 }
 DEFAULT_RULES = {"overdue": "red"}
 

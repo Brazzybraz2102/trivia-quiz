@@ -229,7 +229,8 @@ Everyone sees a notice on their first sign-in, and their "I understand" is recor
 - **Your view:** **Usage** (super admin) shows per-person activity, tickets by kind, read-back
   results, settings and label colors. **View tickets** shows the actual tickets.
 - **What stays private:** to-do app passwords and tokens are never visible. Feedback stays
-  anonymous; only "Who sent this?" reveals a sender, and that's audited.
+  anonymous; only "Who sent this?" reveals a sender, and that's audited. Journals, friends and the
+  notes friends send each other are never shown to you either (see "Friends and notes").
 
 The small mark at the bottom of every page shows the version and build. Change its wording with
 `NEXTBOX_CREDIT` in `.env`.
@@ -400,6 +401,37 @@ Closing the loop:
   for each day (notes.txt, the photos, wins.txt) or one printable PDF, for everything or the last
   7/30/90/365 days. Each page says when it was snapped or written, with the date when that was another
   day (a label snapped the next morning).
+
+## Friends and notes
+Like Snapchat, but for label printers: friends send each other a note, a doodle, a photo or a heart, and
+each one can come out of your printer, only when you tap **Print** and say yes.
+- **Add a friend:** everyone has a friend link (copy it, share it, or show its QR code). Opening a friend's
+  link asks "Add them?". You can also type someone's exact username. They have to accept; if you both
+  asked, you're friends straight away. Friends can be in any household: it's the one way to reach
+  someone outside yours, and only once they say yes. Only people who already have a Next Box account
+  (invite only, as always) can be friends.
+- **Typing a username never says whether that account exists:** the answer is always "If that name is
+  right, they'll see your request.", and blocking that name shows only the name typed. Blocking someone
+  who asked you looks, on their side, like a quiet no.
+- **Send:** a note (up to 280 characters, on a color), a doodle in black ink, a photo with a caption, or a
+  heart, to one friend or several. The send screen shows **how it prints**, in black and white.
+- **Read:** notes from friends come up full screen, one at a time; swipe up for the next, like video apps
+  (new ones first). The buttons on the right: ♥ react, 🖨 Print, ↩ Reply, 🔖 Keep, and ⋯ (Delete for me,
+  Block). Your **Sent** list shows Delivered, Seen or Printed, unless your friend turned that off
+  (Settings: "Tell friends when I've seen or printed their notes").
+- **Printing:** nothing prints by itself, ever. Print goes to your own household's printer (the "Notes
+  from friends" label color rule picks which) through the same path as every ticket: dry run, Always
+  preview only and the pause all apply. With no printer at your house it offers **Print on paper** and
+  **Save label image**. A printed note isn't kept as a ticket, so admins never see it.
+- **Private and short-lived:** only the two friends see a note. There's no admin view, notes aren't in
+  the activity log or debug bundles, and `nextbox db sql` hides their words and pictures. Notes you didn't
+  **Keep** are deleted 30 days after they arrive. Photos lose their location and camera details when
+  they're sent. Remove a friend, or **Block** someone (no requests or notes from them), any time.
+- **A heart in one tap:** the ♥ next to a friend in Friends sends them one.
+- **Limits:** in any 24 hours, 20 friend requests (taking one back still counts), 30 notes to one friend and
+  100 in all.
+- Download my data includes your friends and your sent and received notes; deleting your account deletes
+  them all.
 
 ## Getting new people started
 - **Quick start page:** `https://nextbox.braznarkel.com/app/guide.html` explains everything in 11 short

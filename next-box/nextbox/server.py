@@ -25,6 +25,7 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,6 +33,7 @@ from pydantic import BaseModel, Field
 
 from . import coach as coaching
 from . import discover, jobs, printer, quiz, render, scan, upkeep
+from . import friends as friendship
 from . import marks as mark_styles
 from .auth import PREF_HINTS, ROLES, Accounts, AuthError, default_prefs, rank
 from .config import PROJECT_DIR, app_version
@@ -57,6 +59,7 @@ UPDATE_URL = ("https://raw.githubusercontent.com/brazzybraz2102/trivia-quiz/"
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
 MAX_UPLOAD_BYTES = 16 * 1024 * 1024  # a whole /scan request (the photo plus the form around it)
 MAX_BODY_BYTES = 256 * 1024          # every other request: the longest is a 20,000-character journal page
+BIG_UPLOADS = {"/scan", "/notes/image", "/notes/preview/image"}  # a photo: up to MAX_UPLOAD_BYTES
 COOKIE = "nextbox_session"
 OAUTH_COOKIE = "nb_oauth"            # proves the browser finishing "Sign in with Google" is the one that started
 RESET_HOLD = 72 * 3600               # after an admin sets a one-time password: no data download or account delete
@@ -244,6 +247,37 @@ class ConnectBody(BaseModel):
     fields: dict[str, str]
 
 
+class FriendAddBody(BaseModel):  # one of the two
+    username: str | None = Field(default=None, max_length=80)
+    code: str | None = Field(default=None, max_length=80)
+
+
+class NoteBody(BaseModel):
+    to: list[str] = Field(default_factory=list, max_length=100)
+    kind: str = Field(default="note", max_length=12)
+    text: str | None = Field(default=None, max_length=4000)  # friends.Notes.check says the real limit in words
+    color: str | None = Field(default=None, max_length=20)
+
+
+class NotePreviewBody(BaseModel):
+    kind: str = Field(default="note", max_length=12)
+    text: str | None = Field(default=None, max_length=4000)
+    color: str | None = Field(default=None, max_length=20)
+
+
+class ReactBody(BaseModel):
+    reaction: str | None = Field(default=None, max_length=16)  # one of friends.REACTIONS; null takes it back
+
+
+class KeepBody(BaseModel):
+    keep: bool = True
+
+
+class NotePrintBody(BaseModel):
+    confirm: bool = False  # the app sends true only after "Send this to the printer?" was answered yes
+    dry_run: bool = False
+
+
 class PrinterBody(BaseModel):
     name: str | None = None
     driver: str | None = None
@@ -260,12 +294,14 @@ class PrinterBody(BaseModel):
 
 
 # Shown to everyone once; their "I understand" is recorded. Bump the version if it changes.
-# (Saying the journal stays private shows the admin nothing more, so that line needed no bump.)
+# (Saying the journal stays private shows the admin nothing more, so that line needed no bump; the same
+# goes for notes between friends, which the admin can't see either.)
 DATA_NOTICE_VERSION = 3
 DATA_NOTICE = ("The admin can see how you use Next Box: your printed tickets (including the tasks on "
                "them), photo read-backs, settings, activity, signed-in devices, and how many open tasks "
                "are on your built-in list (not what they say). Tasks on your built-in list are kept on "
-               "this Next Box computer. Your journal stays private, even from the admin. Your password and "
+               "this Next Box computer. Your journal stays private, even from the admin. So do your "
+               "friends and the notes you send each other. Your password and "
                "your to-do app password or token are never visible to anyone, and feedback stays anonymous.")
 
 
@@ -307,12 +343,14 @@ class SignupBody(BaseModel):
     agree: bool = False  # the Terms of Use and Privacy Policy
 
 
-TERMS_VERSION = 5  # bump when terms.html or privacy.html change in a way people should re-read
+TERMS_VERSION = 6  # bump when terms.html or privacy.html change in a way people should re-read
 #   2: the Privacy Policy covers the Journal (photos and handwriting kept, private to you) and says
 #      Claude (Anthropic) reads your handwriting as well as your marks.
 #   3: with Journal mode off, a photo with handwriting (notes or a win) is still kept as a journal page.
 #   4: it says what the AI helpers (Break it down, Look back on my week) send, only when tapped.
 #   5: Snap also sends the marks you use (each symbol, its action and your words for what it means).
+#   6: Friends: what's kept when you add friends and send notes, doodles, photos and hearts, who sees them
+#      (only the two of you), 30 days unless kept, and that a note prints only when you tap Print.
 DB_NAMES = {"sqlite": "SQLite", "postgresql": "PostgreSQL"}  # for the About page
 
 
@@ -352,6 +390,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     async def security_headers(request: Request, call_next):
         response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        if request.url.path.startswith(("/friends", "/notes")):  # personal: never kept by a browser or Cloudflare
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Vary"] = "Cookie"
         if request.url.path.startswith("/app"):
             # Always check for a newer copy, so an update shows up right away on phones and through
             # Cloudflare (which otherwise keeps .js files for hours).
@@ -848,6 +889,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             "journal": Journal(accounts.db, caller.name).pages("0000-00-00", "9999-99-99"),  # photos: in the .zip
             "wins": Wins(accounts.db, caller.name).between("0000-00-00", "9999-99-99"),
             "devices": accounts.sessions_for(caller.name, caller.token),
+            # Your friends, requests, blocks and your own sent and received notes (pictures: in the .zip)
+            "friends": friendship.export(accounts.db, caller.name),
         }
         events.log(caller.name, "export_data", kind="auth", detail={"format": "zip" if format == "zip" else "json"})
         if format == "zip":
@@ -874,6 +917,14 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 png = ctx.store.get_png(t["id"]) if t.get("id") else None
                 if png:
                     z.writestr(f"tickets/{t['id']}.png", png, compress_type=zipfile.ZIP_STORED)
+            notes = friendship.Notes(accounts.db, caller.name)
+            done: set[str] = set()
+            for n in data["friends"]["notes"]["received"] + data["friends"]["notes"]["sent"]:
+                if n["has_image"] and n["id"] not in done:
+                    done.add(n["id"])
+                    pic = notes.image(n["id"])
+                    ext = "png" if friendship.image_type(pic) == "image/png" else "jpg"
+                    z.writestr(f"notes/{n['id']}.{ext}", pic, compress_type=zipfile.ZIP_STORED)
         size = out.tell()
         out.seek(0)
 
@@ -2206,6 +2257,319 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(404)
         return Response(data, media_type="image/jpeg", headers=PRIVATE)
 
+    # ----------------------------------------------------------- friends and notes (friends.py, SPEC §34)
+    # Private to the two friends: no admin or superadmin endpoint reads these tables, events carry counts
+    # only (never a name, a word or a picture), and nothing here is saved as a ticket. The API contract is
+    # at the top of nextbox/friends.py. Every answer is no-store (security_headers).
+    friend_window = _Window(friendship.REQUESTS_PER_DAY, 86400)  # every try at adding someone counts
+    code_window = _Window(60, 3600)              # friend links looked up: far too few to guess one
+    note_window = _Window(friendship.NOTES_PER_DAY, 86400)  # backs up the database's own daily counts
+    note_preview_window = _Window(300, 3600)     # "how it prints" while composing
+    note_photo_preview_window = _Window(120, 3600)  # ...of a photo: each one is decoded (the app sends a small copy)
+    # Pictures are decoded and re-encoded off the server's event loop (in a worker thread), two at a time at
+    # most, so one big photo never holds up anyone else's requests and memory stays bounded.
+    picture_slots = threading.BoundedSemaphore(2)
+    TOO_MANY_NOTES = (f"That's {friendship.NOTES_PER_DAY} notes in the last 24 hours, the most for a day. "
+                      "Try again later.")
+
+    def _privately(caller: Caller, action: str, fn, *args, **kwargs):
+        """Call friends.py. Its FriendError is the sentence to show, with its status. Anything else is logged
+        as its type only: an error's message or a stack's values could quote a note."""
+        try:
+            return fn(*args, **kwargs)
+        except friendship.FriendError as exc:
+            raise HTTPException(exc.status, exc.message) from None
+        except HTTPException:
+            raise
+        except Exception as exc:
+            events.log(caller.name, action, ok=False, kind="error", error=type(exc).__name__,
+                       trace="".join(traceback.format_tb(exc.__traceback__))[-6000:], household=caller.household)
+            raise HTTPException(500, "Something went wrong. It's been logged so it can be fixed.") from None
+
+    def _friend_link(request: Request, code: str) -> str:
+        """The link to share: on NEXTBOX_PUBLIC_URL when it's set, else the address this came in on (https
+        when it came through Cloudflare, which reaches Next Box over plain http)."""
+        base = oauth.public_url()
+        if not base and from_internet(request) and re.fullmatch(r"[A-Za-z0-9.-]+(:\d+)?", request.headers.get("host", "")):
+            base = f"https://{request.headers['host']}"
+        base = base or str(request.base_url).rstrip("/")
+        return f"{base}/app/#friend={code}"
+
+    def _friends_page(caller: Caller, request: Request) -> dict:
+        mine = friendship.Friends(accounts.db, caller.name)
+        code = mine.code()
+        return {**mine.lists(), "code": code, "link": _friend_link(request, code),
+                "receipts": caller.prefs.get("friend_receipts", True) is not False}
+
+    @app.get("/friends")
+    def friends_page(request: Request, caller: Caller = Depends(person)):
+        return _privately(caller, "friends", _friends_page, caller, request)
+
+    @app.post("/friends/code/rotate")
+    def friends_new_link(request: Request, caller: Caller = Depends(person)):
+        code = _privately(caller, "friend_link_new", friendship.Friends(accounts.db, caller.name).rotate_code)
+        events.log(caller.name, "friend_link_new", household=caller.household)
+        return {"code": code, "link": _friend_link(request, code)}
+
+    @app.get("/friends/code/qr.png")
+    def friends_qr(request: Request, caller: Caller = Depends(person)):
+        """Your friend link as a QR code, for a friend's phone camera."""
+        import io as _io
+        try:
+            import qrcode
+        except ImportError:  # updated without its packages: the link itself still works
+            raise HTTPException(503, "The QR code isn't ready on this Next Box yet: copy or share the link instead. "
+                                     "(On the Next Box computer: scripts/update.sh)") from None
+        link = _friend_link(request, _privately(caller, "friend_qr", friendship.Friends(accounts.db, caller.name).code))
+        qr = qrcode.QRCode(border=4, box_size=10, error_correction=qrcode.constants.ERROR_CORRECT_M)
+        qr.add_data(link)
+        qr.make(fit=True)
+        out = _io.BytesIO()
+        qr.make_image(fill_color="black", back_color="white").save(out, format="PNG")
+        return Response(out.getvalue(), media_type="image/png", headers=PRIVATE)
+
+    @app.get("/friends/code/{code}")
+    def friends_lookup(code: str, caller: Caller = Depends(person)):
+        """Whose friend link this is, so the app can ask "Add Lee?" before sending a request."""
+        if not code_window.allow(caller.name):
+            raise HTTPException(429, "That's a lot of friend links this hour. Try again later.")
+        return _privately(caller, "friend_lookup", friendship.Friends(accounts.db, caller.name).lookup, code[:80])
+
+    @app.post("/friends/add")
+    def friends_add(body: FriendAddBody, request: Request, caller: Caller = Depends(person)):
+        """Ask to be friends, by exact username or friend link. By username the answer is the same whether
+        or not the name has an account, so nobody can use it to find out who's here."""
+        if not (body.username or "").strip() and not (body.code or "").strip():
+            raise HTTPException(400, "Type their username, or open their friend link.")
+        if not friend_window.allow(caller.name):
+            raise HTTPException(429, friendship.TOO_MANY_REQUESTS)
+        if body.code and not code_window.allow(caller.name):
+            raise HTTPException(429, "That's a lot of friend links this hour. Try again later.")
+        mine = friendship.Friends(accounts.db, caller.name)
+        if body.code:
+            result = _privately(caller, "friend_request", mine.request, code=body.code)
+        else:
+            result = _privately(caller, "friend_request", mine.request, username=body.username)
+        events.log(caller.name, "friend_request", household=caller.household)  # no names: whom isn't anyone's business
+        return {**result, "friends": _friends_page(caller, request)}
+
+    def _friend_change(action: str, method: str):
+        def change(username: str, request: Request, caller: Caller = Depends(person)):
+            mine = friendship.Friends(accounts.db, caller.name)
+            _privately(caller, action, getattr(mine, method), username[:80])
+            events.log(caller.name, action, household=caller.household)
+            return _friends_page(caller, request)
+        change.__name__ = action  # each its own name (and OpenAPI operation id)
+        return change
+
+    app.post("/friends/{username}/accept")(_friend_change("friend_accept", "accept"))
+    app.post("/friends/{username}/decline")(_friend_change("friend_decline", "decline"))
+    app.delete("/friends/{username}")(_friend_change("friend_remove", "remove"))
+    app.post("/friends/{username}/block")(_friend_change("friend_block", "block"))
+    app.delete("/friends/{username}/block")(_friend_change("friend_unblock", "unblock"))
+
+    def _notes(caller: Caller) -> friendship.Notes:
+        return friendship.Notes(accounts.db, caller.name)
+
+    def _note_draw(row: dict):
+        """Draws the note's label at a printer's width (jobs.NoteDraw), from its sender, on the day it came."""
+        with accounts.db.connect() as conn:
+            shown = friendship.names(conn, [row["sender"]])
+        when = date.fromtimestamp(row["created"]).strftime("%b %-d")
+        pic = friendship.picture(row["image"]) if row.get("image") else None
+
+        def draw(width: int, height: int | None):
+            return render.render_friend_note(shown[row["sender"]], when, row["kind"], row.get("body") or "",
+                                             row.get("color"), pic, width=width, max_height=height)
+        return draw
+
+    def _png(img) -> bytes:
+        import io as _io
+        out = _io.BytesIO()
+        img.save(out, "PNG")
+        return out.getvalue()
+
+    def _note_allowed(caller: Caller) -> None:
+        if not note_window.allow(caller.name):
+            raise HTTPException(429, TOO_MANY_NOTES)
+
+    def _send_notes(caller: Caller, to: list[str], kind: str, text, color, image, counted: bool = False) -> dict:
+        if not counted:
+            _note_allowed(caller)
+        result = _privately(caller, "note_send", _notes(caller).send, to, kind, text, color, image)
+        events.log(caller.name, "note_send", detail={"count": result["sent"]}, household=caller.household)
+        return result
+
+    async def _upload(image: UploadFile | None, kind: str) -> bytes:
+        """A photo or doodle from the phone, read up to its limit, then re-encoded (friends.clean_photo or
+        clean_doodle): EXIF and location gone, size capped, anything that isn't a picture refused."""
+        if kind not in ("draw", "photo"):
+            raise HTTPException(400, "Send a drawing or a photo here (a note or a heart goes to POST /notes).")
+        if image is None:
+            raise HTTPException(400, "Pick a photo first." if kind == "photo" else "Draw something first.")
+        limit = friendship.PHOTO_UPLOAD if kind == "photo" else friendship.DOODLE_UPLOAD
+        chunks, size = [], 0
+        while chunk := await image.read(1 << 20):
+            size += len(chunk)
+            if size > limit:
+                raise HTTPException(413, "That photo is too big. Pick one under 15 MB." if kind == "photo"
+                                    else "That drawing is too big to send.")
+            chunks.append(chunk)
+        data = b"".join(chunks)
+        if kind == "photo" and (image.content_type or "") in scan.HEIC_TYPES and not scan.heic_supported():
+            raise HTTPException(415, scan.HEIC_HELP)
+        return await run_in_threadpool(_clean_picture, kind, data)
+
+    def _clean_picture(kind: str, data: bytes) -> bytes:
+        """In a worker thread, never on the event loop, and two pictures at a time at most."""
+        if not picture_slots.acquire(timeout=60):
+            raise HTTPException(503, "Next Box is busy with other pictures. Try again in a moment.")
+        try:
+            return friendship.clean_photo(data) if kind == "photo" else friendship.clean_doodle(data)
+        except friendship.FriendError as exc:
+            raise HTTPException(exc.status, exc.message) from None
+        finally:
+            picture_slots.release()
+
+    def _recipients(to: list[str]) -> list[str]:
+        return [t for item in to for t in str(item).split(",") if t.strip()][:100]
+
+    @app.post("/notes")
+    def notes_send(body: NoteBody, caller: Caller = Depends(person)):
+        if body.kind in ("draw", "photo"):
+            raise HTTPException(400, "Send a drawing or a photo with POST /notes/image.")
+        return _send_notes(caller, _recipients(body.to), body.kind, body.text, body.color, None)
+
+    @app.post("/notes/image")
+    async def notes_send_image(image: UploadFile | None = File(default=None), kind: str = Form(default="photo"),
+                               to: list[str] = Form(default=[]), caption: str = Form(default="", max_length=4000),
+                               caller: Caller = Depends(person)):
+        people = _recipients(to)
+        if not people:
+            raise HTTPException(400, "Pick a friend to send it to.")
+        notes = _notes(caller)
+        # Everything cheap first (the caption, the day's limits, that each one is a friend), so a picture is
+        # only read and decoded when it can actually be sent.
+        _privately(caller, "note_send", notes.check, kind, caption, None, b"?")
+        if kind not in ("draw", "photo"):
+            raise HTTPException(400, "Send a drawing or a photo here (a note or a heart goes to POST /notes).")
+        _note_allowed(caller)
+        await run_in_threadpool(_privately, caller, "note_send", notes.ready, people)
+        data = await _upload(image, kind)
+        return await run_in_threadpool(_send_notes, caller, people, kind, caption, None, data, True)
+
+    def _preview_allowed(caller: Caller) -> None:
+        if not note_preview_window.allow(caller.name):
+            raise HTTPException(429, "That's a lot of previews. Try again in a bit.")
+
+    def _preview(caller: Caller, kind: str, text, color, image: bytes | None) -> Response:
+        """How it prints: the black-and-white label, from you, today. Nothing is kept or sent."""
+        words, color = _privately(caller, "note_preview", _notes(caller).check, kind,
+                                  text if (text or "").strip() or kind != "note" else "…", color, image or b"?")
+        row = {"sender": caller.name, "created": int(time.time()), "kind": kind, "body": words, "color": color,
+               "image": image}
+        with render.reading_font(bool(caller.prefs.get("reading_mode"))):
+            img = render.finalize(_note_draw(row)(render.WIDTH, None), render.WIDTH)
+        return Response(_png(img.convert("L")), media_type="image/png", headers=PRIVATE)
+
+    @app.post("/notes/preview")
+    def notes_preview(body: NotePreviewBody, caller: Caller = Depends(person)):
+        if body.kind in ("draw", "photo"):
+            raise HTTPException(400, "Preview a drawing or a photo with POST /notes/preview/image.")
+        _preview_allowed(caller)
+        return _preview(caller, body.kind, body.text, body.color, None)
+
+    @app.post("/notes/preview/image")
+    async def notes_preview_image(image: UploadFile | None = File(default=None), kind: str = Form(default="photo"),
+                                  caption: str = Form(default="", max_length=4000), caller: Caller = Depends(person)):
+        _preview_allowed(caller)
+        if kind == "photo" and not note_photo_preview_window.allow(caller.name):
+            raise HTTPException(429, "That's a lot of photo previews. Try again in a bit.")
+        data = await _upload(image, kind)
+        return await run_in_threadpool(_preview, caller, kind, caption, None, data)
+
+    @app.get("/notes/feed")
+    def notes_feed(limit: int = Query(30, ge=1, le=100), cursor: str | None = Query(None, max_length=60),
+                   caller: Caller = Depends(person)):
+        """Notes friends sent you, one per screen in the app: unseen first, then the rest, newest first."""
+        return _privately(caller, "notes_feed", _notes(caller).feed, limit, cursor)
+
+    @app.get("/notes/count")
+    def notes_count(caller: Caller = Depends(person)):
+        return _privately(caller, "notes_count", _notes(caller).counts)
+
+    @app.get("/notes/sent")
+    def notes_sent(limit: int = Query(30, ge=1, le=100), cursor: str | None = Query(None, max_length=60),
+                   caller: Caller = Depends(person)):
+        return _privately(caller, "notes_sent", _notes(caller).sent, limit, cursor)
+
+    @app.get("/notes/{note_id}/image")
+    def note_image(note_id: str, caller: Caller = Depends(person)):
+        data = _privately(caller, "note_image", _notes(caller).image, note_id)
+        return Response(data, media_type=friendship.image_type(data), headers=PRIVATE)
+
+    @app.post("/notes/{note_id}/seen")
+    def note_seen(note_id: str, caller: Caller = Depends(person)):
+        return _privately(caller, "note_seen", _notes(caller).mark_seen, note_id)
+
+    @app.post("/notes/{note_id}/react")
+    def note_react(note_id: str, body: ReactBody, caller: Caller = Depends(person)):
+        return _privately(caller, "note_react", _notes(caller).react, note_id, body.reaction)
+
+    @app.post("/notes/{note_id}/keep")
+    def note_keep(note_id: str, body: KeepBody, caller: Caller = Depends(person)):
+        return _privately(caller, "note_keep", _notes(caller).keep, note_id, body.keep)
+
+    @app.delete("/notes/{note_id}")
+    def note_delete(note_id: str, confirm: bool = False, caller: Caller = Depends(person)):
+        """Delete for me (from your feed, or from your Sent list)."""
+        if not confirm:
+            raise HTTPException(400, "Deleting a note needs confirm=true.")
+        _privately(caller, "note_delete", _notes(caller).delete, note_id)
+        events.log(caller.name, "note_delete", household=caller.household)
+        return {"ok": True}
+
+    @app.get("/notes/{note_id}/label.png")
+    def note_label(note_id: str, download: bool = False, caller: Caller = Depends(person)):
+        """How the note comes out of your printer (die-cut labels and all). download=1: Save label image.
+        Nothing prints and nothing is kept."""
+        row = _privately(caller, "note_label", _notes(caller).get, note_id)
+        img = _privately(caller, "note_label", jobs.friend_note_preview, rctx(caller), _note_draw(row))
+        how = "attachment" if download else "inline"
+        return Response(_png(img), media_type="image/png",
+                        headers={"Content-Disposition": f'{how}; filename="next-box-note-{note_id}.png"', **PRIVATE})
+
+    @app.get("/notes/{note_id}/paper.pdf")
+    def note_paper(note_id: str, paper: str = "", caller: Caller = Depends(person)):
+        """Print on paper: the note's label on a page, for any printer (from your own device)."""
+        from . import paper as paper_pdf
+        size = paper or caller.prefs.get("paper_size", "letter")
+        if size not in paper_pdf.PAGES:
+            raise HTTPException(400, "paper is letter, a4, a5 or half_letter")
+        row = _privately(caller, "note_paper", _notes(caller).get, note_id)
+        with render.reading_font(bool(caller.prefs.get("reading_mode"))):
+            img = render.finalize(_note_draw(row)(render.WIDTH, None), render.WIDTH)
+        data = paper_pdf.ticket_pdf(_png(img.convert("L")), None, size)
+        events.log(caller.name, "note_paper", detail={"paper": size}, household=caller.household)
+        return Response(data, media_type="application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="next-box-note-{note_id}.pdf"', **PRIVATE})
+
+    @app.post("/notes/{note_id}/print")
+    def note_print(note_id: str, body: NotePrintBody, caller: Caller = Depends(person)):
+        """Print a note a friend sent you, on your own household's printer. Only ever because you tapped
+        Print and said yes to "Send this to the printer?" (confirm: true): nothing prints a note by itself."""
+        if not body.confirm:
+            raise HTTPException(400, "Tap Print, then say yes to send it to the printer.")
+        notes = _notes(caller)
+        row = _privately(caller, "note_print", notes.received, note_id)
+        result = _privately(caller, "note_print", jobs.print_friend_note, rctx(caller), _note_draw(row),
+                            dry_run=body.dry_run)
+        if result["status"] == "printed":
+            _privately(caller, "note_print", notes.mark_printed, note_id)
+        events.log(caller.name, "note_print", ok=result["status"] != "failed", detail={"status": result["status"]},
+                   household=caller.household)
+        return {**result, "prints_here": prints_here(caller.household)}
+
     # ----------------------------------------------------------- printers & label colors
     @app.get("/printing-options")
     def printing_options(caller: Caller = Depends(person)):
@@ -2863,6 +3227,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         except AuthError as exc:
             raise HTTPException(409, str(exc)) from exc
         registry.delete_for_household(hid)
+        friendship.sweep(accounts.db)  # friends' rows that name someone who has gone
         audit(caller, "delete_household", household_id=hid)
         return {"ok": True}
 
@@ -3047,7 +3412,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         """People get a friendly page; apps and scripts get the usual JSON."""
         page = Path(WEB_DIR) / "404.html"
         wants_page = "text/html" in request.headers.get("accept", "") and request.method == "GET"
-        if wants_page and page.exists() and not request.url.path.startswith(("/auth", "/super", "/admin", "/list", "/print")):
+        if wants_page and page.exists() and not request.url.path.startswith(("/auth", "/super", "/admin", "/list", "/print",
+                                                                              "/friends", "/notes")):
             return Response(page.read_text(), status_code=404, media_type="text/html")
         detail = getattr(exc, "detail", None) or "Not Found"
         return JSONResponse({"detail": detail}, status_code=404)
@@ -3225,7 +3591,7 @@ class _BodyLimit:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
-        big = scope.get("path") == "/scan"
+        big = scope.get("path") in BIG_UPLOADS
         limit = MAX_UPLOAD_BYTES if big else MAX_BODY_BYTES
         msg = "photo too large" if big else "That's more than Next Box takes in one go."
         length = dict(scope.get("headers") or []).get(b"content-length", b"")

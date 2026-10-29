@@ -709,12 +709,12 @@ def test_privacy_says_snap_sends_the_marks_and_terms_went_up(site):
     a, anon, login, _, data = site
     privacy = anon.get("/app/privacy.html").text
     assert "with the marks you use (each symbol, what Next Box does with it, and your own" in privacy
-    assert server.TERMS_VERSION == 5
+    assert server.TERMS_VERSION >= 5  # 6 (friends and notes) came after: see test_friends.py
     a.record_consent("sam", server.DATA_NOTICE_VERSION, terms=4)  # agreed before this
     sam = login("sam", "sam password")
     assert sam.get("/auth/me").json()["terms_ok"] is False
     js = (WEB / "app.js").read_text()
-    note = js[js.index("TERMS_VERSION 3, 4 and 5"):js.index("Have a quick look before you carry on.")]
+    note = js[js.index("TERMS_VERSION 3, 4, 5 and 6"):js.index("Have a quick look before you carry on.")]
     assert "Snap also sends the marks you use" in note
     assert "#   5: Snap also sends the marks you use" in (Path(server.__file__)).read_text()
 

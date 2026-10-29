@@ -42,12 +42,20 @@ TABLE_NOTES = {
     "wins": "What each person finished, by day (My list tasks by name; a linked app's by id only).",
     "journal": "Each person's private journal pages: photo and notes (both hidden here), by day.",
     "task_slides": "How many times each task moved to a later day (task ids and counts only, never text).",
+    "friend_codes": "Each person's friend link code (the link they share so friends can add them).",
+    "friendships": "Who is friends with whom, and friend requests waiting for an answer (or taken back: shown to "
+                   "nobody, until they fade after 30 days).",
+    "blocks": "Who blocked whom (and the name the blocker saw, if any): no friend requests or notes from them.",
+    "friend_notes": "Notes, doodles, photos and hearts between friends: private, so the words, pictures and "
+                    "reactions are hidden here. Deleted 30 days after they arrive unless kept.",
 }
-MASKED_COLUMNS = {"hash", "salt", "token_hash", "notes", "photo", "win"}  # notes/photo/win: private journal pages
+# notes/photo/win: private journal pages. body/image/reaction: private notes between friends.
+MASKED_COLUMNS = {"hash", "salt", "token_hash", "notes", "photo", "win", "body", "image", "reaction"}
 # The same columns by table. On SQLite they read as NULL whatever the query calls them
 # (`SELECT notes AS n`, `hash || ''`, `length(notes)`), so an alias can't get past the masking.
 UNREADABLE = {("journal", "notes"), ("journal", "photo"), ("journal", "win"), ("users", "hash"), ("users", "salt"),
-              ("sessions", "token_hash")}
+              ("sessions", "token_hash"), ("friend_notes", "body"), ("friend_notes", "image"),
+              ("friend_notes", "reaction")}
 
 
 def _authorizer(action, table, column, _db, _source):
@@ -68,8 +76,8 @@ READ_ONLY_REFUSED = ("db sql is read-only here: ATTACH, DETACH and VACUUM aren't
 # is checked: the plan names every column the query reads, under the table it reads it from. Those
 # columns may only pass straight through to a result column of their own name (which _mask hides);
 # an alias, a WHERE, a sort, a join, a function or a subquery over them is refused.
-PG_REFUSED = ("On PostgreSQL, db sql can't read journal text or password columns (only show them hidden, "
-              "as in SELECT * FROM journal). Leave them out of WHERE, ORDER BY, functions and aliases.")
+PG_REFUSED = ("On PostgreSQL, db sql can't read journal text or password columns, or friends' notes (only show "
+              "them hidden, as in SELECT * FROM journal). Leave them out of WHERE, ORDER BY, functions and aliases.")
 PG_ONE_QUERY = "On PostgreSQL, db sql runs one query at a time: a SELECT (WITH, VALUES, TABLE and EXPLAIN work too)."
 _PROTECTED: dict[str, set[str]] = {}
 for _table, _column in UNREADABLE:
@@ -211,7 +219,10 @@ DIAGRAM = """
               ├─< printers
               └─< invites
   users ─┬─< tasks (owner)
-         └─< tags  (owner)
+         ├─< tags  (owner)
+         ├── friend_codes (username)
+         ├─< friendships (a, b: a pair of people) and blocks (blocker, blocked)
+         └─< friend_notes (sender, recipient)
 
   feedback ── feedback_identities    (one to one, kept apart on purpose: the board is anonymous)
   auto_guard, server_settings        (stand-alone settings tables)

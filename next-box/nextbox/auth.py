@@ -78,6 +78,8 @@ PREFS = {
     "mark_style": ("simple", lambda v: isinstance(v, str) and v in _marks().STYLES),
     "marks": ([], lambda v: _marks().valid(v)),  # kept when they pick a preset, so "Your own" brings it back
     "marks_from": ("simple", lambda v: isinstance(v, str) and v in _marks().PRESETS),  # where their own list started
+    # Friends (SPEC §34): "Tell friends when I've seen or printed their notes". Off: their Sent list says Delivered.
+    "friend_receipts": (True, lambda v: isinstance(v, bool)),
 }
 
 

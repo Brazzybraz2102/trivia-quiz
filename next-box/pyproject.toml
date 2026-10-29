@@ -21,6 +21,7 @@ dependencies = [
     "cryptography>=43",
     "sqlalchemy>=2.0",
     "zeroconf>=0.136",  # Set up a printer: finds printers on the home network (Bonjour), only listening
+    "qrcode>=8.0",      # Friends: your friend link as a QR code (pure Python; draws with Pillow)
 ]
 
 [project.optional-dependencies]

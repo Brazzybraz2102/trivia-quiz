@@ -28,7 +28,8 @@ Three ways to look inside. Use whichever you like:
 - `nextbox db sql` is **read-only** on your real database. Changes are only allowed with
   `--practice --write`. Without `--write` it runs one statement at a time: `SELECT 1; SELECT 2` is
   refused (on PostgreSQL too, before any of it runs, even behind PgBouncer).
-- Password hashes, salts and session hashes (and journal notes and photos) always show as `•••• (hidden)`.
+- Password hashes, salts and session hashes (and journal notes and photos, and what friends' notes say:
+  `friend_notes` body, image and reaction) always show as `•••• (hidden)`.
   On PostgreSQL, a query that would read them any other way (an alias, a WHERE, a function) is refused.
   To-do app secrets are encrypted, and their key isn't in the database at all.
 - If you ever open the real database in another tool, run `nextbox db backup` first, and don't

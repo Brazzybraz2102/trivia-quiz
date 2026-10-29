@@ -205,15 +205,11 @@ def _target(ctx: Context, reason: str) -> tuple[PrinterConfig | None, str]:
     return (cfg or _fallback(ctx)), note
 
 
-def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[[bool], Image.Image | list],
-            label_id: str, manifest: list[dict], source: str, dry_run: bool | None, text: str = "",
-            color: str | None = None) -> dict:
-    """Fit, print and record a ticket. `draw` may return several images (stickers): each is
-    printed and cut on its own, and the record keeps one preview of them all.
-
-    The record is saved before anything is sent, so every #code that comes out of the printer can
-    be read back. If the printer doesn't answer, the result says so (status "failed") with the
-    preview, so Print on paper still works. It's never retried automatically."""
+def _printer_for(ctx: Context, reason: str, dry_run: bool | None,
+                 color: str | None = None) -> tuple[PrinterConfig, str, bool, bool]:
+    """Which printer, from the person's label-color rules (or a sticker's color), and whether it's only a
+    preview: (printer, note for the person, dry run, no printer at all). With no printer this person may
+    print on, it's drawn at the usual size as a preview, and the note says why."""
     dry = ctx.is_dry(dry_run)
     if color is None:
         cfg, note = _target(ctx, reason)
@@ -228,6 +224,19 @@ def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[
             note = "Printing is paused by an admin, so this is a preview."
         elif ctx.prefs.get("always_dry_run"):
             note = ALWAYS_PREVIEW_NOTE
+    return cfg, note, dry, no_printer
+
+
+def _finish(ctx: Context, *, reason: str, kind: str, title: str, draw: Callable[[bool], Image.Image | list],
+            label_id: str, manifest: list[dict], source: str, dry_run: bool | None, text: str = "",
+            color: str | None = None) -> dict:
+    """Fit, print and record a ticket. `draw` may return several images (stickers): each is
+    printed and cut on its own, and the record keeps one preview of them all.
+
+    The record is saved before anything is sent, so every #code that comes out of the printer can
+    be read back. If the printer doesn't answer, the result says so (status "failed") with the
+    preview, so Print on paper still works. It's never retried automatically."""
+    cfg, note, dry, no_printer = _printer_for(ctx, reason, dry_run, color)
     red = cfg.ink == "black_red"
     with reading_font(bool(ctx.prefs.get("reading_mode"))):  # Easy-to-read text: the same font on the label
         drawn = draw(red)
@@ -658,6 +667,45 @@ def add_and_print(ctx: Context, text: str, dry_run: bool | None = None, source: 
     else:
         task = tasks.add_task(first.strip()[:500], description=rest)
     return print_task(ctx, str(task["id"]), dry_run=dry_run, source=source, reason="new_task")
+
+
+# A note from a friend (nextbox/friends.py, SPEC §34). It prints only when its recipient taps Print and
+# confirms (server.py refuses anything else): there is no automatic way. It is NOT a ticket: nothing is saved
+# in tickets (whose records and pictures the superadmin can see), so the words and picture stay in
+# friend_notes, private to the two friends. There's no #code: nothing on it is read back.
+NoteDraw = Callable[[int, int | None], Image.Image]  # (dots wide, die-cut label height or None) -> the label
+
+
+def _note_image(ctx: Context, cfg: PrinterConfig, draw: NoteDraw) -> Image.Image:
+    """The note drawn at this printer's own width (a die-cut label's size, its picture shrunk to fit), 1-bit."""
+    spec = printer.die_cut_spec(cfg)
+    width, height = spec.dots_printable if spec is not None else (cfg.width_px, None)
+    with reading_font(bool(ctx.prefs.get("reading_mode"))):  # Easy-to-read text: the same font on the label
+        return finalize(draw(width, height), width)
+
+
+def friend_note_preview(ctx: Context, draw: NoteDraw) -> Image.Image:
+    """How the note comes out of this person's printer (the one Print would use), label by label: the
+    feed's preview and Save label image. Nothing is printed or kept."""
+    cfg = _printer_for(ctx, "friend", True)[0]
+    pages = printer.label_pages(_note_image(ctx, cfg, draw), cfg, code="")
+    return pages[0].convert("L") if len(pages) == 1 else stack_with_cuts([p.convert("RGB") for p in pages])
+
+
+def print_friend_note(ctx: Context, draw: NoteDraw, dry_run: bool | None = None) -> dict:
+    """Send a friend's note to this person's own household printer (the "Notes from friends" label color
+    rule picks which), through the same printer path, dry-run rules and pause as every ticket. The result
+    holds no words: {status: printed | dry_run | failed, dry_run, note, printer}."""
+    cfg, note, dry, no_printer = _printer_for(ctx, "friend", dry_run)
+    img = _note_image(ctx, cfg, draw)
+    out = {"dry_run": dry, "note": note, "printer": None if no_printer else
+           {"id": cfg.id, "name": cfg.name, "color": cfg.stock_color}}
+    try:
+        sent = printer.print_image(img, ctx.settings, dry_run=dry, cfg=cfg)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:  # off, unplugged, out of reach
+        return {**out, "status": "failed", "dry_run": True, "error": type(exc).__name__,
+                "note": f"{cfg.name} didn't answer. Is it on? Tap Print on paper instead." + printer.trouble_hint(cfg)}
+    return {**out, "status": "printed" if sent else "dry_run", "dry_run": not sent}
 
 
 def read_clipboard() -> str:

@@ -231,6 +231,62 @@ task_slides = Table(
     Column("last_moved", BigInteger, nullable=False),
 )
 
+# Friends and notes (nextbox/friends.py, SPEC §34). Friends may be in any household: this is the one way
+# to reach someone outside your own, and only once they accept. Notes are private to the sender and the
+# recipient: no admin view, never in events or debug bundles, masked in `nextbox db sql`.
+friend_codes = Table(
+    "friend_codes", metadata,
+    Column("username", String(32), primary_key=True),
+    Column("code", String(32), nullable=False, unique=True),         # in the friend link: /app/#friend=CODE
+    Column("created", BigInteger, nullable=False),
+)
+
+friendships = Table(
+    "friendships", metadata,
+    Column("a", String(32), primary_key=True),                       # the pair, a < b
+    Column("b", String(32), primary_key=True),
+    # pending | accepted | withdrawn (a request taken back: shown to nobody, kept until it fades so taking
+    # it back and asking again can't get round the daily limit or undo a quiet no)
+    Column("status", String(12), nullable=False),
+    Column("requested_by", String(32), nullable=False),
+    Column("created", BigInteger, nullable=False),
+    Column("accepted", BigInteger, nullable=True),
+    # A request the other person never sees (no such account, they blocked the asker, or they said no):
+    # the asker's list shows it like any other, so nobody can find out who has an account.
+    Column("hidden", Boolean, nullable=False, default=False),
+    Index("ix_friendships_b", "b"),
+)
+
+blocks = Table(
+    "blocks", metadata,
+    Column("blocker", String(32), primary_key=True),
+    Column("blocked", String(32), primary_key=True),
+    Column("created", BigInteger, nullable=False),
+    # The name the blocker could already see (a friend's, a request's or a note's display name), else NULL
+    # and the Blocked list shows the username typed: it never tells whether that name has an account.
+    Column("shown", String(64), nullable=True),
+)
+
+friend_notes = Table(
+    "friend_notes", metadata,
+    Column("id", String(16), primary_key=True),
+    Column("sender", String(32), nullable=False),
+    Column("recipient", String(32), nullable=False),
+    Column("kind", String(8), nullable=False),                       # note | draw | photo | heart
+    Column("body", Text, nullable=True),                             # the words, or a photo's caption (private)
+    Column("color", String(12), nullable=True),                      # a note's background
+    Column("image", LargeBinary, nullable=True),                     # draw: 1-bit PNG, photo: JPEG (private)
+    Column("created", BigInteger, nullable=False),
+    Column("seen", BigInteger, nullable=True),
+    Column("printed", BigInteger, nullable=True),
+    Column("kept", Boolean, nullable=False, default=False),          # kept notes aren't deleted after 30 days
+    Column("reaction", String(16), nullable=True),                   # the recipient's ♥ (private)
+    Column("gone_sender", Boolean, nullable=False, default=False),   # "Delete for me" from Sent
+    Column("gone_recipient", Boolean, nullable=False, default=False),  # "Delete for me" from the feed
+    Index("ix_friend_notes_recipient", "recipient", "created"),
+    Index("ix_friend_notes_sender", "sender", "created"),
+)
+
 _engines: dict[str, Engine] = {}
 _lock = threading.Lock()
 
