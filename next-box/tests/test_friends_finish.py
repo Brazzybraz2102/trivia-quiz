@@ -109,6 +109,23 @@ def test_download_my_data_says_only_what_sent_shows(site):
     assert mine["status"] == "printed" and not {"seen", "printed", "kept"} & set(mine)
 
 
+def test_after_30_days_the_sender_cant_tell_a_note_was_kept(site):
+    """The recipient kept it, so it stays for them. For the sender it ends at 30 days like any other note:
+    Sent, Download my data and the note's own address would otherwise show that it was kept."""
+    ctx, a, app, login = site
+    sam, lee = login("sam"), login("lee")
+    befriend(login, "sam", "lee")
+    [kept, plain] = [send_note(sam, "lee")["ids"][0] for _ in range(2)]
+    lee.post(f"/notes/{kept}/keep", json={"keep": True})
+    with a.db.begin() as conn:
+        conn.execute(db.friend_notes.update().values(created=db.friend_notes.c.created - 31 * friends.DAY))
+    assert sam.get("/notes/sent").json()["notes"] == []
+    assert sam.get("/auth/export").json()["friends"]["notes"]["sent"] == []
+    assert sam.get(f"/notes/{kept}/image").status_code == 404
+    assert [x["id"] for x in lee.get("/notes/feed").json()["notes"]] == [kept]  # still lee's
+    assert [x["id"] for x in lee.get("/auth/export").json()["friends"]["notes"]["received"]] == [kept]
+
+
 # ------------------------------------------------------------------ photos: checked first, decoded off the event loop
 def test_a_photo_is_decoded_only_when_it_can_be_sent_and_never_on_the_event_loop(site, monkeypatch):
     ctx, a, app, login = site
@@ -172,6 +189,25 @@ def test_taking_a_request_back_still_counts_and_a_quiet_no_stands(site):
     assert boss.lists()["outgoing"] == []
     assert friends.prune(a.db, now=int(time.time()) + 31 * 86400)["requests"] >= friends.REQUESTS_PER_DAY
     assert not [r for r in rows(ctx.settings.data_dir, "friendships") if r["status"] == "withdrawn"]
+
+
+def test_blocking_after_asking_still_counts_and_a_block_can_be_made_again(site):
+    """Block on a request you sent takes it back like Take back does (it still counts towards the day's
+    limit). And after Unblock, their request still stands on their side, so you can block them again."""
+    ctx, a, app, login = site
+    boss = friends.Friends(a.db, "boss")
+    for n in range(friends.REQUESTS_PER_DAY):
+        boss.request(username=f"person{n}")
+        boss.block(f"person{n}")
+    with pytest.raises(friends.FriendError) as no:
+        boss.request(username="someone")
+    assert no.value.status == 429
+    sam, lee = login("sam"), login("lee")
+    lee.post("/friends/add", json={"username": "sam"})
+    assert sam.post("/friends/lee/block").status_code == 200
+    assert sam.delete("/friends/lee/block").status_code == 200
+    assert sam.post("/friends/lee/block").status_code == 200
+    assert [b["username"] for b in sam.get("/friends").json()["blocked"]] == ["lee"]
 
 
 def test_two_people_adding_each_other_at_the_same_moment_are_friends(tmp_path, monkeypatch):

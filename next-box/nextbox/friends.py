@@ -377,10 +377,15 @@ class Friends:
         list mustn't show it either: it would tell you the account exists). True: a friend, someone whose
         request you could see, or someone who sent you a note."""
         f, n = db.friendships.c, db.friend_notes.c
-        row = conn.execute(select(f.status, f.requested_by, f.hidden).where(_pair_is(self.me, other))).first()
-        if row and (row.status == "accepted" or (row.status == "pending" and row.requested_by == other
-                                                  and not row.hidden)):
+        row = conn.execute(select(f.status, f.requested_by, f.hidden, f.created).where(_pair_is(self.me, other))).first()
+        if row and row.status == "accepted":
             return True
+        if row and row.status == "pending" and row.requested_by == other:
+            # Hidden too: a request you saw and said no to, or blocked (and unblocked since). Not one asked for
+            # this name before your account existed: that was never shown to you.
+            joined = conn.execute(select(db.users.c.created).where(db.users.c.username == self.me)).scalar() or 0
+            if not row.hidden or row.created >= joined:
+                return True
         if conn.execute(select(n.id).where(n.sender == other, n.recipient == self.me).limit(1)).first() is not None:
             return True
         if row and row.status == "pending" and row.requested_by == self.me:
@@ -404,8 +409,11 @@ class Friends:
                 conn.execute(insert(db.blocks).values(blocker=self.me, blocked=other, created=_now(),
                                                       shown=shown if shown != other else None))
             theirs_asked = and_(f.status == "pending", f.requested_by == other)
+            mine_asked = and_(f.status == "pending", f.requested_by == self.me)
             conn.execute(update(db.friendships).where(_pair_is(self.me, other), theirs_asked).values(hidden=True))
-            conn.execute(delete(db.friendships).where(_pair_is(self.me, other), ~theirs_asked))
+            # Your own request is taken back, as with Take back: it still counts towards the day's requests.
+            conn.execute(update(db.friendships).where(_pair_is(self.me, other), mine_asked).values(status="withdrawn"))
+            conn.execute(delete(db.friendships).where(_pair_is(self.me, other), f.status == "accepted"))
             theirs = and_(n.sender == other, n.recipient == self.me)
             conn.execute(delete(db.friend_notes).where(theirs, n.gone_sender.is_(True)))
             conn.execute(update(db.friend_notes).where(theirs).values(gone_recipient=True, kept=False))
@@ -669,7 +677,7 @@ class Notes:
         n = db.friend_notes.c
         return conn.execute(select(db.friend_notes).where(n.id == note_id, _alive(), or_(
             and_(n.recipient == self.me, n.gone_recipient.is_(False)),
-            and_(n.sender == self.me, n.gone_sender.is_(False))))).mappings().first()
+            and_(n.sender == self.me, n.gone_sender.is_(False), _sender_sees())))).mappings().first()
 
     def get(self, note_id: str) -> dict:
         """The note (with its image bytes) when it's yours to see: sent to you, or sent by you."""
@@ -760,7 +768,7 @@ class Notes:
         prune(self.db)
         limit = max(1, min(int(limit), 100))
         n = db.friend_notes.c
-        q = select(*self._cols()).where(n.sender == self.me, n.gone_sender.is_(False), _alive())
+        q = select(*self._cols()).where(n.sender == self.me, n.gone_sender.is_(False), _sender_sees())
         after = _after(cursor, feed=False)
         if after is not None:
             q = q.where(after)
@@ -834,7 +842,7 @@ class Notes:
             got = conn.execute(select(*self._cols()).where(
                 n.recipient == self.me, n.gone_recipient.is_(False), _alive()).order_by(n.created)).mappings().all()
             sent = conn.execute(select(*self._cols()).where(
-                n.sender == self.me, n.gone_sender.is_(False), _alive()).order_by(n.created)).mappings().all()
+                n.sender == self.me, n.gone_sender.is_(False), _sender_sees()).order_by(n.created)).mappings().all()
             sent_items = self._sent_items(conn, sent)
         keys = ("id", "kind", "color", "created", "seen", "printed", "kept", "reaction")
         received = [{**{k: r[k] for k in keys}, "text": r["body"] or "", "has_image": bool(r["has_image"]),
@@ -856,6 +864,12 @@ def _alive(now: int | None = None):
     """Notes that are still here: kept, or not yet 30 days old (in case prune hasn't run yet)."""
     n = db.friend_notes.c
     return or_(n.kept.is_(True), n.created >= (now if now is not None else _now()) - KEEP_DAYS * DAY)
+
+
+def _sender_sees(now: int | None = None):
+    """The sender's view of a note ends after 30 days whatever the recipient did, so Sent (and its export)
+    never shows that a note was kept."""
+    return db.friend_notes.c.created >= (now if now is not None else _now()) - KEEP_DAYS * DAY
 
 
 _pruned: dict[int, float] = {}

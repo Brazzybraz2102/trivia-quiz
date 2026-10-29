@@ -6172,7 +6172,8 @@ function frNotesDraw() {
   if (notes.length) {
     const from = [...new Set(fresh.map((n) => frName(n.from)))];
     $("#frWatchHead").textContent = unseen ? `${unseen} new ${unseen === 1 ? "note" : "notes"}` : "You're all caught up";
-    $("#frWatchSub").textContent = unseen ? `From ${frList(from)}${unseen > fresh.length ? " and more" : ""}.` : "Watch your notes again any time.";
+    const who = unseen > fresh.length ? `${from.slice(0, 2).join(", ")} and others` : frList(from);  // "ana, lee and others"
+    $("#frWatchSub").textContent = unseen ? `From ${who}.` : "Watch your notes again any time.";
   }
   $("#frNotesEmpty").hidden = !!notes.length || !frData;
   if (!notes.length && frData) {

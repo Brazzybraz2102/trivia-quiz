@@ -8,6 +8,7 @@ Roles: user < admin (support) < superadmin (debug). Every admin action is writte
 """
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import os
@@ -300,8 +301,8 @@ DATA_NOTICE_VERSION = 3
 DATA_NOTICE = ("The admin can see how you use Next Box: your printed tickets (including the tasks on "
                "them), photo read-backs, settings, activity, signed-in devices, and how many open tasks "
                "are on your built-in list (not what they say). Tasks on your built-in list are kept on "
-               "this Next Box computer. Your journal stays private, even from the admin. So do your "
-               "friends and the notes you send each other. Your password and "
+               "this Next Box computer. Your journal stays private, even from the admin. So do the "
+               "notes you send your friends: no admin screen shows them or who your friends are. Your password and "
                "your to-do app password or token are never visible to anyone, and feedback stays anonymous.")
 
 
@@ -2408,28 +2409,33 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         if image is None:
             raise HTTPException(400, "Pick a photo first." if kind == "photo" else "Draw something first.")
         limit = friendship.PHOTO_UPLOAD if kind == "photo" else friendship.DOODLE_UPLOAD
-        chunks, size = [], 0
-        while chunk := await image.read(1 << 20):
-            size += len(chunk)
-            if size > limit:
-                raise HTTPException(413, "That photo is too big. Pick one under 15 MB." if kind == "photo"
-                                    else "That drawing is too big to send.")
-            chunks.append(chunk)
-        data = b"".join(chunks)
-        if kind == "photo" and (image.content_type or "") in scan.HEIC_TYPES and not scan.heic_supported():
-            raise HTTPException(415, scan.HEIC_HELP)
-        return await run_in_threadpool(_clean_picture, kind, data)
+        # Wait for a picture slot first: a waiting upload holds neither a worker thread nor its 15 MB.
+        deadline = time.monotonic() + 60
+        while not picture_slots.acquire(blocking=False):
+            if time.monotonic() > deadline:
+                raise HTTPException(503, "Next Box is busy with other pictures. Try again in a moment.")
+            await asyncio.sleep(0.05)
+        try:
+            chunks, size = [], 0
+            while chunk := await image.read(1 << 20):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(413, "That photo is too big. Pick one under 15 MB." if kind == "photo"
+                                        else "That drawing is too big to send.")
+                chunks.append(chunk)
+            data = b"".join(chunks)
+            if kind == "photo" and (image.content_type or "") in scan.HEIC_TYPES and not scan.heic_supported():
+                raise HTTPException(415, scan.HEIC_HELP)
+            return await run_in_threadpool(_clean_picture, kind, data)
+        finally:
+            picture_slots.release()
 
     def _clean_picture(kind: str, data: bytes) -> bytes:
-        """In a worker thread, never on the event loop, and two pictures at a time at most."""
-        if not picture_slots.acquire(timeout=60):
-            raise HTTPException(503, "Next Box is busy with other pictures. Try again in a moment.")
+        """In a worker thread, never on the event loop (_upload holds one of the two picture slots)."""
         try:
             return friendship.clean_photo(data) if kind == "photo" else friendship.clean_doodle(data)
         except friendship.FriendError as exc:
             raise HTTPException(exc.status, exc.message) from None
-        finally:
-            picture_slots.release()
 
     def _recipients(to: list[str]) -> list[str]:
         return [t for item in to for t in str(item).split(",") if t.strip()][:100]
