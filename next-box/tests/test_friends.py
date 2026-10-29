@@ -761,7 +761,7 @@ def test_spec_readme_and_claude_md_cover_friends():
     privacy = (PROJECT_DIR / "web" / "privacy.html").read_text()
     assert "Notes from friends" in privacy and "30 days" in privacy
     assert server.TERMS_VERSION == 6 and "#   6: Friends" in Path(server.__file__).read_text()
-    assert "the notes you send each other" in server.DATA_NOTICE
+    assert "the notes you send your friends: no admin screen shows them or who your friends are" in server.DATA_NOTICE
     contract = friends.__doc__
     for path in ("GET  /friends", "POST /friends/add", "POST /notes", "GET  /notes/feed", "POST /notes/{id}/print",
                  "GET  /notes/{id}/label.png", "GET  /notes/count"):
