@@ -31,6 +31,14 @@ Read SPEC.md first. Its §1 rules override everything:
   - Never log or store what was sent or what came back: events carry only `{ms, steps}` or the kind of failure.
   - Break it down never writes to a linked app (a new My list task, or steps printed on a card, instead).
   - No `ANTHROPIC_API_KEY`: say so (`coach.NO_KEY`, `coach.NO_KEY_OWNER` for a superadmin) instead of calling.
+- Friends and notes (`nextbox/friends.py`, SPEC §34; the API contract is at its top) are private to the two
+  friends: no admin/superadmin view, nothing in events (counts only, never a name, word or picture), audit
+  or debug bundles, masked in `nextbox db sql`. A note's words and pictures live only in `friend_notes`, and a
+  printed note is never saved as a ticket. Export only to the sender/recipient; deleted with the account.
+  - A note prints only when its recipient taps Print and confirms (`confirm: true`): never automatically.
+  - Adding by username answers the same whether or not the account exists (no enumeration).
+  - Photos are re-encoded (`friends.clean_photo`: no EXIF or location). Unsaved notes go after 30 days
+    (startup upkeep and feed listing: no timer).
 - Feedback is anonymous: the `feedback_identities` table is the ONLY place a person is linked to feedback.
   Never log feedback to events, never put usernames in `feedback`, and audit reveals by feedback id only.
 - `nextbox db sql` stays read-only on the real database and keeps masking hashes and secrets (`dbtools.py`).

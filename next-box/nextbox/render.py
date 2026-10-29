@@ -885,3 +885,123 @@ def render_focus(text: str, steps: list[str], code: str, tag: str = "", color: s
     d.text((right - cw, y + 2), f"#{code}", font=_font(22, True), fill=0)
     y += 36 + MARGIN // 2
     return canvas.crop((0, 0, WIDTH, y)).convert("RGB")
+
+
+# --- notes from friends (nextbox/friends.py, SPEC §34) ---------------------------------------
+NOTE_COLORS = ("yellow", "pink", "blue", "green", "purple", "white")  # a note's background, as a pattern band
+_NOTE_SIZES = (84, 72, 62, 54, 46, 40, 34)  # a note's words: the biggest size that keeps it to 7 lines
+EMOJI_ONLY = "(an emoji this printer can't draw: open Next Box to see it)"
+
+
+def printable(text: str) -> str:
+    """`text` with what no installed font can draw left out (most emoji, on a computer without an emoji
+    font): can_draw (DejaVu, the labels' font) or one of the fallback fonts must have each character, so a
+    label never prints an empty box. Line breaks stay; tabs and other spaces become plain spaces."""
+    font = _font(40)
+    out: list[str] = []
+    for ch in str(text or ""):
+        cat = unicodedata.category(ch)
+        if ch == "\n":
+            out.append(ch)
+        elif ch.isspace():
+            out.append(" ")
+        elif ch in _DROP or 0x1F3FB <= ord(ch) <= 0x1F3FF or cat in ("Cc", "Cf", "Cs", "Co", "Cn"):
+            continue
+        elif cat in ("Mn", "Mc", "Me"):
+            if out and not out[-1].isspace():
+                out.append(ch)  # an accent stays with its letter
+        elif can_draw(ch) or _font_for(ch, font) is not None:
+            out.append(ch)
+    return "\n".join(" ".join(line.split()) for line in "".join(out).strip().splitlines()).strip()
+
+
+def _heart_points(cx: float, top: float, size: float) -> list[tuple[float, float]]:
+    """A heart `size` wide with its top at `top`: the classic curve x = 16 sin³t, y = 13 cos t - 5 cos 2t - …"""
+    import math
+    pts = []
+    for i in range(240):
+        t = 2 * math.pi * i / 240
+        x = 16 * math.sin(t) ** 3
+        y = 13 * math.cos(t) - 5 * math.cos(2 * t) - 2 * math.cos(3 * t) - math.cos(4 * t)
+        pts.append((cx + x * size / 34, top + (12 - y) * size / 34))
+    return pts
+
+
+def fit_picture(img: Image.Image, width: int, height: int, photo: bool) -> Image.Image:
+    """A doodle or photo fitted inside width × height, black and white the way a thermal label prints it:
+    a doodle's lines stay solid black, a photo is dithered (Floyd–Steinberg) to 1-bit dots."""
+    from PIL import ImageOps
+    gray = img.convert("L")
+    scale = min(width / gray.width, height / gray.height)
+    size = (max(1, round(gray.width * scale)), max(1, round(gray.height * scale)))
+    gray = gray.resize(size, Image.LANCZOS)
+    if photo:
+        return ImageOps.autocontrast(gray, cutoff=1).convert("1").convert("L")
+    return gray.point(lambda p: 0 if p < 200 else 255)  # thin lines shrunk to gray stay ink
+
+
+def render_friend_note(sender: str, when: str, kind: str, text: str = "", color: str | None = None,
+                       picture: Image.Image | None = None, width: int = WIDTH,
+                       max_height: int | None = None) -> Image.Image:
+    """A note from a friend as a label `width` dots wide: "From <name> · <date>", a band in the note's color
+    pattern (render.PATTERNS), then the words big (note), the doodle or the dithered photo with its caption
+    (draw, photo), or a big heart and "<name> sent you a ♥" (heart). `max_height` (a die-cut label): the
+    picture shrinks to fit. Drawn at the printer's own width, so a photo's dots are never resized into gray.
+    Emoji no font has are left off (printable). Grayscale ("L"); finalize() makes it 1-bit."""
+    s = width / WIDTH
+
+    def font(size: int, bold: bool = False):
+        return _font(max(10, round(size * s)), bold)
+    margin = max(6, round(MARGIN * s))
+    left, right = margin, width - margin
+    inner = right - left
+    canvas = Image.new("L", (width, max(400, round(6000 * s))), 255)
+    d = _Draw(canvas)
+    sender, text = printable(sender) or "A friend", printable(text)
+    y = margin
+    head_f = font(28, True)
+    for line in _wrap(d, f"From {sender} · {when}" if when else f"From {sender}", head_f, inner)[:3]:
+        d.text((left, y), line, font=head_f, fill=0)
+        y += round(36 * s)
+    y += round(6 * s)
+    if color in PATTERNS:
+        band = max(6, round(22 * s))
+        draw_tag(canvas, (left, y, right, y + band), color)
+        y += band + round(18 * s)
+    else:
+        d.line((left, y, right, y), fill=0, width=max(2, round(4 * s)))
+        y += round(18 * s)
+
+    def centered(lines: list[str], f, step: int) -> None:
+        nonlocal y
+        for line in lines:
+            d.text(((width - d.textlength(line, font=f)) / 2, y), line, font=f, fill=0)
+            y += step
+
+    cap_f = font(32)
+    caption = _wrap(d, text, cap_f, inner)[:6] if text and kind in ("draw", "photo") else []
+    if kind == "heart":
+        size = round(inner * 0.5)
+        d.polygon(_heart_points(width / 2, y, size), fill=0)
+        y += round(size * 0.88) + round(24 * s)  # the curve is 29/34 of its width tall
+        f = font(40, True)
+        centered(_wrap(d, f"{sender} sent you a ♥", f, inner)[:3], f, round(50 * s))
+    elif kind in ("draw", "photo") and picture is not None:
+        room = round(inner * 1.4)
+        if max_height:  # a die-cut label: the picture gets what the words leave
+            rest = round(len(caption) * 42 * s + 14 * s + margin)
+            room = max(round(80 * s), min(room, max_height - y - rest))
+        pic = fit_picture(picture, inner, room, photo=kind == "photo")
+        canvas.paste(pic, ((width - pic.width) // 2, y))
+        y += pic.height + round(14 * s)
+        centered(caption, cap_f, round(42 * s))
+    else:
+        words = text or EMOJI_ONLY
+        for size in _NOTE_SIZES:
+            f = font(size, True)
+            lines = _wrap(d, words, f, inner)
+            if len(lines) <= 7:
+                break
+        centered(lines, f, round(f.size * 1.18))
+    y += margin
+    return canvas.crop((0, 0, width, min(y, canvas.height)))

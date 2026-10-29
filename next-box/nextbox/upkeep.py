@@ -14,6 +14,9 @@ journal or activity.
 - vision-errors: a failed read-back's error could quote the journal notes it read; only its type stays
 - invites-unnamed: invites made or used by an account an older version deleted still named it
 - preview-default: the setup questions turned on "Always preview only" for a regular printer or none
+
+Every startup (not once): friends' notes nobody kept are deleted 30 days after they arrived, requests nobody
+answered fade after 30 days, and friends' rows naming an account that's gone are removed (friends.py).
 """
 from __future__ import annotations
 
@@ -24,6 +27,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
 from . import db
+from . import friends
 from .journal import Journal, Slides, Wins
 from .mylist import LocalTasks, Tags, is_local
 
@@ -32,13 +36,15 @@ NOT_ACCOUNTS = frozenset({"", "cli", "key"})
 
 
 def forget_data(engine: Engine, store, username: str) -> None:
-    """Delete a person's built-in list, tags, journal, slides, tickets and read-backs."""
+    """Delete a person's built-in list, tags, journal, slides, tickets, read-backs, friends and notes
+    (the ones they sent and the ones they got)."""
     LocalTasks(engine, username).delete_for_user()
     Tags(engine, username).delete_for_user()
     Journal(engine, username).delete_for_user()
     Wins(engine, username).delete_for_user()
     Slides(engine, username).delete_for_user()
     store.delete_for_user(username)
+    friends.forget_user(engine, username)
     with engine.begin() as conn:  # the invites they used or made stay, but no longer name them
         conn.execute(update(db.invites).where(db.invites.c.used_by == username).values(used_by=DELETED_ACCOUNT))
         conn.execute(update(db.invites).where(db.invites.c.created_by == username).values(created_by=DELETED_ACCOUNT))
@@ -295,3 +301,5 @@ def run_startup_fixes(engine: Engine, store) -> None:
     _once(engine, "vision-errors-v1", lambda: scrub_vision_errors(engine))
     _once(engine, "invites-unnamed-v1", lambda: unname_invites(engine))
     _once(engine, "preview-default-v1", lambda: preview_default(engine))
+    friends.sweep(engine)               # every start: friends' rows whose account is gone
+    friends.prune(engine, force=True)   # every start: notes nobody kept, 30 days after they arrived

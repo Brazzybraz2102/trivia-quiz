@@ -9,7 +9,8 @@ Each person's to-do app ↔ Brother QL-1110NWB label printer, running on Mike's 
    into the database. The database (§16) also keeps accounts, print history, ticket manifests
    (row → task ID), scan results, the auto-print guard, printers, tags, feedback, the activity log,
    journal pages (notes and photos, private to their owner, §25), wins (one row per finished task;
-   text only for My list tasks) and `task_slides` (task ids and counts, never text).
+   text only for My list tasks), `task_slides` (task ids and counts, never text) and friends and the
+   notes they send each other (private to the two of them, §34).
 2. **Nothing prints unless Mike asks.** The one exception is the once-a-day `source="auto"` print
    of today's list when Home Assistant sees him enter the office. The server guards it
    (`Store.claim_auto`), so a second auto call that day returns `skipped`. There are no
@@ -29,7 +30,8 @@ Each person's to-do app ↔ Brother QL-1110NWB label printer, running on Mike's 
 8. **Roles**: `user` < `admin` (support) < `superadmin` (debug). See §10.
 9. **Privacy between people**: each person prints, sees and reads back only their own tickets
    and scans. Home Assistant and the CLI act as the **owner** (the oldest active superadmin)
-   unless the CLI gets `--user`.
+   unless the CLI gets `--user`. Friends (§34) are the one deliberate, consented way to reach someone
+   outside your household: a note goes only to a friend who accepted, and prints only when they tap Print.
 
 ## 2. Hardware
 - Brother QL-1110NWB on Wi-Fi, raw TCP port 9100.
@@ -303,7 +305,8 @@ everyone whose `always_dry_run` is on with `print_with` paper or none. Anyone el
     active, notice date, and a daily chart
   - `/super/users/{name}/tickets`: everyone's ticket images and scans
 - **Still never visible:** to-do app secrets. Feedback identity stays in
-  `feedback_identities` and is never part of usage.
+  `feedback_identities` and is never part of usage. Journals (§25), and friends and their notes (§34):
+  no admin or superadmin endpoint reads them, and a printed note is never a ticket.
 - **Revision mark:** `/version` returns version, git build and `NEXTBOX_CREDIT`. It's shown at
   the bottom of every page.
 
@@ -465,9 +468,10 @@ Everything Next Box keeps is in one database (`nextbox/db.py`, SQLAlchemy Core):
   chmod 600. Nothing to install.
 - **PostgreSQL** when `DATABASE_URL` is set (`pip install -e '.[postgres]'`). Same code, same tables.
 
-Tables (17): households, users, sessions, invites, tickets (record JSON + PNG), scans, auto_guard,
+Tables (21): households, users, sessions, invites, tickets (record JSON + PNG), scans, auto_guard,
 events, server_settings, printers, feedback, feedback_identities, tasks (My list, §17), tags,
-journal (§25), wins (§25) and task_slides (§25). `nextbox db diagram` draws them.
+journal (§25), wins (§25), task_slides (§25), friend_codes, friendships, blocks and friend_notes (§34).
+`nextbox db diagram` draws them.
 
 **Learning kit** (`nextbox/dbtools.py`, tutorial in `DATABASE.md`):
 - `nextbox db demo` builds a separate practice database (`<data dir>/practice/nextbox.db`) full
@@ -477,7 +481,8 @@ journal (§25), wins (§25) and task_slides (§25). `nextbox db diagram` draws t
   is sent with the extended protocol, in a psycopg pipeline, so `SELECT 1; COMMIT; UPDATE ...` is refused
   before any of it runs, whatever psycopg's `prepare_threshold` is: None for PgBouncer turns preparing off.
   Without pipelines (libpq before 14) it's a prepared statement, and with preparing off too nothing runs).
-- Output always hides password hashes, salts, session hashes and to-do app secrets.
+- Output always hides password hashes, salts, session hashes and to-do app secrets, and what journal pages
+  and friends' notes say (`friend_notes.body`, `image`, `reaction`).
 - `nextbox db backup` makes an online copy in `<data dir>/backups/` (600).
 
 ## 17. My list, tags and ADHD support
@@ -615,14 +620,15 @@ open it in their label printer's own app (Brother iPrint&Label) or print it. It'
 Profile and email (`PATCH /auth/profile`; sign in with username or email), change password, signed-in
 devices (sign out the others), settings, help, feedback, refresh, **download my data**
 (`GET /auth/export`: account, settings, tags, tasks, linked app and calendar names, tickets, read-backs,
-journal pages, wins and devices as data.json; `?format=zip` adds the ticket images (`tickets/*.png`) and
-journal photos (`journal/*.jpg`), 5 an hour; both are sent `no-store`; never passwords, hashes or tokens;
+journal pages, wins, devices, and friends with your own sent and received notes (§34) as data.json;
+`?format=zip` adds the ticket images (`tickets/*.png`), journal photos (`journal/*.jpg`) and notes' doodles and
+photos (`notes/<id>.png|jpg`), 5 an hour; both are sent `no-store`; never passwords, hashes or tokens;
 the app first asks `GET /auth/export/check`, which doesn't count, so a reset hold or the hourly limit is a
 message in the app; it says "Getting your .zip ready…", ignores another tap for 8 s so a double tap is one
 download, and starts the file through a download link, so a download that fails never replaces the app),
 sign out, and **delete my account**
 (`POST /auth/delete-account`: password + typed username; removes the account, tasks, tags,
-tickets, scans and activity; feedback stays, unlinked; the invite it joined with stays used, and the
+tickets, scans, activity, friendships, requests, blocks and every note it sent or got; feedback stays, unlinked; the invite it joined with stays used, and the
 invites it made stay, but none of them names it (`(deleted account)`; a one-time startup fix does the
 same for accounts an older version deleted); the protected admin and the last superadmin
 can't). The login page has show-password and "Forgot your password?" (an admin gives a one-time
@@ -1013,8 +1019,8 @@ list, so "Your own" brings it back; changing a preset's marks makes them their o
   ("Forgot it? ... run scripts/move-out.sh again").
 - **Encryption** (the STREAM construction of Hoang, Reyhanitabar, Rogaway and Vizár, as in Tink and age): a plain
   header `NBMOVE` + 4-byte length + JSON {format, app_version, made_on, from_host, tz and utc_offset (the old PC's
-  time zone), made_ts, data_ts (the newest change in its database: sign-ins, devices, tasks, journal, wins, prints;
-  not the events log), kdf {scrypt, n=2^17, r=8, p=1, 16-byte salt}, cipher, chunk, nonce_prefix, check}. Only r=8,
+  time zone), made_ts, data_ts (the newest change in its database: sign-ins, devices, tasks, journal, wins, prints,
+  friends and their notes; not the events log), kdf {scrypt, n=2^17, r=8, p=1, 16-byte salt}, cipher, chunk, nonce_prefix, check}. Only r=8,
   p=1 and n from 2^15 to 2^18 are ever opened (at most 256 MiB), so a made-up header can't ask scrypt for gigabytes.
   Every text in the header must be plain (version, date, host `[A-Za-z0-9._-]`, zone name), so `move info` never
   shows terminal codes. scrypt gives 48 bytes: an AES-256-GCM key and a 16-byte `check` that tells a wrong passphrase
@@ -1108,3 +1114,63 @@ list, so "Your own" brings it back; changing a preset's marks makes them their o
   or change data refuses too (exit 78; `clip` says it with notify-send for the hotkey; tests never call the real
   notify-send, a conftest fixture records it); `move`, `doctor`, `db`, `status` and `printed` still work. A marker
   that can't be read still counts.
+
+## 34. Friends and notes
+`nextbox/friends.py` (its top has the API contract: every path, request and answer), endpoints in `server.py`,
+the label in `render.render_friend_note`, printing in `jobs.print_friend_note`. Snapchat-like: add friends, send
+them a note, a doodle, a photo or a heart; read what they sent in a full-screen feed that scrolls like video apps.
+- **Friends**: everyone has a friend link, `<NEXTBOX_PUBLIC_URL or this address>/app/#friend=CODE` (10 characters
+  with no 0/O/1/I, `friend_codes`; **New link** rotates it and the old one stops working), to copy, share
+  (`navigator.share`) or show as a QR code (`GET /friends/code/qr.png`, the `qrcode` package, pinned). Opening a
+  link asks first (`GET /friends/code/{code}`, 60 an hour). Or type an exact username: the answer is always "If
+  that name is right, they'll see your request.", whether the account exists, blocked you, or was already asked,
+  and the asker's own list shows only the name typed (never a display name), so nobody can find out who has an
+  account. A request to a name nobody has (or from someone blocked) is kept `hidden`: never shown to anyone,
+  and someone who takes that name later never sees it. A request must be accepted; if both ask, they're friends
+  straight away. Declining is quiet (the asker's request just fades). Requests nobody answers fade after 30 days.
+  Remove a friend or take a request back (`DELETE /friends/{name}`); **Block** (only someone who is a friend,
+  asked, or sent you a note) ends the friendship, takes their notes out of your feed, and hides their requests
+  from you; unblock doesn't make you friends again. Friends can be in any household: the one deliberate,
+  consented way to reach someone outside yours (§1 rule 9). Only existing accounts (invite-only sign-up stays).
+  20 requests a day.
+- **Notes** (`friend_notes`): `note` (words, 280 characters at most, on a color from `render.NOTE_COLORS`, printed
+  as that color's pattern band), `draw` (a finger doodle: black ink, kept as a 1-bit PNG, at most 1200 px), `photo`
+  (camera or library, optional caption of 140) and `heart` (one tap). Sent to one or more accepted friends (20 at
+  a time); 30 a day to one friend, 100 a day in all, each over the limit a plain sentence (429). The send screen
+  shows "how it prints" (`POST /notes/preview`, `/notes/preview/image`: the 1-bit label, nothing kept).
+- **Pictures are cleaned on the server** (`friends.clean_photo`, `clean_doodle`): opened by Pillow (anything else:
+  415), only JPEG/PNG/WebP/GIF/HEIC (HEIC with the `heic` extra, else `scan.HEIC_HELP`) for photos and
+  PNG/JPEG/WebP for doodles, turned upright, at most 1600 px and about 450 KB, re-encoded into a new image so no
+  EXIF, location, ICC or XMP is kept. Photos up to 15 MB in (`/notes/image` is allowed 16 MB like `/scan`),
+  doodles 3 MB and 4 megapixels; see-through canvases become black on white.
+- **The feed** (`GET /notes/feed`): unseen notes first, then the rest, each newest first, with a cursor. The app
+  shows one per screen (CSS `scroll-snap-type: y mandatory`) with a right-side rail: ♥ react (`friends.REACTIONS`),
+  🖨 Print, ↩ Reply (compose to that friend), 🔖 Keep, ⋯ (Delete for me, Block); the sender and time at the bottom
+  left. A note is marked seen (`POST /notes/{id}/seen`) once 60% visible for about 1 s (IntersectionObserver);
+  arrow keys and j/k on a desktop; prefers-reduced-motion respected; `GET /notes/count` for the tab's badge.
+  The sender's **Sent** list says Delivered, Seen or Printed, or only Delivered when the recipient turned off
+  `friend_receipts` ("Tell friends when I've seen or printed their notes", on by default). Reactions show there.
+- **Printing** (`POST /notes/{id}/print`): only by the recipient, only with `confirm: true`, which the app sends
+  after "Send this to the printer?" (400 without). Nothing ever prints a note by itself (§1 rule 2): no automatic
+  or per-friend auto-print. It goes to the recipient's own household printer (the "Notes from friends" label color
+  rule, `printers.REASONS["friend"]`) through `printer.print_image` → `printer._send_raster`, with the same
+  dry-run rules, Always preview only and the pause as every ticket (`jobs._printer_for`). The label is drawn at
+  that printer's own width (a die-cut label's size, the picture shrunk to fit it): "From <name> · <date>", the
+  color band, then the words big, the doodle or the photo dithered to 1-bit with its caption, or a big heart and
+  "<name> sent you a ♥". Emoji the label can't draw are left off (`render.printable`, `render.can_draw` and the
+  fallback fonts). A household with no printer here gets a preview with `jobs.PRINT_AWAY` (or the no-printer
+  note) and the app offers **Print on paper** (`GET /notes/{id}/paper.pdf`) and **Save label image**
+  (`GET /notes/{id}/label.png?download=1`). A printed note is **not a ticket**: nothing goes in `tickets`, so no
+  admin view shows it; only `printed` (a time) is set on the note.
+- **Private**: notes are seen only by their sender and recipient. No admin or superadmin endpoint reads the four
+  tables (`tests/test_friends.py` walks every admin, super, usage, debug and ticket endpoint); events carry
+  counts only (`note_send {count}`, `note_print {status}`, `friend_request`, never a name, word, id or picture),
+  and an unexpected error is logged as its type only (a message could quote a note). The words and pictures are
+  stored nowhere but `friend_notes`, and `nextbox db sql` masks `body`, `image` and `reaction`. Every `/friends`
+  and `/notes` answer is `no-store`. The shared key gets 403.
+- **Kept 30 days**: a note nobody **Kept** is deleted 30 days after it arrived, at startup upkeep and when a feed
+  is listed (at most once a minute): no timer or cron. **Delete for me** takes it out of your feed or your Sent
+  list; it's gone for good once both have. Download my data has your friends and your own sent and received
+  notes (§22); deleting an account deletes its friend link, friendships, requests, blocks and every note it sent
+  or got; a household can only be removed once empty, and upkeep sweeps rows that name an account that's gone.
+- **No AI** anywhere here.

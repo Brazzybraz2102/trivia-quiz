@@ -256,7 +256,8 @@ def existing_data(data: Path) -> tuple[bool, int]:
 # events log (the server writes to it by itself).
 EPOCH_COLUMNS = (("users", "created"), ("users", "last_login"), ("users", "last_seen"), ("sessions", "created"),
                  ("sessions", "last_used"), ("tasks", "created"), ("tasks", "done_at"), ("journal", "updated"),
-                 ("wins", "ts"), ("task_slides", "last_moved"))
+                 ("wins", "ts"), ("task_slides", "last_moved"), ("friendships", "created"),
+                 ("friendships", "accepted"), ("friend_notes", "created"), ("friend_notes", "seen"))
 LOCAL_COLUMNS = (("tickets", "created_at"), ("scans", "created_at"))  # this PC's local time, as text
 
 

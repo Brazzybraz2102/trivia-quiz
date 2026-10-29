@@ -709,7 +709,7 @@ def test_privacy_says_snap_sends_the_marks_and_terms_went_up(site):
     a, anon, login, _, data = site
     privacy = anon.get("/app/privacy.html").text
     assert "with the marks you use (each symbol, what Next Box does with it, and your own" in privacy
-    assert server.TERMS_VERSION == 5
+    assert server.TERMS_VERSION >= 5  # 6 (friends and notes) came after: see test_friends.py
     a.record_consent("sam", server.DATA_NOTICE_VERSION, terms=4)  # agreed before this
     sam = login("sam", "sam password")
     assert sam.get("/auth/me").json()["terms_ok"] is False
