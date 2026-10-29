@@ -714,7 +714,7 @@ def test_privacy_says_snap_sends_the_marks_and_terms_went_up(site):
     sam = login("sam", "sam password")
     assert sam.get("/auth/me").json()["terms_ok"] is False
     js = (WEB / "app.js").read_text()
-    note = js[js.index("TERMS_VERSION 3, 4 and 5"):js.index("Have a quick look before you carry on.")]
+    note = js[js.index("TERMS_VERSION 3, 4, 5 and 6"):js.index("Have a quick look before you carry on.")]
     assert "Snap also sends the marks you use" in note
     assert "#   5: Snap also sends the marks you use" in (Path(server.__file__)).read_text()
 

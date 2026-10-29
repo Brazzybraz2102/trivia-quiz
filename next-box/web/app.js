@@ -142,7 +142,7 @@ function showLogin(msg = "") {
   if (me) return startOver(msg);  // someone was signed in: nothing of theirs may stay on the page
   showOnly("login");
   if (pendingJoin) showJoin(pendingJoin);
-  $("#loginMsg").textContent = msg;
+  $("#loginMsg").textContent = msg || frLinkHint();  // a friend link waits for sign-in
   $("#loginMsg").className = "muted";
   if (msg && $("#loginForm").hidden) toast(msg, 4000);
   if (!pendingJoin) $("#user").focus();
@@ -203,6 +203,7 @@ function clearPerson() {
   $("#snapMarks").textContent = "✓ done · → move · ✗ drop";
   $("#lookOut").innerHTML = ""; $("#lookNotes").checked = false; lookText = ""; lookPrivacy();  // the AI helpers
   routineForget(); timerForget(); remindForget(); quickRoute = null; shareForget();  // FE: the card, timer, reminders, a share
+  frForget();  // friends and notes
   markTab("mylist");
   resetSignIn();
 }
@@ -267,11 +268,13 @@ async function boot() {
   if (!me.consented || me.terms_ok === false) {  // new, or the notice or Terms changed since they agreed
     $("#noticeBody").textContent = me.data_notice;
     $("#noticeChanged").hidden = !me.notice_changed;
-    // What's new in the Privacy Policy (TERMS_VERSION 3, 4 and 5), when that's what changed.
+    // What's new in the Privacy Policy and Terms (TERMS_VERSION 3, 4, 5 and 6), when that's what changed.
     $("#noticeChanged").textContent = "This changed since you last agreed. " + (me.terms_ok === false
       ? "The Privacy Policy now says that Snap also sends the marks you use (each symbol and your own words for what it means) with your photo, so it can read them. "
         + "It says just what the AI helpers (Break it down and Look back on my week) send to Anthropic, and that they only do it when you tap them. "
-        + "It also says that with Journal mode off, a photo with handwriting on it is still kept as that day's journal page. " : "")
+        + "It also says that with Journal mode off, a photo with handwriting on it is still kept as that day's journal page. "
+        + "New: Friends. You can add friends and send them notes, doodles, photos and hearts. Only you and that friend see a note (not even the admin), "
+        + "a note you don't keep is deleted 30 days after it arrives, and it prints only when you tap Print. The Terms say to send only what you're happy to have printed. " : "")
       + "Have a quick look before you carry on.";
     $("#noticeMsg").textContent = "";
     if (!$("#noticeDialog").open) $("#noticeDialog").showModal();
@@ -279,6 +282,8 @@ async function boot() {
   // A new account: the setup questions, once the notice is agreed (boot runs again after "I agree").
   else if (me.setup_quiz && !quizAsked && !$("#quizDialog").open) { quizAsked = true; openQuiz(); }
   quickRun();  // an app shortcut or a share that opened Next Box (FE): once nothing else is asking first
+  frLinkRun();  // a friend link that opened Next Box: "Add Lee as a friend?", once nothing else is asking first
+  frCountLoad();  // the Friends tab's number: new notes and friend requests
 }
 
 $("#noticeOk").onclick = async () => {
@@ -1254,8 +1259,8 @@ const loaders = { mylist: () => { loadList(); loadToday(); loadGuide(); loadRout
 function markTab(tab) {  // which screen shows, without loading anything
   $$("#topnav button").forEach((x) => { x.classList.toggle("on", x.dataset.tab === tab); x.toggleAttribute("aria-current", x.dataset.tab === tab); if (x.dataset.tab === tab) x.setAttribute("aria-current", "page"); });
   $$(".bottombar [data-go]").forEach((x) => { x.classList.toggle("on", x.dataset.go === tab); setCurrent(x, x.dataset.go === tab); });
-  $("#moreBtn").classList.toggle("on", !["mylist", "print", "scan", "journal"].includes(tab));
-  setCurrent($("#moreBtn"), !["mylist", "print", "scan", "journal"].includes(tab));
+  $("#moreBtn").classList.toggle("on", !["mylist", "print", "scan", "journal", "friends"].includes(tab));
+  setCurrent($("#moreBtn"), !["mylist", "print", "scan", "journal", "friends"].includes(tab));
   // Where you are, also in the browser tab and the app switcher: "Journal · Next Box".
   const name = $(`#topnav button[data-tab="${tab}"]`)?.firstChild?.textContent.trim();
   document.title = me && name ? `${name} · Next Box` : "Next Box";
@@ -5603,10 +5608,12 @@ function paperButton(id) {
 }
 // Save label image: the ticket's picture as a file (stickers: all of them in one tall image), to open in a label
 // printer's own app (like Brother iPrint&Label) or print. Only a download: it never prints anything.
-function saveImageLink(id, cls) {
-  const name = `next-box-${id}.png`;
-  return `<a class="${cls}" data-save-png href="${png(id)}?download=1" download="${esc(name)}"
-    aria-label="Save label image of ticket #${esc(id)}">Save label image</a>`;
+// A friend's note (not a ticket) passes its own picture: /notes/<id>/label.png?download=1.
+function saveImageLink(id, cls, note = false) {
+  const name = note ? `next-box-note-${id}.png` : `next-box-${id}.png`;
+  const href = note ? `/notes/${encodeURIComponent(id)}/label.png?download=1` : `${png(id)}?download=1`;
+  return `<a class="${cls}" data-save-png href="${href}" download="${esc(name)}"
+    aria-label="Save label image of ${note ? "this note" : `ticket #${esc(id)}`}">Save label image</a>`;
 }
 document.addEventListener("change", (e) => {
   if (!e.target.matches?.("select[data-paper]")) return;
@@ -5816,7 +5823,7 @@ $("#listBody").addEventListener("focusin", (e) => {
 $$(".bottombar [data-go]").forEach((b) => b.onclick = () => $(`#topnav button[data-tab=${b.dataset.go}]`).click());
 $("#moreBtn").onclick = () => {
   if (!me) return;
-  const tabs = $$("#topnav button").filter((b) => !b.hidden && !["mylist", "print", "scan", "journal"].includes(b.dataset.tab));
+  const tabs = $$("#topnav button").filter((b) => !b.hidden && !["mylist", "print", "scan", "journal", "friends"].includes(b.dataset.tab));
   const icons = { printed: "🧾", board: "💬", profile: "👤", settings: "⚙️", admin: "🛠️", superusers: "👥", usage: "📊", debug: "🐞" };
   const here = $("#topnav button.on")?.dataset.tab;
   $("#moreMenu").innerHTML = tabs.map((b) => `<button data-more="${b.dataset.tab}"${b.dataset.tab === here ? ` aria-current="page"` : ""}><span aria-hidden="true">${icons[b.dataset.tab] || "•"}</span> ${esc(b.textContent)}</button>`).join("");
@@ -5837,6 +5844,1127 @@ window.addEventListener("unhandledrejection", (e) => {
   const msg = String(e.reason?.message || e.reason || "");
   toast(msg === OFFLINE || msg.includes("fetch") || msg.includes("NetworkError") ? OFFLINE : "Something went wrong. Try again.", { error: true });
 });
+
+
+// ---------------------------------------------------------------- Friends and notes (SPEC §34)
+// Add friends (your friend link, its QR code, or an exact username), send them a note, a doodle, a photo or a
+// heart, and watch what they sent full screen, one note per screen, swiping up like a video app. Notes are
+// private to the two friends (the server keeps it that way). A note prints only when its recipient taps Print:
+// a real print asks "Send this to the printer?" first, as every print in Next Box does. Nothing here prints or
+// sends by itself; the one thing done without a tap is "seen", once a note has been on screen for about a second.
+const FR_REACTIONS = ["❤️", "😂", "😮", "😢", "👍", "🔥"];  // friends.REACTIONS
+const FR_COLORS = [["yellow", "Yellow"], ["pink", "Pink"], ["blue", "Blue"], ["green", "Green"], ["purple", "Purple"], ["white", "White"]];  // render.NOTE_COLORS
+const FR_KINDS = { note: "note", draw: "drawing", photo: "photo", heart: "heart" };
+const FR_STATUS = { delivered: "Delivered", seen: "Seen ✓", printed: "Printed 🖨" };
+const FR_MAX_TEXT = 280;  // friends.MAX_TEXT
+let frData = null;                                      // GET /friends, as last loaded
+let frCounts = { unseen: 0, requests: 0 };              // the tab's badge
+let frView = "notes";                                   // Notes, Friends or Sent
+let frFeed = { notes: [], next: null, loaded: false, busy: false };
+let frSentList = { notes: [], next: null, loaded: false };
+let frLinkCode = "";                                    // a #friend=CODE link, asked about once signed in
+let frFeedOpener = null, frFeedIO = null, frFeedImgIO = null, frPageImgIO = null, frFitTimer = null;
+const frSeenTimers = new Map();                         // note id → its "seen after a second" timer
+const frImgs = new Map();                               // note id → its picture (an object URL), fetched once per visit
+let frDraft = { kind: "note", color: "yellow", text: "", to: new Set(), photo: null, strokes: [], cleared: null, pen: 12 };
+let frComposeOpener = null, frPrevTimer = null, frPrevN = 0, frPrevUrl = "", frPen = null;
+let frPrintNote = null, frPrintOpener = null, frQrUrl = "";
+let frSheetActs = [], frSheetOpener = null, frAskActs = [], frAskOpener = null;
+let frLastTap = { at: 0, x: 0, y: 0 }, frLastHeart = 0;
+
+const frName = (p) => p?.name || p?.username || "";
+const frInitial = (name) => {  // a whole emoji or accented letter, never half of one
+  const n = String(name || "?");
+  const seg = typeof Intl.Segmenter === "function" ? [...new Intl.Segmenter().segment(n)][0]?.segment : Array.from(n)[0];
+  return (seg || "?").toUpperCase();
+};
+const frAv = (p) => `<span class="frav" aria-hidden="true">${esc(frInitial(frName(p)))}</span>`;
+const frCap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const frNote = (id) => frFeed.notes.find((n) => n.id === id);
+const frPath = (id) => `/notes/${encodeURIComponent(id)}`;
+const frWho = (u) => encodeURIComponent(u);
+function frList(names) {  // "Lee", "Lee and Ana", "Lee, Ana and 2 others"
+  if (names.length <= 1) return names[0] || "";
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  if (names.length === 3) return `${names[0]}, ${names[1]} and ${names[2]}`;
+  return `${names[0]}, ${names[1]} and ${names.length - 2} others`;
+}
+function frWhen(ts) {  // "2:14p" today, "Yesterday 2:14p", "Tue 2:14p" this week, else "Oct 3"
+  const d = new Date(ts * 1000), now = new Date(), day = (x) => x.toLocaleDateString("en-CA");
+  const clock = fmtClock(d.toTimeString().slice(0, 5));
+  if (day(d) === day(now)) return clock;
+  const y = new Date(now); y.setDate(now.getDate() - 1);
+  if (day(d) === day(y)) return `Yesterday ${clock}`;
+  if (now - d < 6 * 86400000) return `${d.toLocaleDateString([], { weekday: "short" })} ${clock}`;
+  return d.toLocaleDateString([], { month: "short", day: "numeric", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
+}
+function frKeepWords(n) {
+  if (n.kept) return "Kept: it stays until you delete it.";
+  const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();  // calendar days, on this device's clock
+  const days = Math.round((day(new Date(n.expires * 1000)) - day(new Date())) / 86400000);
+  return `Goes ${days <= 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`} unless you keep it.`;
+}
+
+// ---- the badge: unseen notes and friend requests, on the Friends tab (top and bottom)
+function frBadge() {
+  const n = (frCounts.unseen || 0) + (frCounts.requests || 0);
+  $$("[data-friends]").forEach((b) => {
+    b.hidden = !n;
+    b.innerHTML = n ? `<span class="sr-only">, </span>${n > 99 ? "99+" : n}<span class="sr-only"> new</span>` : "";
+  });
+  const pill = (v) => (v ? `<span class="sr-only">, </span>${v > 99 ? "99+" : v}<span class="sr-only"> new</span>` : "");
+  $("#frNotesN").innerHTML = pill(frCounts.unseen);
+  $("#frPeopleN").innerHTML = pill(frCounts.requests);
+}
+async function frCountLoad() {
+  if (!me || $("#appShell").hidden) return;
+  let c;
+  try { c = await api("/notes/count"); } catch { return; }
+  if (!me) return;
+  const more = c.unseen > frCounts.unseen || c.requests > frCounts.requests;
+  frCounts = c; frBadge();
+  // Something new while the Friends tab is open (and nobody's watching or writing): show it.
+  if (more && $("#friends").classList.contains("on") && !$$("dialog[open]").length) frLoad();
+}
+// Fresh numbers when Next Box comes back to the front, and every minute while it's in front. Nothing else.
+setInterval(() => { if (document.visibilityState === "visible") frCountLoad(); }, 60000);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  frCountLoad();
+  if ($("#feedDialog").open) frSeenAgain();
+});
+
+// ---- the Friends tab: Notes, Friends, Sent
+async function frLoad() {
+  frViewShow(frView);  // Sent loads itself when it's the one showing
+  await Promise.all([frFriendsLoad(), frFeedLoad()]);
+}
+loaders.friends = () => frLoad();
+function frViewShow(v) {
+  frView = v;
+  $$("#frSeg [data-frview]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.frview === v)));
+  $("#frNotesView").hidden = v !== "notes";
+  $("#frPeopleView").hidden = v !== "people";
+  $("#frSentView").hidden = v !== "sent";
+  if (v === "sent" && me) frSentLoad();
+}
+$("#frSeg").onclick = (e) => { const b = e.target.closest("[data-frview]"); if (b) frViewShow(b.dataset.frview); };
+function frGoAdd() {  // the "Add a friend" card, with the keyboard there too
+  if (!$("#friends").classList.contains("on")) goto("friends");
+  frViewShow("people");
+  setTimeout(() => {
+    $("#frAddCard").scrollIntoView({ behavior: smooth(), block: "start" });
+    $("#frAddHead").focus({ preventScroll: true });
+  }, 60);
+}
+function frGoRequests() {
+  frViewShow("people");
+  setTimeout(() => { $("#frReqCard").scrollIntoView({ behavior: smooth(), block: "start" }); $("#frReqHead").focus({ preventScroll: true }); }, 60);
+}
+
+async function frFriendsLoad() {
+  try { frSetData(await api("/friends")); }
+  catch (e) { if (!frData) $("#frList").innerHTML = `<p class="err">${esc(errText(e))}</p>`; }
+}
+function frSetData(d) {
+  frData = d;
+  frCounts.requests = d.incoming.length;
+  frBadge();
+  frPeopleDraw();
+  frNotesDraw();
+  if ($("#composeDialog").open) frChipsDraw();
+}
+function frPeopleDraw() {
+  const d = frData;
+  if (!d) return;
+  $("#frReqCard").hidden = !d.incoming.length;
+  $("#frReqs").innerHTML = d.incoming.map((p) => `<div class="frrow">${frAv(p)}
+      <div class="frwho"><b>${esc(p.name)}</b><span class="muted">@${esc(p.username)} · wants to be friends · ${esc(frWhen(p.at))}</span></div>
+      <div class="fracts"><button type="button" class="go small" data-fr-accept="${esc(p.username)}">Accept</button>
+        <button type="button" class="plain small" data-fr-decline="${esc(p.username)}">Decline</button>
+        <button type="button" class="plain small warn" data-fr-block="${esc(p.username)}">Block</button></div></div>`).join("");
+  $("#frLink").value = d.link;
+  $("#frShare").hidden = !navigator.share;
+  $("#frList").innerHTML = d.friends.length ? d.friends.map((p) => `<div class="frrow">${frAv(p)}
+      <div class="frwho"><b>${esc(p.name)}</b><span class="muted">@${esc(p.username)} · friends since ${esc(frWhen(p.since))}</span></div>
+      <div class="fracts"><button type="button" class="go small" data-fr-send="${esc(p.username)}" aria-label="Send a note to ${esc(p.name)}">Send a note</button>
+        <button type="button" class="plain small" data-fr-more="${esc(p.username)}" aria-haspopup="dialog" aria-label="More for ${esc(p.name)}">⋯</button></div></div>`).join("")
+    : `<p class="muted">No friends yet. Share your friend link above, or type a friend's username.</p>`;
+  $("#frOutBox").hidden = !d.outgoing.length;
+  $("#frOut").innerHTML = d.outgoing.map((p) => `<div class="frrow">
+      <div class="frwho"><b>${esc(p.username)}</b><span class="muted">You asked ${esc(frWhen(p.at))}. When they say yes, they're on your list.</span></div>
+      <div class="fracts"><button type="button" class="plain small" data-fr-cancel="${esc(p.username)}" aria-label="Take back your request to ${esc(p.username)}">Take back</button></div></div>`).join("");
+  $("#frBlockedCard").hidden = !d.blocked.length;
+  $("#frBlockedHead").textContent = `Blocked (${d.blocked.length})`;
+  $("#frBlocked").innerHTML = d.blocked.map((p) => `<div class="frrow">${frAv(p)}
+      <div class="frwho"><b>${esc(p.name)}</b><span class="muted">@${esc(p.username)}</span></div>
+      <div class="fracts"><button type="button" class="plain small" data-fr-unblock="${esc(p.username)}" aria-label="Unblock ${esc(p.name)}">Unblock</button></div></div>`).join("");
+  frReceiptDraw();
+}
+function frReceiptDraw() {
+  const on = me?.prefs?.friend_receipts !== false;
+  $("#frReceiptSay").textContent = on ? "Your friends can see when you've seen or printed their notes."
+    : "Your friends can't see when you've seen or printed their notes: their Sent list says Delivered.";
+}
+$("#frReceiptGo").onclick = () => goto("settings", "#friendsSetCard");
+const frPersonOf = (u) => [...(frData?.friends || []), ...(frData?.incoming || []), ...(frData?.blocked || [])].find((p) => p.username === u)
+  || { username: u, name: u };
+
+// One change to your friends (accept, decline, remove, block…): the page answers with the whole list again.
+async function frChange(btn, path, method, said) {
+  let ok = false;
+  const run = async () => {
+    try { frSetData(await api(path, { method })); ok = true; toast(said); }
+    catch (e) { toast(errText(e)); }
+  };
+  if (btn) await hold(btn, run); else await run();  // from a ⋯ sheet: its button has gone already
+  return ok;
+}
+async function frBlock(u, btn = null) {
+  const name = frName(frPersonOf(u));
+  if (!confirm(`Block ${name}? They can't send you friend requests or notes anymore, you stop being friends, and their notes leave your feed.`)) return false;
+  const ok = await frChange(btn, `/friends/${frWho(u)}/block`, "POST", `Blocked ${name}.`);
+  if (ok) frDropFrom(u);
+  return ok;
+}
+function frDropFrom(u) {  // a blocked person's notes leave the feed (and the screen) at once
+  const gone = frFeed.notes.filter((n) => n.from.username === u).map((n) => n.id);
+  if (!gone.length) return;
+  frFeed.notes = frFeed.notes.filter((n) => n.from.username !== u);
+  gone.forEach(frImgForget);
+  frNotesDraw();
+  if ($("#feedDialog").open) {
+    gone.forEach((id) => $(`#feedList .fcard[data-id="${CSS.escape(id)}"]`)?.remove());
+    frFeedAfterRemove();
+  }
+  frCountLoad();
+}
+$("#frPeopleView").addEventListener("click", async (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  const d = b.dataset, who = (u) => frName(frPersonOf(u));
+  if (d.frAccept) {
+    const name = who(d.frAccept);
+    if (await frChange(b, `/friends/${frWho(d.frAccept)}/accept`, "POST", `You and ${name} are friends now.`)) frFocusAfter("#frListHead");
+  } else if (d.frDecline) {
+    if (await frChange(b, `/friends/${frWho(d.frDecline)}/decline`, "POST", "Declined. They aren't told.")) frFocusAfter("#frReqHead", "#frAddHead");
+  } else if (d.frBlock) {
+    if (await frBlock(d.frBlock, b)) frFocusAfter("#frReqHead", "#frAddHead");
+  } else if (d.frCancel) {
+    if (await frChange(b, `/friends/${frWho(d.frCancel)}`, "DELETE", "Request taken back.")) frFocusAfter("#frListHead");
+  } else if (d.frUnblock) {
+    const name = who(d.frUnblock);
+    if (await frChange(b, `/friends/${frWho(d.frUnblock)}/block`, "DELETE", `Unblocked ${name}. You're friends again only if one of you asks.`)) frFocusAfter("#frAddHead");
+  } else if (d.frSend) {
+    frComposeOpen({ to: [d.frSend], opener: b });
+  } else if (d.frMore) {
+    const u = d.frMore, name = who(u);
+    frSheetShow(name, `@${u}`, [
+      { label: "Send a note", icon: "✏️", run: () => frComposeOpen({ to: [u], opener: b }) },
+      { label: `Remove ${name} as a friend`, icon: "➖", run: async () => {
+        if (!confirm(`Remove ${name} as a friend? You can't send each other notes after that. Notes you already have stay.`)) return;
+        if (await frChange(null, `/friends/${frWho(u)}`, "DELETE", `${name} isn't on your friends list now.`)) frFocusAfter("#frListHead");
+      } },
+      { label: `Block ${name}`, icon: "🚫", warn: true, run: async () => { if (await frBlock(u)) frFocusAfter("#frListHead"); } },
+    ], b);
+  }
+});
+function frFocusAfter(...sels) {  // the row you were on has gone: carry on from the nearest heading that's still there
+  const el = sels.map((s) => $(s)).find((x) => x?.offsetParent);
+  if (!el) return;
+  if (!el.hasAttribute("tabindex")) el.tabIndex = -1;
+  el.focus({ preventScroll: false });
+}
+$("#frReqNoteGo").onclick = frGoRequests;
+
+// Your friend link: copy, share, QR code, or a new one (the old one stops working).
+$("#frCopy").onclick = () => { if (frData) copyText(frData.link); };
+$("#frShare").onclick = async () => {
+  if (!frData) return;
+  try { await navigator.share({ title: "Add me on Next Box", text: "Add me as a friend on Next Box:", url: frData.link }); }
+  catch (e) { if (e?.name !== "AbortError") copyText(frData.link); }
+};
+$("#frLink").addEventListener("focus", (e) => e.target.select());
+$("#frRotate").onclick = () => hold($("#frRotate"), async () => {
+  if (!confirm("Make a new friend link? The old one stops working, so nobody can add you with it anymore.")) return;
+  try {
+    const r = await api("/friends/code/rotate", { method: "POST" });
+    Object.assign(frData, r);
+    $("#frLink").value = r.link;
+    toast("New link made. The old one doesn't work anymore.");
+  } catch (e) { toast(errText(e)); }
+});
+$("#frQr").onclick = async () => {
+  const d = $("#frQrDialog"), img = $("#frQrImg");
+  img.hidden = true; $("#frQrMsg").textContent = "Making your QR code…";
+  d.showModal(); $("#frQrTitle").focus();
+  try {
+    const blob = await frPng("/friends/code/qr.png");
+    if (frQrUrl) URL.revokeObjectURL(frQrUrl);
+    frQrUrl = URL.createObjectURL(blob);
+    img.src = frQrUrl; img.hidden = false; $("#frQrMsg").textContent = "";
+  } catch (e) { $("#frQrMsg").textContent = errText(e); }
+};
+$("#frQrClose").onclick = () => $("#frQrDialog").close();
+closeOnBackdrop($("#frQrDialog"));
+$("#frQrDialog").addEventListener("close", () => $("#frQr").focus({ preventScroll: true }));
+
+// Add by exact username. The answer is the same whether or not the name has an account (the server's rule).
+$("#frAddForm").onsubmit = (e) => { e.preventDefault(); hold($("#frAddGo"), frAddByName); };
+async function frAddByName() {
+  const box = $("#frName"), msg = $("#frAddMsg"), name = box.value.trim().replace(/^@/, "").toLowerCase();
+  msg.className = ""; msg.textContent = "";
+  box.removeAttribute("aria-invalid");
+  if (!name) { msg.className = "err"; msg.textContent = "Type their username first."; box.setAttribute("aria-invalid", "true"); return box.focus(); }
+  try {
+    const r = await api("/friends/add", { method: "POST", json: { username: name } });
+    frSetData(r.friends);
+    msg.className = r.status === "friends" ? "ok" : "muted";
+    msg.textContent = r.message;
+    box.value = "";
+  } catch (e) { msg.className = "err"; msg.textContent = errText(e); box.setAttribute("aria-invalid", "true"); }
+}
+$("#frName").addEventListener("input", () => { $("#frAddMsg").textContent = ""; $("#frName").removeAttribute("aria-invalid"); });
+
+// ---- Notes: the Watch card, the tiles (tap one to watch from there), Show more
+async function frFeedLoad() {
+  let r;
+  try { r = await api("/notes/feed?limit=30"); }
+  catch (e) { if (!frFeed.loaded) $("#frTiles").innerHTML = `<p class="err">${esc(errText(e))}</p>`; return; }
+  frFeed = { notes: r.notes, next: r.next, loaded: true, busy: false };
+  frCounts.unseen = r.unseen; frBadge();
+  frNotesDraw();
+}
+async function frFeedMore() {  // the next page; a note marked seen meanwhile can come round again: skip it
+  if (!frFeed.next || frFeed.busy) return;
+  frFeed.busy = true;
+  let r;
+  try { r = await api(`/notes/feed?limit=30&cursor=${encodeURIComponent(frFeed.next)}`); }
+  catch { frFeed.busy = false; return; }
+  const have = new Set(frFeed.notes.map((n) => n.id)), fresh = r.notes.filter((n) => !have.has(n.id));
+  const at = frFeed.notes.length;
+  frFeed.notes.push(...fresh);
+  frFeed.next = r.next; frFeed.busy = false;
+  frNotesDraw();
+  if ($("#feedDialog").open) frFeedAppend(fresh, at);
+}
+function frNotesDraw() {
+  const inc = frData?.incoming || [];
+  $("#frReqNote").hidden = !inc.length;
+  $("#frReqNoteText").textContent = inc.length === 1 ? `${inc[0].name} wants to be friends.` : `${inc.length} people want to be friends.`;
+  if (!frFeed.loaded) return;
+  const notes = frFeed.notes, fresh = notes.filter((n) => !n.seen);
+  $("#frWatchCard").hidden = !notes.length;
+  $("#frKeepNote").hidden = !notes.length;
+  if (notes.length) {
+    const from = [...new Set(fresh.map((n) => frName(n.from)))];
+    $("#frWatchHead").textContent = fresh.length ? `${fresh.length} new ${fresh.length === 1 ? "note" : "notes"}` : "You're all caught up";
+    $("#frWatchSub").textContent = fresh.length ? `From ${frList(from)}.` : "Watch your notes again any time.";
+  }
+  $("#frNotesEmpty").hidden = !!notes.length || !frData;
+  if (!notes.length && frData) {
+    $("#frNotesEmpty").innerHTML = `<span class="big" aria-hidden="true">💌</span><h3>No notes yet</h3>` + (frData.friends.length
+      ? `<p class="muted">When a friend sends you a note, a doodle, a photo or a heart, it shows up here. Why not send the first one?</p>
+         <div class="row"><button type="button" class="go" data-fr-compose aria-haspopup="dialog"><span aria-hidden="true">＋ </span>Send a note</button>
+           <button type="button" class="plain" data-fr-goadd>Add a friend</button></div>`
+      : `<p class="muted">Add a friend, and the notes, doodles, photos and hearts they send you show up here, one screen at a time.</p>
+         <div class="row"><button type="button" class="go" data-fr-goadd>Add a friend</button></div>`);
+  }
+  $("#frTiles").innerHTML = notes.map((n) => `<div role="listitem">${frTileHtml(n, true)}</div>`).join("");
+  $("#frTilesMore").hidden = !frFeed.next;
+  frImgWatch($$("#frTiles [data-fr-img]"));
+}
+function frTileHtml(n, button) {  // a small picture of a note: the tiles, and the Sent list
+  const who = frName(n.from || n.to), color = n.kind === "note" ? ` nc-${esc(n.color || "yellow")}` : "";
+  const inner = n.kind === "note" ? `<span class="ttext">${esc(n.text)}</span>`
+    : n.kind === "heart" ? `<span class="theart">❤️</span>`
+    : `<img data-fr-img="${esc(n.id)}" alt="">`;
+  if (!button) return `<div class="ntile nk-${esc(n.kind)}${color}" aria-hidden="true">${inner}</div>`;
+  const label = `${frCap(FR_KINDS[n.kind] || "note")} from ${who}, ${frWhen(n.created)}${n.seen ? "" : ", new"}${n.kept ? ", kept" : ""}`;
+  return `<button type="button" class="ntile nk-${esc(n.kind)}${color}${n.seen ? "" : " unseen"}" data-fr-open="${esc(n.id)}" aria-label="${esc(label)}" aria-haspopup="dialog">${inner}
+    <span class="tfrom" aria-hidden="true">${esc(who)}</span>${n.seen ? "" : `<span class="tbadge new" aria-hidden="true">New</span>`}${n.kept ? `<span class="tbadge kept" aria-hidden="true">🔖</span>` : ""}</button>`;
+}
+$("#friends").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  if (b.dataset.frOpen) frWatch(b.dataset.frOpen, b);
+  else if ("frGoadd" in b.dataset) frGoAdd();
+  else if ("frCompose" in b.dataset) frComposeOpen({ opener: b });
+  else if (b.dataset.frUnsend) frUnsend(b.dataset.frUnsend, b);
+});
+$("#frWatch").onclick = () => frWatch(null, $("#frWatch"));
+$("#frTilesMore").onclick = () => hold($("#frTilesMore"), frFeedMore);
+$("#frNew").onclick = () => frComposeOpen({ opener: $("#frNew") });
+
+// Pictures: each one fetched once per visit (they're never kept by the browser), when it's about to be seen.
+function frImgGet(id) {
+  if (!frImgs.has(id)) {
+    frImgs.set(id, fetch(`${frPath(id)}/image`, { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(String(r.status)))))
+      .then((b) => URL.createObjectURL(b))
+      .catch((e) => { frImgs.delete(id); throw e; }));
+  }
+  return frImgs.get(id);
+}
+function frImgForget(id) {
+  const p = frImgs.get(id);
+  frImgs.delete(id);
+  p?.then((u) => URL.revokeObjectURL(u)).catch(() => {});
+}
+function frImgShow(img) {
+  if (img.dataset.frShown) return;
+  img.dataset.frShown = "1";
+  frImgGet(img.dataset.frImg).then((u) => { img.src = u; })
+    .catch(() => { delete img.dataset.frShown; if (!img.classList.contains("fblur") && img.alt) img.alt += " (it couldn't load)"; });
+}
+function frImgWatch(imgs, inFeed = false) {
+  if (!window.IntersectionObserver) return imgs.forEach(frImgShow);
+  const make = (root) => new IntersectionObserver((entries, io) => {
+    for (const e of entries) if (e.isIntersecting) { io.unobserve(e.target); frImgShow(e.target); }
+  }, { root, rootMargin: root ? "100% 0px" : "300px 0px" });
+  const io = inFeed ? (frFeedImgIO ||= make($("#feedList"))) : (frPageImgIO ||= make(null));
+  imgs.forEach((img) => io.observe(img));
+}
+
+// ---- the feed: full screen, one note per screen, swipe up (or ↓, j) for the next
+function frCardHtml(n) {
+  const who = frName(n.from), kind = FR_KINDS[n.kind] || "note";
+  const caption = n.kind === "draw" || n.kind === "photo" ? n.text : "";
+  const stage = n.kind === "note" ? `<div class="fnote"><p>${esc(n.text)}</p></div>`
+    : n.kind === "heart" ? `<div class="fheart"><span class="big" aria-hidden="true">❤️</span><p>${esc(who)} sent you a ♥</p></div>`
+    : n.kind === "draw" ? `<img class="fpic" data-fr-img="${esc(n.id)}" alt="${esc(`${who}'s drawing`)}">`
+    : `<img class="fblur" data-fr-img="${esc(n.id)}" alt=""><img class="fpic" data-fr-img="${esc(n.id)}" alt="${esc(`Photo from ${who}`)}">`;
+  const label = `${frCap(kind)} from ${who}, ${frWhen(n.created)}${n.seen ? "" : ", new"}`;
+  return `<div class="fcard" role="region" tabindex="-1" data-id="${esc(n.id)}" aria-label="${esc(label)}">
+    <div class="fstage nk-${esc(n.kind)}${n.kind === "note" ? ` nc-${esc(n.color || "yellow")}` : ""}">${stage}
+      <div class="fmeta"><div class="fwho">${frAv(n.from)}<b>${esc(who)}</b><span class="fwhen">${esc(frWhen(n.created))}</span>${n.seen ? "" : `<span class="fnew">New</span>`}</div>
+        ${caption ? `<p class="fcap">${esc(caption)}</p>` : ""}<p class="fkeep">${esc(frKeepWords(n))}</p></div></div>
+    <div class="frail" role="group" aria-label="${esc(`${who}'s ${kind}`)}">
+      <div class="freact">${frReactHtml(n)}</div>
+      <button type="button" class="fbtn" data-fa="print" aria-haspopup="dialog"><span class="ficon" aria-hidden="true">🖨</span><span class="flabel">Print</span></button>
+      ${n.can_reply ? `<button type="button" class="fbtn" data-fa="reply" aria-haspopup="dialog"><span class="ficon" aria-hidden="true">↩</span><span class="flabel">Reply</span></button>` : ""}
+      <button type="button" class="fbtn" data-fa="keep" aria-pressed="${!!n.kept}"><span class="ficon" aria-hidden="true">🔖</span><span class="flabel">Keep</span></button>
+      <button type="button" class="fbtn" data-fa="more" aria-haspopup="dialog"><span class="ficon" aria-hidden="true">⋯</span><span class="flabel">More</span></button>
+    </div></div>`;
+}
+function frReactHtml(n, open = false) {
+  return `<button type="button" class="fbtn" data-fa="react" aria-expanded="${open}"><span class="ficon" aria-hidden="true">${esc(n.reaction || "♡")}</span>`
+    + `<span class="flabel">React</span>${n.reaction ? `<span class="sr-only">: you picked ${esc(n.reaction)}</span>` : ""}</button>`
+    + `<div class="ftray" role="group" aria-label="Reactions"${open ? "" : " hidden"}>`
+    + FR_REACTIONS.map((r) => `<button type="button" data-fr-react="${r}" aria-pressed="${n.reaction === r}">${r}</button>`).join("")
+    + (n.reaction ? `<button type="button" class="fnone" data-fr-react="">Take it back</button>` : "") + `</div>`;
+}
+const frEndHtml = () => (frFeed.next ? "" : `<div class="fcard fend" role="region" tabindex="-1" aria-label="You're all caught up" data-end="1">
+    <span class="big" aria-hidden="true">✓</span><h3>You're all caught up</h3>
+    <p>New notes from friends show up on the Friends tab, with a number on it.</p>
+    <div class="row"><button type="button" class="go" data-fa="new" aria-haspopup="dialog"><span aria-hidden="true">＋ </span>Send a note</button>
+      <button type="button" class="plain" data-fa="close">Close</button></div></div>`);
+const frCards = () => $$("#feedList .fcard");
+const frFeedIndex = () => { const l = $("#feedList"); return Math.round(l.scrollTop / Math.max(1, l.clientHeight)); };
+
+function frWatch(id = null, opener = document.activeElement) {
+  if (!frFeed.notes.length) return;
+  frFeedOpener = opener;
+  const d = $("#feedDialog"), list = $("#feedList");
+  list.innerHTML = frFeed.notes.map(frCardHtml).join("") + frEndHtml();
+  if (!d.open) d.showModal();
+  frFitAll();
+  const i = Math.max(0, id ? frFeed.notes.findIndex((n) => n.id === id) : 0), card = frCards()[i];
+  list.scrollTop = card.offsetTop;
+  card.focus({ preventScroll: true });
+  frFeedObserve(frCards());
+  frImgWatch($$("#feedList [data-fr-img]"), true);
+  frFeedAt(card);
+}
+function frFeedAppend(notes, at) {
+  const list = $("#feedList");
+  list.querySelector(".fend")?.remove();
+  list.insertAdjacentHTML("beforeend", notes.map(frCardHtml).join("") + frEndHtml());
+  const added = frCards().slice(at);
+  added.forEach(frFit);
+  frFeedObserve(added);
+  frImgWatch(added.flatMap((c) => [...c.querySelectorAll("[data-fr-img]")]), true);
+  frFeedAt(frCards()[frFeedIndex()]);
+}
+// Seen: a note that's at least 60% on screen for about a second. Only then, and only once.
+function frFeedObserve(cards) {
+  if (!window.IntersectionObserver) return;
+  frFeedIO ||= new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const card = e.target, id = card.dataset.id;
+      if (e.isIntersecting && e.intersectionRatio >= 0.59) {
+        frFeedAt(card);
+        if (id && !frSeenTimers.has(id) && !frNote(id)?.seen) frSeenTimers.set(id, setTimeout(() => frSeen(id), 1000));
+      } else if (id && frSeenTimers.has(id)) { clearTimeout(frSeenTimers.get(id)); frSeenTimers.delete(id); }
+    }
+  }, { root: $("#feedList"), threshold: [0.6] });
+  cards.forEach((c) => frFeedIO.observe(c));
+}
+function frSeenAgain() {  // back in front: the note on screen counts from now
+  const card = frCards()[frFeedIndex()], id = card?.dataset.id;
+  if (id && !frSeenTimers.has(id) && !frNote(id)?.seen) frSeenTimers.set(id, setTimeout(() => frSeen(id), 1000));
+}
+async function frSeen(id) {
+  frSeenTimers.delete(id);
+  const n = frNote(id), card = $(`#feedList .fcard[data-id="${CSS.escape(id)}"]`);
+  if (!n || n.seen || !$("#feedDialog").open || document.visibilityState !== "visible" || !card) return;
+  const box = $("#feedList").getBoundingClientRect(), r = card.getBoundingClientRect();
+  if (Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top) < 0.59 * box.height) return;  // scrolled away meanwhile
+  try { n.seen = (await api(`${frPath(id)}/seen`, { method: "POST" })).seen; } catch { return; }
+  frCounts.unseen = Math.max(0, frCounts.unseen - 1);
+  frBadge();
+}
+function frFeedAt(card) {  // the note on screen now: "2 of 7", trays elsewhere closed, the next page fetched in time
+  if (!card) return;
+  const cards = frCards(), i = cards.indexOf(card), total = frFeed.notes.length;
+  $("#feedPos").textContent = card.dataset.end ? "All caught up" : `${i + 1} of ${total}${frFeed.next ? "+" : ""}`;
+  cards.forEach((c) => { if (c !== card) frTray(c, false, false); });
+  if (frFeed.next && i >= total - 3) frFeedMore();
+}
+function frFeedGo(step) {
+  const cards = frCards(), i = Math.min(cards.length - 1, Math.max(0, frFeedIndex() + step)), card = cards[i];
+  if (!card) return;
+  $("#feedList").scrollTo({ top: card.offsetTop, behavior: smooth() });
+  card.focus({ preventScroll: true });
+}
+// A note's words as big as they fit beside the buttons, at any text size, without breaking a word in two;
+// a word too long for any line (a link) may break; too long even small: it scrolls.
+function frFit(card) {
+  const box = card.querySelector(".fnote"), p = box?.querySelector("p");
+  if (!p || !box.clientHeight) return;
+  const cs = getComputedStyle(box), room = box.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  const lo0 = 0.9 * rem, hi0 = Math.max(lo0, Math.min(4.2 * rem, box.clientWidth / 3.2));
+  const search = (whole) => {  // whole: every word on one line
+    const fits = (px) => {
+      p.style.setProperty("--fs", `${px}px`);
+      return p.scrollHeight <= room && (!whole || p.scrollWidth <= p.clientWidth);
+    };
+    if (fits(hi0)) return hi0;
+    if (!fits(lo0)) return 0;
+    let lo = lo0, hi = hi0;
+    for (let k = 0; k < 9; k++) { const mid = (lo + hi) / 2; if (fits(mid)) lo = mid; else hi = mid; }
+    return Math.max(lo0, lo * 0.96);  // a little room: a word that only just fits never tips onto two lines
+  };
+  box.classList.remove("scroll");
+  p.style.overflowWrap = "normal"; p.style.width = "calc(100% - 4px)";  // measured a little narrower: no word only just fits
+  let px = search(true);
+  p.style.overflowWrap = ""; p.style.width = "";
+  if (!px) px = search(false);
+  p.style.setProperty("--fs", `${px || lo0}px`);
+  if (!px) box.classList.add("scroll");
+}
+function frFitAll() { frCards().forEach(frFit); }
+window.addEventListener("resize", () => {
+  if (!$("#feedDialog").open) return;
+  clearTimeout(frFitTimer);
+  frFitTimer = setTimeout(() => { const i = frFeedIndex(); frFitAll(); const c = frCards()[i]; if (c) $("#feedList").scrollTop = c.offsetTop; }, 150);
+});
+function frTray(card, open, focus = true) {
+  const btn = card.querySelector('[data-fa="react"]'), tray = card.querySelector(".ftray");
+  if (!btn || !tray || tray.hidden === !open) return;
+  tray.hidden = !open;
+  btn.setAttribute("aria-expanded", String(open));
+  if (open && focus) (tray.querySelector('[aria-pressed="true"]') || tray.querySelector("button")).focus();
+  else if (!open && focus) btn.focus();
+}
+function frRailDraw(card, n) {  // after a reaction or Keep: just these bits change (the picture stays put)
+  const inside = card.querySelector(".freact").contains(document.activeElement);
+  card.querySelector(".freact").innerHTML = frReactHtml(n);
+  if (inside) card.querySelector('[data-fa="react"]').focus();
+  card.querySelector('[data-fa="keep"]').setAttribute("aria-pressed", String(!!n.kept));
+  card.querySelector(".fkeep").textContent = frKeepWords(n);
+}
+function frFeedSay(text) { $("#feedSay").textContent = ""; requestAnimationFrame(() => { $("#feedSay").textContent = text; }); }
+async function frReact(card, reaction) {
+  const n = frNote(card.dataset.id);
+  if (!n) return;
+  const was = n.seen;
+  try { Object.assign(n, await api(`${frPath(n.id)}/react`, { method: "POST", json: { reaction: reaction || null } })); }
+  catch (e) { return toast(errText(e)); }
+  if (!was && n.seen) { frCounts.unseen = Math.max(0, frCounts.unseen - 1); frBadge(); }
+  frRailDraw(card, n);
+  frFeedSay(n.reaction ? `You reacted ${n.reaction}.` : "Reaction taken back.");
+}
+function frBurst(card, x, y) {  // a big heart where you tapped twice (none with reduced motion)
+  if (reducedMotion()) return;
+  const r = card.getBoundingClientRect(), h = document.createElement("span");
+  h.className = "fburst"; h.textContent = "❤️"; h.setAttribute("aria-hidden", "true");
+  h.style.left = `${x - r.left}px`; h.style.top = `${y - r.top}px`;
+  card.append(h);
+  setTimeout(() => h.remove(), 1000);
+}
+function frHeartTap(card, x, y) {  // double tap: a ❤️, like video apps
+  if (!card?.dataset.id || Date.now() - frLastHeart < 600) return;
+  frLastHeart = Date.now();
+  frBurst(card, x, y);
+  if (frNote(card.dataset.id)?.reaction !== "❤️") frReact(card, "❤️");
+}
+$("#feedList").addEventListener("dblclick", (e) => {
+  const stage = e.target.closest(".fstage");
+  if (stage) frHeartTap(stage.closest(".fcard"), e.clientX, e.clientY);
+});
+$("#feedList").addEventListener("pointerup", (e) => {  // phones: two taps close together (a swipe never ends in one)
+  if (e.pointerType !== "touch" || !e.target.closest(".fstage")) return;
+  const now = Date.now(), near = Math.hypot(e.clientX - frLastTap.x, e.clientY - frLastTap.y) < 40;
+  if (now - frLastTap.at < 320 && near) { frLastTap = { at: 0, x: 0, y: 0 }; frHeartTap(e.target.closest(".fcard"), e.clientX, e.clientY); }
+  else frLastTap = { at: now, x: e.clientX, y: e.clientY };
+});
+$("#feedList").addEventListener("click", async (e) => {
+  const b = e.target.closest("button");
+  const open = $("#feedList .ftray:not([hidden])");
+  if (open && !open.contains(b) && b?.dataset.fa !== "react") frTray(open.closest(".fcard"), false, false);
+  if (!b) return;
+  const card = b.closest(".fcard"), n = card?.dataset.id ? frNote(card.dataset.id) : null;
+  if (b.dataset.frReact !== undefined) {
+    frTray(card, false);
+    return frReact(card, b.dataset.frReact === n?.reaction ? "" : b.dataset.frReact);
+  }
+  const act = b.dataset.fa;
+  if (act === "new") return frComposeOpen({ opener: b });
+  if (act === "close") return $("#feedDialog").close();
+  if (!n) return;
+  if (act === "react") frTray(card, card.querySelector(".ftray").hidden);
+  else if (act === "print") frPrintOpen(n, b);
+  else if (act === "reply") frComposeOpen({ to: [n.from.username], opener: b, title: `Reply to ${frName(n.from)}` });
+  else if (act === "keep") {
+    try { Object.assign(n, await api(`${frPath(n.id)}/keep`, { method: "POST", json: { keep: !n.kept } })); }
+    catch (err) { return toast(errText(err)); }
+    frRailDraw(card, n);
+    toast(n.kept ? "Kept. It stays until you delete it." : "Not kept. It goes 30 days after it came.");
+  } else if (act === "more") {
+    const who = frName(n.from);
+    frSheetShow(`${frCap(FR_KINDS[n.kind])} from ${who}`, frWhen(n.created), [
+      { label: "Save label image", icon: "⬇️", href: `${frPath(n.id)}/label.png?download=1`, download: `next-box-note-${n.id}.png` },
+      { label: "Delete for me", icon: "🗑️", warn: true, run: () => frDeleteNote(n.id) },
+      { label: `Block ${who}`, icon: "🚫", warn: true, run: () => frBlock(n.from.username) },
+    ], b);
+  }
+});
+$("#feedDialog").addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {  // a tray open: Esc closes just the tray
+    const tray = $("#feedList .ftray:not([hidden])");
+    if (tray) { e.preventDefault(); frTray(tray.closest(".fcard"), false); }
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || keysTyping(e.target)) return;
+  const k = e.key;
+  if (k === "ArrowDown" || k === "j" || k === "PageDown") { e.preventDefault(); frFeedGo(1); }
+  else if (k === "ArrowUp" || k === "k" || k === "PageUp") { e.preventDefault(); frFeedGo(-1); }
+  else if (k === "Home") { e.preventDefault(); frFeedGo(-frCards().length); }
+  else if (k === "End") { e.preventDefault(); frFeedGo(frCards().length); }
+});
+$("#feedClose").onclick = () => $("#feedDialog").close();
+$("#feedNew").onclick = () => frComposeOpen({ opener: $("#feedNew") });
+$("#feedUp").onclick = () => frFeedGo(-1);
+$("#feedDown").onclick = () => frFeedGo(1);
+$("#feedDialog").addEventListener("close", () => {
+  frFeedIO?.disconnect(); frFeedIO = null;
+  frFeedImgIO?.disconnect(); frFeedImgIO = null;
+  for (const t of frSeenTimers.values()) clearTimeout(t);
+  frSeenTimers.clear();
+  $("#feedList").innerHTML = "";
+  const id = frFeedOpener?.dataset?.frOpen;
+  frNotesDraw();  // the tiles: what's seen and kept now
+  const back = (id && $(`#frTiles [data-fr-open="${CSS.escape(id)}"]`))
+    || (frFeedOpener?.isConnected && frFeedOpener.offsetParent ? frFeedOpener : null)
+    || ($("#frWatch").offsetParent ? $("#frWatch") : $("#frTitle"));
+  back.focus({ preventScroll: true });
+  frFeedOpener = null;
+  frCountLoad();
+});
+async function frDeleteNote(id) {
+  if (!confirm("Delete this note for you? It can't be undone.")) return;
+  try { await api(`${frPath(id)}?confirm=true`, { method: "DELETE" }); }
+  catch (e) { return toast(errText(e)); }
+  const n = frNote(id);
+  frFeed.notes = frFeed.notes.filter((x) => x.id !== id);
+  if (n && !n.seen) { frCounts.unseen = Math.max(0, frCounts.unseen - 1); frBadge(); }
+  frImgForget(id);
+  frNotesDraw();
+  if ($("#feedDialog").open) {
+    $(`#feedList .fcard[data-id="${CSS.escape(id)}"]`)?.remove();
+    frFeedAfterRemove();
+  }
+  toast("Deleted for you.");
+}
+function frFeedAfterRemove() {  // the next note takes its place (focus too); none left: back to the Friends tab
+  if (!frFeed.notes.length) return $("#feedDialog").close();
+  const cards = frCards(), card = cards[Math.min(frFeedIndex(), cards.length - 1)];
+  $("#feedList").scrollTop = card.offsetTop;
+  card.focus({ preventScroll: true });
+  frFeedAt(card);
+}
+
+// ---- Sent: how far each note got (Delivered, Seen, Printed), and Delete for me
+async function frSentLoad(more = false) {
+  let r;
+  try { r = await api(`/notes/sent?limit=30${more && frSentList.next ? `&cursor=${encodeURIComponent(frSentList.next)}` : ""}`); }
+  catch (e) { if (!frSentList.loaded) $("#frSentList").innerHTML = `<p class="err">${esc(errText(e))}</p>`; return; }
+  const have = new Set(more ? frSentList.notes.map((n) => n.id) : []);
+  frSentList = { notes: more ? [...frSentList.notes, ...r.notes.filter((n) => !have.has(n.id))] : r.notes, next: r.next, loaded: true };
+  frSentDraw();
+}
+function frSentDraw() {
+  const notes = frSentList.notes;
+  $("#frSentList").innerHTML = notes.length ? notes.map((n) => {
+    const to = frName(n.to);
+    const what = n.kind === "note" ? n.text : n.kind === "heart" ? "A heart ♥" : `${n.kind === "draw" ? "A drawing" : "A photo"}${n.text ? `: ${n.text}` : ""}`;
+    return `<div class="fsent">${frTileHtml(n, false)}<div class="fsentbody">
+        <div class="top"><b>To ${esc(to)}</b><span class="muted">${esc(frWhen(n.created))}</span><span class="fstat ${esc(n.status)}">${FR_STATUS[n.status] || ""}</span></div>
+        <p class="fwhat">${esc(what)}</p>${n.reaction ? `<p class="muted">${esc(to)} reacted ${esc(n.reaction)}</p>` : ""}
+        <button type="button" class="linkish small" data-fr-unsend="${esc(n.id)}" aria-label="Delete for me: ${esc(FR_KINDS[n.kind] || "note")} to ${esc(to)}, ${esc(frWhen(n.created))}">Delete for me</button></div></div>`;
+  }).join("") : `<div class="frempty"><span class="big" aria-hidden="true">📤</span><h3>Nothing sent yet</h3>
+      <p class="muted">${frData?.friends.length ? "Send a friend a note, a doodle, a photo or a heart." : "Add a friend first: notes go only to friends."}</p>
+      <div class="row">${frData?.friends.length ? `<button type="button" class="go" data-fr-compose aria-haspopup="dialog"><span aria-hidden="true">＋ </span>Send a note</button>`
+        : `<button type="button" class="go" data-fr-goadd>Add a friend</button>`}</div></div>`;
+  $("#frSentMore").hidden = !frSentList.next;
+  frImgWatch($$("#frSentList [data-fr-img]"));
+}
+$("#frSentMore").onclick = () => hold($("#frSentMore"), () => frSentLoad(true));
+async function frUnsend(id, btn) {
+  const n = frSentList.notes.find((x) => x.id === id);
+  if (!confirm(`Delete this from your Sent list?${n ? ` ${frName(n.to)} keeps theirs.` : ""}`)) return;
+  try { await api(`${frPath(id)}?confirm=true`, { method: "DELETE" }); }
+  catch (e) { return toast(errText(e)); }
+  const i = frSentList.notes.findIndex((x) => x.id === id);
+  frSentList.notes = frSentList.notes.filter((x) => x.id !== id);
+  frImgForget(id);
+  frSentDraw();
+  toast("Deleted from your Sent list.");
+  ($$("#frSentList [data-fr-unsend]")[Math.max(0, i - 1)] || $("#frSentHead")).focus({ preventScroll: false });
+}
+
+// ---- the note sheet: Note, Draw, Photo or Heart; who to send it to; how it prints
+function frComposeOpen({ to = null, kind = null, opener = document.activeElement, title = "" } = {}) {
+  if (!me) return;
+  frComposeOpener = opener;
+  if (to) frDraft.to = new Set(to);
+  if (kind) frDraft.kind = kind;
+  $("#composeTitle").textContent = title || "New note";
+  $("#composeMsg").textContent = ""; $("#composeMsg").className = "";
+  const d = $("#composeDialog");
+  if (!d.open) d.showModal();
+  frKindShow(frDraft.kind, false);
+  frChipsDraw();
+  if (!frData) frFriendsLoad();
+  (frDraft.kind === "note" ? $("#composeText") : $("#composeTitle")).focus();
+}
+function frKindShow(kind, focus = true) {
+  frDraft.kind = kind;
+  $$("#composeKinds [data-ckind]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.ckind === kind)));
+  for (const [k, id] of [["note", "#composeNotePane"], ["draw", "#composeDrawPane"], ["photo", "#composePhotoPane"], ["heart", "#composeHeartPane"]]) $(id).hidden = k !== kind;
+  $("#composeCapRow").hidden = kind !== "draw" && kind !== "photo";
+  if (kind === "draw") frDoodleDraw();
+  frSendLabel();
+  frPreviewSoon(0);
+  if (focus && kind === "note") $("#composeText").focus();
+}
+$("#composeKinds").onclick = (e) => { const b = e.target.closest("[data-ckind]"); if (b) frKindShow(b.dataset.ckind, false); };
+$("#composeColors").innerHTML = `<legend class="sr-only">Note color</legend>` + FR_COLORS.map(([c, name]) => `<label class="cswatch nc-${c}">
+  <input type="radio" name="composeColor" value="${c}"${c === "yellow" ? " checked" : ""}><i></i><span class="sr-only">${name}</span></label>`).join("");
+$("#composeColors").onchange = (e) => {
+  frDraft.color = e.target.value;
+  $("#composeText").className = `cnote nc-${frDraft.color}`;
+  frPreviewSoon(250);
+};
+$("#composeText").addEventListener("input", () => {
+  frDraft.text = $("#composeText").value;
+  const n = frDraft.text.length;
+  $("#composeCount").textContent = `${n} of ${FR_MAX_TEXT}`;
+  $("#composeMsg").textContent = "";
+  frPreviewSoon();
+});
+$("#composeCap").addEventListener("input", () => frPreviewSoon());
+for (const id of ["#composeText", "#composeCap"]) $(id).addEventListener("keydown", (e) => {  // Ctrl+Enter (⌘+Enter) sends, as in Quick add
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); $("#composeSend").click(); }
+});
+function frChipsDraw() {
+  const box = $("#composeTo"), list = frData?.friends || [];
+  if (frData) frDraft.to = new Set([...frDraft.to].filter((u) => list.some((p) => p.username === u)));
+  if (frData && !frDraft.to.size && list.length === 1) frDraft.to.add(list[0].username);
+  box.innerHTML = !frData ? `<span class="muted">Finding your friends…</span>`
+    : list.length ? list.map((p) => `<button type="button" data-cto="${esc(p.username)}" aria-pressed="${frDraft.to.has(p.username)}" title="@${esc(p.username)}">${esc(p.name)}</button>`).join("")
+    : `<span class="muted">Notes go only to friends.</span> <button type="button" class="plain small" data-fr-addfriend>Add a friend</button>`;
+  frSendLabel();
+}
+$("#composeTo").onclick = (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  if ("frAddfriend" in b.dataset) { $("#composeDialog").close(); if ($("#feedDialog").open) $("#feedDialog").close(); return frGoAdd(); }
+  const u = b.dataset.cto;
+  if (frDraft.to.has(u)) frDraft.to.delete(u); else frDraft.to.add(u);
+  b.setAttribute("aria-pressed", String(frDraft.to.has(u)));
+  $("#composeMsg").textContent = "";
+  frSendLabel();
+};
+function frSendLabel() {
+  const to = [...frDraft.to], name = (u) => frName(frData?.friends.find((p) => p.username === u)) || u;
+  const what = frDraft.kind === "heart" ? "Send a heart" : "Send";
+  $("#composeSend").textContent = !to.length ? what : to.length === 1 ? `${what} to ${name(to[0])}` : `${what} to ${to.length} friends`;
+}
+$("#composeClose").onclick = () => $("#composeDialog").close();
+closeOnBackdrop($("#composeDialog"));  // what you made stays for next time
+$("#composeDialog").addEventListener("close", () => {  // what you made stays for next time, until it's sent
+  clearTimeout(frPrevTimer);
+  const back = frComposeOpener?.isConnected && frComposeOpener.offsetParent ? frComposeOpener
+    : $("#feedDialog").open ? frCards()[frFeedIndex()] : $("#frNew");
+  back?.focus({ preventScroll: true });
+  frComposeOpener = null;
+});
+$("#composeSend").onclick = () => hold($("#composeSend"), frSend);
+async function frSend() {
+  const msg = $("#composeMsg"), to = [...frDraft.to], kind = frDraft.kind;
+  const bad = (text, el) => { msg.className = "err"; msg.textContent = text; el?.focus(); };
+  msg.className = ""; msg.textContent = "";
+  if (!frData?.friends.length) return bad("Add a friend first: notes go only to friends.");
+  if (!to.length) return bad("Pick who to send it to.", $("#composeTo button"));
+  if (kind === "note" && !frDraft.text.trim()) return bad("Write something first.", $("#composeText"));
+  if (kind === "draw" && !frDraft.strokes.length) return bad("Draw something first.", $("#composeCanvas"));
+  if (kind === "photo" && !frDraft.photo) return bad("Pick a photo first.", $("#composeCamGo"));
+  const b = $("#composeSend"), label = b.textContent;
+  b.textContent = "Sending…";
+  let r;
+  try {
+    if (kind === "note" || kind === "heart") {
+      r = await api("/notes", { method: "POST", json: { to, kind, text: kind === "note" ? frDraft.text : "", color: frDraft.color } });
+    } else {
+      const fd = new FormData();
+      to.forEach((u) => fd.append("to", u));
+      fd.append("kind", kind);
+      fd.append("caption", $("#composeCap").value);
+      if (kind === "draw") fd.append("image", await frDoodleBlob(), "drawing.png");
+      else fd.append("image", frDraft.photo.file, frDraft.photo.file.name || "photo.jpg");
+      r = await api("/notes/image", { method: "POST", body: fd });
+    }
+  } catch (e) { b.textContent = label; return bad(errText(e)); }
+  b.textContent = label;
+  frDraftClear(kind);
+  $("#composeDialog").close();
+  toast(r.message);
+  if (frSentList.loaded) frSentLoad();
+}
+function frDraftClear(kind) {  // only what was just sent; who it went to is remembered for the next one
+  if (kind === "note") { frDraft.text = ""; $("#composeText").value = ""; $("#composeCount").textContent = `0 of ${FR_MAX_TEXT}`; }
+  if (kind === "draw") { frDraft.strokes = []; frDraft.cleared = null; frDoodleDraw(); }
+  if (kind === "photo") frPhotoPick(null);
+  if (kind === "draw" || kind === "photo") $("#composeCap").value = "";
+  if (frPrevUrl) { URL.revokeObjectURL(frPrevUrl); frPrevUrl = ""; }
+  $("#composePrintImg").hidden = true; $("#composePrintImg").removeAttribute("src");
+}
+
+// The doodle: black ink on white (it prints on a black-and-white label), with Undo and Clear.
+function frDoodleCtx() { return $("#composeCanvas").getContext("2d"); }
+function frDoodleLine(ctx, s, from = 0) {
+  const p = s.pts;
+  ctx.strokeStyle = ctx.fillStyle = "#000"; ctx.lineWidth = s.w; ctx.lineCap = ctx.lineJoin = "round";
+  if (p.length === 1) { ctx.beginPath(); ctx.arc(p[0][0], p[0][1], s.w / 2, 0, 2 * Math.PI); ctx.fill(); return; }
+  ctx.beginPath();
+  ctx.moveTo(...p[Math.max(0, from - 1)]);
+  for (let i = Math.max(1, from); i < p.length; i++) ctx.lineTo(...p[i]);
+  ctx.stroke();
+}
+function frDoodleDraw() {
+  const c = $("#composeCanvas"), ctx = frDoodleCtx();
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+  frDraft.strokes.forEach((s) => frDoodleLine(ctx, s));
+  $("#composeUndo").disabled = !frDraft.strokes.length && !frDraft.cleared;
+  $("#composeWipe").disabled = !frDraft.strokes.length;
+}
+function frDoodleAt(e) {
+  const c = $("#composeCanvas"), r = c.getBoundingClientRect();
+  return [(e.clientX - r.left) * c.width / r.width, (e.clientY - r.top) * c.height / r.height];
+}
+$("#composeCanvas").addEventListener("pointerdown", (e) => {
+  if (e.button > 0) return;
+  e.preventDefault();
+  $("#composeCanvas").setPointerCapture?.(e.pointerId);
+  frPen = { w: frDraft.pen, pts: [frDoodleAt(e)] };
+  frDraft.strokes.push(frPen); frDraft.cleared = null;
+  frDoodleLine(frDoodleCtx(), frPen);
+});
+$("#composeCanvas").addEventListener("pointermove", (e) => {
+  if (!frPen) return;
+  const from = frPen.pts.length;
+  for (const ev of e.getCoalescedEvents?.() || [e]) frPen.pts.push(frDoodleAt(ev));
+  frDoodleLine(frDoodleCtx(), frPen, from);
+});
+for (const ev of ["pointerup", "pointercancel"]) $("#composeCanvas").addEventListener(ev, () => {
+  if (!frPen) return;
+  frPen = null;
+  $("#composeMsg").textContent = "";
+  frDoodleDraw();
+  frPreviewSoon(900);
+});
+$("#composeUndo").onclick = () => {
+  if (frDraft.strokes.length) frDraft.strokes.pop();
+  else if (frDraft.cleared) { frDraft.strokes = frDraft.cleared; frDraft.cleared = null; }
+  frDoodleDraw(); frPreviewSoon();
+};
+$("#composeWipe").onclick = () => { frDraft.cleared = frDraft.strokes; frDraft.strokes = []; frDoodleDraw(); frPreviewSoon(); };
+$("#composePens").onclick = (e) => {
+  const b = e.target.closest("[data-pen]");
+  if (!b) return;
+  frDraft.pen = +b.dataset.pen;
+  $$("#composePens [data-pen]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+};
+const frDoodleBlob = () => new Promise((resolve, reject) => $("#composeCanvas").toBlob((b) => (b ? resolve(b) : reject(new Error("Couldn't read the drawing. Try again."))), "image/png"));
+
+// The photo: the camera or one you have. Its location and camera details are removed on the server.
+$("#composeCamGo").onclick = () => $("#composeCam").click();
+$("#composeLibGo").onclick = () => $("#composeLib").click();
+for (const id of ["#composeCam", "#composeLib"]) $(id).onchange = (e) => { frPhotoPick(e.target.files[0]); e.target.value = ""; };
+function frPhotoPick(file) {
+  if (frDraft.photo?.url) URL.revokeObjectURL(frDraft.photo.url);
+  frDraft.photo = file ? { file, url: URL.createObjectURL(file), small: null } : null;
+  const img = $("#composePic");
+  $("#composeNoPic").hidden = true;
+  img.hidden = !file;
+  if (file) img.src = frDraft.photo.url; else img.removeAttribute("src");
+  $("#composeMsg").textContent = "";
+  $("#composeCamGo").innerHTML = file ? `<span aria-hidden="true">📷 </span>Take another` : `<span aria-hidden="true">📷 </span>Take a photo`;
+  $("#composeLibGo").textContent = file ? "Choose a different one" : "Choose from photos";
+  frPreviewSoon(0);
+}
+$("#composePic").onerror = () => { if (!frDraft.photo) return; $("#composePic").hidden = true; $("#composeNoPic").hidden = false; };
+function frSmall(file, edge = 1200) {  // a smaller copy, only for "How it prints" (what's sent is the photo itself)
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, edge / Math.max(img.naturalWidth, img.naturalHeight)), c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(img.naturalWidth * s)); c.height = Math.max(1, Math.round(img.naturalHeight * s));
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      c.toBlob((b) => resolve(b || file), "image/jpeg", 0.85);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };  // a kind this browser can't show (HEIC): the photo itself
+    img.src = url;
+  });
+}
+
+// "How it prints": the black-and-white label your friend would get, made by the server and kept nowhere.
+async function frPng(path, opts = {}) {
+  let r;
+  try { r = await fetch(path, { ...opts, credentials: "same-origin" }); }
+  catch { throw new Error(OFFLINE); }
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw Object.assign(new Error(body.detail || ([502, 503, 504].includes(r.status) ? BUSY : `${r.status}`)), { status: r.status });
+  }
+  return r.blob();
+}
+function frPreviewSoon(ms = 700) { clearTimeout(frPrevTimer); frPrevTimer = setTimeout(frPreview, ms); }
+$("#composePrintBox").addEventListener("toggle", () => { if ($("#composePrintBox").open) frPreviewSoon(0); });
+async function frPreview() {
+  if (!$("#composeDialog").open || !$("#composePrintBox").open) return;
+  const n = ++frPrevN, kind = frDraft.kind, say = $("#composePrintSay"), img = $("#composePrintImg");
+  const empty = kind === "note" && !frDraft.text.trim() ? "Write something to see how it prints."
+    : kind === "draw" && !frDraft.strokes.length ? "Draw something to see how it prints."
+    : kind === "photo" && !frDraft.photo ? "Pick a photo to see how it prints." : "";
+  if (empty) { say.textContent = empty; img.hidden = true; return; }
+  say.textContent = "Making the preview…";
+  let blob;
+  try {
+    if (kind === "note" || kind === "heart") {
+      blob = await frPng("/notes/preview", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind, text: kind === "note" ? frDraft.text : "", color: frDraft.color }) });
+    } else {
+      const fd = new FormData();
+      fd.append("kind", kind);
+      fd.append("caption", $("#composeCap").value);
+      if (kind === "draw") fd.append("image", await frDoodleBlob(), "drawing.png");
+      else fd.append("image", frDraft.photo.small ||= await frSmall(frDraft.photo.file), "photo.jpg");
+      blob = await frPng("/notes/preview/image", { method: "POST", body: fd });
+    }
+  } catch (e) { if (n === frPrevN) say.textContent = errText(e); return; }
+  if (n !== frPrevN || frDraft.kind !== kind) return;
+  if (frPrevUrl) URL.revokeObjectURL(frPrevUrl);
+  frPrevUrl = URL.createObjectURL(blob);
+  img.src = frPrevUrl;
+  img.alt = `How your ${FR_KINDS[kind]} prints: a black and white label`;
+  img.hidden = false;
+  say.textContent = "";
+}
+
+// ---- Print a note a friend sent you: on your own household's printer, only when you tap Print
+const frPrintWhy = () => ($("#dry").dataset.forced ? $("#dryWhy").textContent : "");  // why it can only be a preview (applyDry)
+function frPaperRow(id, main) {  // main: paper is the way to print it here (the blue button)
+  const size = me?.prefs?.paper_size || "letter", q = encodeURIComponent(id);
+  return `<div class="row paperrow"><a class="${main ? "go" : "plain"} small" style="text-decoration:none" data-paper-link href="/notes/${q}/paper.pdf?paper=${esc(size)}" target="_blank" rel="noopener">Print on paper</a>
+    <select data-paper aria-label="Paper size">${PAPERS.map(([v, nm]) => `<option value="${v}"${v === size ? " selected" : ""}>${nm}</option>`).join("")}</select>
+    ${saveImageLink(id, "plain small", true)}
+    <span class="muted">Any printer: Print on paper opens a page, then use your phone's or computer's Print. Save label image keeps the picture, for a label printer's own app.</span></div>`;
+}
+function frPrintOpen(n, opener) {
+  frPrintNote = n; frPrintOpener = opener;
+  const who = frName(n.from), kind = FR_KINDS[n.kind] || "note", why = frPrintWhy();
+  $("#frPrintTitle").textContent = `Print ${who}'s ${kind}`;
+  $("#frPrintSay").textContent = why ? `Preview only: ${why}` : "This is how it comes out of your printer.";
+  const img = $("#frPrintImg");
+  img.alt = `How ${who}'s ${kind} prints: a black and white label`;
+  img.src = n.label;
+  $("#frPrintOut").innerHTML = "";
+  $("#frPrintPaper").innerHTML = frPaperRow(n.id, !!why);
+  $("#frPrintGo").className = why ? "plain" : "go";
+  if (!$("#frPrintDialog").open) $("#frPrintDialog").showModal();
+  $("#frPrintTitle").focus();
+}
+$("#frPrintGo").onclick = () => frPrintGo();
+async function frPrintGo() {
+  const n = frPrintNote, b = $("#frPrintGo");
+  if (!n || b.getAttribute("aria-disabled") === "true") return;
+  const dry_run = !!frPrintWhy();
+  // The one way a note prints: this tap, and for a real print a yes to the question (the server needs confirm too).
+  if (!dry_run && !confirm("Send this to the printer?")) return;
+  const done = busy(b, dry_run), out = $("#frPrintOut");
+  let r;
+  try { r = await api(`${frPath(n.id)}/print`, { method: "POST", json: { confirm: true, dry_run } }); }
+  catch (e) { out.innerHTML = `<p class="err">${esc(errText(e))}</p>`; return; }
+  finally { done(); }
+  const head = r.status === "printed" ? "Printed" : r.status === "failed" ? "Didn't print" : "Preview ready";
+  out.innerHTML = `<p><b>${head}</b>${r.printer ? ` · ${sw(r.printer.color)}${esc(r.printer.name)}` : ""}</p>`
+    + (r.note && r.note !== frPrintWhy() ? `<p class="${r.status === "failed" ? "err" : "muted"}">${esc(r.note)}</p>` : "");  // said once
+  if (r.status === "printed") {
+    n.printed = Math.floor(Date.now() / 1000);
+    toast("Printed");
+  }
+}
+$("#frPrintClose").onclick = () => $("#frPrintDialog").close();
+closeOnBackdrop($("#frPrintDialog"));
+$("#frPrintDialog").addEventListener("close", () => {
+  $("#frPrintImg").removeAttribute("src");
+  if (frPrintOpener?.isConnected) frPrintOpener.focus({ preventScroll: true });
+  frPrintNote = frPrintOpener = null;
+});
+
+// ---- small sheets: ⋯ (a note's or a friend's), and "Add Lee as a friend?"
+function frSheetShow(title, say, acts, opener = document.activeElement) {
+  frSheetActs = acts; frSheetOpener = opener;
+  $("#frSheetTitle").textContent = title;
+  $("#frSheetSay").textContent = say || "";
+  $("#frSheetActs").innerHTML = acts.map((a, i) => (a.href
+    ? `<a href="${esc(a.href)}"${a.download ? ` download="${esc(a.download)}"` : ""} data-sheet="${i}"><span aria-hidden="true">${a.icon || ""}</span> ${esc(a.label)}</a>`
+    : `<button type="button"${a.warn ? ` class="warn"` : ""} data-sheet="${i}"><span aria-hidden="true">${a.icon || ""}</span> ${esc(a.label)}</button>`)).join("");
+  $("#frSheet").showModal();
+  $("#frSheetActs").firstElementChild?.focus();
+}
+$("#frSheetActs").onclick = (e) => {
+  const b = e.target.closest("[data-sheet]");
+  if (!b) return;
+  const a = frSheetActs[+b.dataset.sheet];
+  $("#frSheet").close();
+  a?.run?.();  // after closing: its question shows over the screen it's about
+};
+$("#frSheetClose").onclick = () => $("#frSheet").close();
+closeOnBackdrop($("#frSheet"));
+$("#frSheet").addEventListener("close", () => {
+  const el = frSheetOpener; frSheetOpener = null;
+  setTimeout(() => {  // unless what it did moved on somewhere else
+    const at = document.activeElement;
+    if (el?.isConnected && el.offsetParent && (!at || at === document.body || $("#frSheet").contains(at))) el.focus({ preventScroll: true });
+  }, 0);
+});
+function frAskShow({ who = null, title, say = "", acts }) {
+  frAskActs = acts;
+  if (!$("#frAskDialog").open) frAskOpener = document.activeElement;
+  $("#frAskAvatar").textContent = who ? frInitial(frName(who)) : "💌";
+  $("#frAskTitle").textContent = title;
+  $("#frAskSay").textContent = say;
+  $("#frAskMsg").textContent = "";
+  $("#frAskActs").innerHTML = acts.map((a, i) => `<button type="button" class="${a.cls || "plain"}" data-ask="${i}">${esc(a.label)}</button>`).join("");
+  if (!$("#frAskDialog").open) $("#frAskDialog").showModal();
+  $("#frAskTitle").focus();
+}
+$("#frAskActs").onclick = (e) => {
+  const b = e.target.closest("[data-ask]");
+  if (!b) return;
+  const a = frAskActs[+b.dataset.ask];
+  if (!a?.run) return $("#frAskDialog").close();
+  hold(b, async () => {
+    try { if ((await a.run()) !== false) $("#frAskDialog").close(); }
+    catch (err) { $("#frAskMsg").textContent = errText(err); }
+  });
+};
+$("#frAskDialog").addEventListener("close", () => {
+  const el = frAskOpener; frAskOpener = null;
+  setTimeout(() => {
+    const at = document.activeElement;
+    if (!at || at === document.body) (el?.isConnected && el.offsetParent ? el : $("#topnav button.on") || document.body).focus?.({ preventScroll: true });
+  }, 0);
+});
+
+// A friend link (#friend=CODE): asked about once signed in, the data notice agreed and the setup questions done.
+function frLinkRead() {
+  const m = location.hash.match(/[#&]friend=([A-Za-z0-9]{4,80})/);
+  if (!m) return;
+  history.replaceState(null, "", location.pathname + location.search);
+  frLinkCode = m[1].toUpperCase();
+  try { sessionStorage.setItem("nb_friend", frLinkCode); } catch {}
+}
+function frLinkForget() { frLinkCode = ""; try { sessionStorage.removeItem("nb_friend"); } catch {} }
+// The sign-in page says why it's there (showLogin): read from this tab's storage, so it's safe to ask early.
+function frLinkHint() {
+  let code = "";
+  try { code = sessionStorage.getItem("nb_friend") || ""; } catch {}
+  return code ? "Sign in, and Next Box asks whether to add your friend." : "";
+}
+try { frLinkCode = sessionStorage.getItem("nb_friend") || ""; } catch {}
+frLinkRead();
+window.addEventListener("hashchange", () => { frLinkRead(); frLinkRun(); });
+$("#quizDialog").addEventListener("close", () => setTimeout(frLinkRun, 0));
+async function frLinkRun() {
+  if (!frLinkCode || !me || $("#appShell").hidden || $$("dialog[open]").length) return;
+  const code = frLinkCode;
+  frLinkForget();
+  let who;
+  try { who = await api(`/friends/code/${encodeURIComponent(code)}`); }
+  catch (e) { return frAskShow({ title: "That friend link didn't work", say: errText(e), acts: [{ label: "OK", cls: "go" }] }); }
+  const name = frName(who), toFriends = { label: "Go to Friends", run: () => { goto("friends"); } };
+  const add = async () => {
+    const r = await api("/friends/add", { method: "POST", json: { code } });
+    frSetData(r.friends);
+    toast(r.message);
+  };
+  if (who.status === "you") {
+    frAskShow({ who, title: "That's your own friend link", say: "Share it with someone you'd like to add. When they open it and say yes, you're friends.", acts: [{ label: "OK", cls: "go" }, toFriends] });
+  } else if (who.status === "friends") {
+    frAskShow({ who, title: `You and ${name} are friends`, say: `@${who.username} is already on your friends list.`,
+      acts: [{ label: "Send a note", cls: "go", run: () => { setTimeout(() => frComposeOpen({ to: [who.username], opener: $("#frNew") }), 0); } }, { label: "OK" }] });
+  } else if (who.status === "requested") {
+    frAskShow({ who, title: `You already asked ${name}`, say: "They'll see your request in Friends. When they say yes, you're friends.", acts: [{ label: "OK", cls: "go" }] });
+  } else if (who.status === "asked_you") {
+    frAskShow({ who, title: `${name} wants to be friends`, say: `@${who.username} asked to be your friend. Friends can send each other notes, doodles, photos and hearts.`,
+      acts: [{ label: "Accept", cls: "go", run: async () => { frSetData(await api(`/friends/${frWho(who.username)}/accept`, { method: "POST" })); toast(`You and ${name} are friends now.`); } },
+             { label: "Not now" }] });
+  } else {
+    frAskShow({ who, title: `Add ${name} as a friend?`,
+      say: `@${who.username} sees your request in Friends. Once they say yes, you can send each other notes, doodles, photos and hearts.`,
+      acts: [{ label: "Add friend", cls: "go", run: add }, { label: "Cancel" }] });
+  }
+}
+
+// Settings → Friends: "Printers & label colors" is a jump within Settings.
+document.addEventListener("click", (e) => {
+  const b = e.target.closest?.("[data-jump-to]"), card = b && document.getElementById(b.dataset.jumpTo);
+  if (!card) return;
+  card.scrollIntoView({ behavior: smooth(), block: "start" });
+  const h = card.querySelector("h2");
+  if (h) { h.tabIndex = -1; h.focus({ preventScroll: true }); }
+});
+
+// Signing out: nothing of this person's friends or notes stays on screen (the page also reloads).
+function frForget() {
+  frData = null; frCounts = { unseen: 0, requests: 0 }; frView = "notes";
+  frFeed = { notes: [], next: null, loaded: false, busy: false };
+  frSentList = { notes: [], next: null, loaded: false };
+  frDraft = { kind: "note", color: "yellow", text: "", to: new Set(), photo: null, strokes: [], cleared: null, pen: 12 };
+  for (const id of [...frImgs.keys()]) frImgForget(id);
+  for (const id of ["#frTiles", "#frReqs", "#frList", "#frOut", "#frBlocked", "#frSentList", "#feedList", "#frNotesEmpty", "#composeTo"]) $(id).innerHTML = "";
+  for (const id of ["#frWatchCard", "#frReqNote", "#frReqCard", "#frOutBox", "#frBlockedCard", "#frKeepNote"]) $(id).hidden = true;
+  $("#frLink").value = ""; $("#frName").value = ""; $("#frAddMsg").textContent = ""; $("#composeText").value = ""; $("#composeCap").value = "";
+  $("#composePic").removeAttribute("src"); $("#composePic").hidden = true; $("#composePrintImg").removeAttribute("src"); $("#composePrintImg").hidden = true;
+  frBadge();
+}
 
 
 // ---------------------------------------------------------------- FE: the routine card
@@ -6605,7 +7733,7 @@ if ("serviceWorker" in navigator && window.isSecureContext) {
 // n or + Quick add · / search My list · g then l, p, s or j to switch screens · ? the list of them.
 // Letters do nothing while you type in a box or while a sheet is open (Esc closes a sheet), or at all with
 // Settings → General → One-key shortcuts off.
-const KEYS_TABS = { l: "mylist", p: "print", s: "scan", j: "journal" };
+const KEYS_TABS = { l: "mylist", p: "print", s: "scan", j: "journal", f: "friends" };
 let keysG = 0;
 const keysTyping = (el) => !!el?.closest?.("textarea, select, [contenteditable]:not([contenteditable=false])")
   || (el?.tagName === "INPUT" && !["checkbox", "radio", "button", "submit", "reset", "range", "color", "file"].includes(el.type));

@@ -1174,3 +1174,14 @@ them a note, a doodle, a photo or a heart; read what they sent in a full-screen 
   notes (§22); deleting an account deletes its friend link, friendships, requests, blocks and every note it sent
   or got; a household can only be removed once empty, and upkeep sweeps rows that name an account that's gone.
 - **No AI** anywhere here.
+- **In the app** (`web/app.js` "Friends and notes", `web/index.html` `#friends`): a **Friends** tab (in the phone's tab bar,
+  `g` then `f`) with a number for unseen notes plus friend requests (`/notes/count`, read when Next Box opens, comes back
+  to the front, and once a minute while it's in front: a read, nothing else). Three views: **Notes** (Watch, and a tile
+  per note that opens the feed there), **Friends** (requests, your link with Share/Copy/QR code/New link, add by
+  username, your friends with Send a note and ⋯ Remove/Block, Waiting for them, Blocked) and **Sent**. The feed is a
+  full-screen dialog (Esc or ✕ closes it, focus goes back where it was); each note is a labelled region; a double tap
+  sends ❤️. The note sheet (full screen on a phone) has Note/Draw/Photo/♥, the friends to send to, and "How it prints".
+  Print opens a sheet with the label as it comes out of your printer, **Print** (a real print asks "Send this to the
+  printer?" first; when only a preview can happen, it says why and nothing is asked), Print on paper and Save label
+  image. A friend link (`#friend=CODE`) is taken off the address, kept for this tab until you're signed in, and asked
+  about once ("Add Lee as a friend?"), after the data notice and the setup questions.

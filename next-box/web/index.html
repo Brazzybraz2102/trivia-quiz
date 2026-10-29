@@ -756,6 +756,214 @@
     header .quickbtn { margin-left:auto; }
     header #roleBadge, header #betaBadge { order:6; }  /* after the status line: + and the round button stay together, top right */
   }
+  /* Friends and notes (SPEC §34). A note looks like a paper note in its color (dark words on it, in both themes);
+     the feed is dark like a video app: one note per screen, swipe up for the next, the buttons down the right. */
+  .nc-yellow { --nb:#ffe46b; } .nc-pink { --nb:#ffbdd5; } .nc-blue { --nb:#b0d5ff; } .nc-green { --nb:#bdebb3; }
+  .nc-purple { --nb:#dccbff; } .nc-white { --nb:#f6f6f1; }
+  .frtop { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+  .frtop h2 { margin:0; font-size:1.25rem; }
+  :is(#frTitle, #frAddHead, #frReqHead, #frSentHead, #frPrintTitle, #frAskTitle, #frQrTitle, #frSheetTitle, #composeTitle):focus { outline:none; }
+  .frseg { margin:12px 0 0; }
+  .frseg button { flex:1 1 0; min-width:0; min-height:44px; padding:6px 8px; display:inline-flex; align-items:center; justify-content:center; }
+  .frseg button[aria-pressed=true] { background:var(--accent); border-color:var(--accent); color:var(--onAccent); }
+  .frn:empty { display:none; }
+  .frn { display:inline-block; min-width:1.25rem; margin-left:6px; padding:0 6px; border-radius:99px; background:var(--warnFill); color:#fff; font-size:.75rem; font-weight:700; line-height:1.25rem; }
+  .frwatch { display:flex; align-items:center; gap:10px 14px; flex-wrap:wrap; }
+  .frwatch[hidden], .frreqnote[hidden], .frempty[hidden] { display:none; }
+  .frwatchtext { flex:1 1 12rem; min-width:0; }
+  .frwatchtext b { display:block; font-size:1.125rem; overflow-wrap:anywhere; }
+  .frwatchtext .muted { display:block; overflow-wrap:anywhere; }
+  .frplay { min-height:48px; padding:10px 24px; border-radius:99px; font-weight:700; font-size:1.0625rem; }
+  .frreqnote { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; background:var(--note); color:var(--noteFg); border-color:transparent; }
+  .frreqnote .plain { background:var(--card); }
+  .frempty { text-align:center; padding:28px 16px; }
+  .frempty .big { display:block; font-size:2.75rem; line-height:1.1; }
+  .frempty h3 { font-size:1.125rem; margin:10px 0 4px; }
+  .frempty p { margin:0 auto; max-width:26rem; }
+  .frempty .row { justify-content:center; margin-top:14px; }
+  .ntiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(30%, 9.5rem), 1fr)); gap:6px; margin:0 0 8px; }
+  .ntile { position:relative; display:block; width:100%; aspect-ratio:3 / 4; padding:0; border:0; border-radius:10px; overflow:hidden; cursor:pointer;
+           background:var(--nb, #1d1d1d); color:#161616; font:inherit; text-align:center; }
+  .ntile img { display:block; width:100%; height:100%; object-fit:cover; }
+  .ntile.nk-draw { background:#fff; } .ntile.nk-draw img { object-fit:contain; padding:6px 6px 22px; }
+  .ntile.nk-photo { background:#111; }
+  .ntile.nk-heart { background:radial-gradient(circle at 50% 40%, #ff7aa6, #c2185b 80%); }
+  .ntile .ttext { display:-webkit-box; -webkit-line-clamp:5; -webkit-box-orient:vertical; overflow:hidden; margin:12% 8px 0; font-weight:700; font-size:.875rem;
+                  line-height:1.25; overflow-wrap:anywhere; white-space:pre-line; }
+  .ntile .theart { position:absolute; inset:0 0 18px; display:grid; place-items:center; font-size:2.5rem; }
+  .ntile .tfrom { position:absolute; left:0; right:0; bottom:0; padding:18px 8px 6px; background:linear-gradient(transparent, rgba(0,0,0,.7)); color:#fff;
+                  font-size:.75rem; font-weight:700; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ntile .tbadge { position:absolute; top:6px; right:6px; padding:1px 7px; border-radius:99px; background:#111; color:#fff; font-size:.6875rem; font-weight:700; }
+  .ntile .tbadge.kept { left:6px; right:auto; background:rgba(0,0,0,.6); }
+  .ntile.unseen { box-shadow:0 0 0 3px var(--accent); }
+  .ntile.unseen .tbadge.new { background:var(--accent); color:var(--onAccent); }
+  .frrow { display:flex; align-items:center; gap:8px 10px; padding:10px 0; border-top:1px solid var(--line); flex-wrap:wrap; }
+  .frrow:first-child { border-top:0; }
+  .frav { flex:none; width:2.5rem; height:2.5rem; border-radius:50%; display:grid; place-items:center; background:var(--accent); color:var(--onAccent);
+          font-weight:700; font-size:1.0625rem; }
+  .frav.big { width:3.5rem; height:3.5rem; font-size:1.5rem; }
+  .frwho { flex:1 1 9rem; min-width:0; }
+  .frwho b { display:block; overflow-wrap:anywhere; }
+  .frwho .muted { display:block; font-size:.8125rem; overflow-wrap:anywhere; }
+  .fracts { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .frlink { font:.9375rem/1.4 ui-monospace, monospace; }
+  .frname { display:flex; gap:8px; flex-wrap:wrap; }
+  .frname input { flex:1 1 10rem; min-width:0; }
+  #frAddMsg:empty, #frOutBox[hidden], #frBlockedCard[hidden], #frReqCard[hidden] { display:none; }
+  #frAddMsg { margin:8px 0 0; overflow-wrap:anywhere; }
+  .frreceipt { margin:4px 2px 16px; }
+  .frblocked summary { cursor:pointer; font-weight:600; }
+  .frkeepnote { margin:4px 2px 12px; }
+  .fsent { display:flex; gap:10px; align-items:flex-start; padding:10px 0; border-top:1px solid var(--line); }
+  .fsent:first-child { border-top:0; }
+  .fsent .ntile { flex:none; width:3.5rem; cursor:default; border-radius:8px; }
+  .fsent .ntile .ttext { margin:6px 3px 0; font-size:.5rem; -webkit-line-clamp:5; }
+  .fsent .ntile .theart { inset:0; font-size:1.375rem; }
+  .fsent .ntile.nk-draw img { padding:3px; }
+  .fsentbody { flex:1; min-width:0; }
+  .fsentbody .top { display:flex; gap:4px 8px; align-items:center; flex-wrap:wrap; }
+  .fsentbody .linkish { padding-left:0; padding-right:0; }
+  .fsentbody .fwhat { margin:2px 0 0; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; white-space:pre-line; }
+  .fstat { display:inline-block; padding:1px 8px; border-radius:99px; font-size:.75rem; font-weight:700; border:1px solid var(--fieldLine); color:var(--fg); }
+  .fstat.seen { border-color:var(--accent); color:var(--accent); }
+  .fstat.printed { background:var(--okFill); border-color:var(--okFill); color:#fff; }
+  /* The feed: a full-screen dialog (focus stays in it, Esc closes it) that scrolls one note at a time. */
+  dialog.feedsheet { position:fixed; inset:0; width:100%; height:100%; max-width:none; max-height:none; margin:0; padding:0; border:0; border-radius:0;
+                     background:#000; color:#fff; overflow:hidden; }
+  dialog.feedsheet::backdrop { background:#000; }
+  html:has(dialog.feedsheet[open]), html:has(dialog.fullsheet[open]) { overflow:hidden; }
+  .feedlist { height:100%; overflow-y:auto; overscroll-behavior:contain; scroll-snap-type:y mandatory; scrollbar-width:none; }
+  .feedlist::-webkit-scrollbar { display:none; }
+  .fcard { position:relative; height:100%; overflow:hidden; scroll-snap-align:start; scroll-snap-stop:always; }
+  .fcard:focus { outline:none; }
+  .fcard:focus-visible { outline:3px solid #fff; outline-offset:-5px; }
+  .fstage { position:absolute; inset:0; overflow:hidden; background:#111; -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent; }
+  .fstage.nk-note { background:var(--nb); color:#161616; }
+  .fstage.nk-draw { background:#fff; }
+  .fstage.nk-heart { background:radial-gradient(circle at 50% 40%, #ff86ae 0, #d81b60 50%, #6d0c35 100%); }
+  .fnote { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:72px calc(3.75rem + 22px) 160px 22px; }
+  .fnote p { width:100%; min-width:0; margin:0; max-height:100%; overflow:hidden; white-space:pre-wrap; overflow-wrap:anywhere; text-align:center; font-weight:700; line-height:1.22; font-size:var(--fs, 2rem); }
+  .fnote.scroll p { overflow-y:auto; }
+  .fpic { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+  .fstage.nk-draw .fpic { padding:64px 12px 150px; }
+  .fblur { position:absolute; inset:-40px; width:calc(100% + 80px); height:calc(100% + 80px); object-fit:cover; filter:blur(28px) brightness(.5); }
+  .fheart { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding:72px 24px 160px; text-align:center; }
+  .fheart .big { font-size:min(9rem, 38vw); line-height:1; animation:frbeat 1.6s ease-in-out infinite; }
+  .fheart p { margin:0; font-size:1.375rem; font-weight:700; overflow-wrap:anywhere; text-shadow:0 1px 3px rgba(0,0,0,.45); }
+  @keyframes frbeat { 0%, 60%, 100% { transform:scale(1); } 15% { transform:scale(1.12); } 30% { transform:scale(1); } 45% { transform:scale(1.07); } }
+  .fmeta { position:absolute; left:0; right:0; bottom:0; padding:64px calc(3.75rem + 22px) calc(18px + env(safe-area-inset-bottom)) 14px;
+           background:linear-gradient(transparent, rgba(0,0,0,.74)); color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.65); pointer-events:none; }
+  .fwho { display:flex; align-items:center; gap:4px 8px; flex-wrap:wrap; font-size:1.0625rem; }
+  .fwho b { overflow-wrap:anywhere; }
+  .fwho .frav { width:2.25rem; height:2.25rem; background:#fff; color:#111; text-shadow:none; font-size:1rem; }
+  .fwhen { font-size:.9375rem; }
+  .fnew { padding:1px 8px; border-radius:99px; background:#fff; color:#111; font-size:.75rem; font-weight:700; text-shadow:none; }
+  .fcap { margin:6px 0 0; font-size:1rem; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+  .fkeep { margin:4px 0 0; font-size:.8125rem; }
+  .frail { position:absolute; right:8px; bottom:calc(16px + env(safe-area-inset-bottom)); z-index:2; display:flex; flex-direction:column; gap:10px; align-items:center; }
+  .freact { position:relative; }
+  .fbtn { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; width:3.75rem; min-height:3.75rem; padding:6px 2px;
+          border:0; border-radius:16px; background:rgba(0,0,0,.62); color:#fff; font:inherit; cursor:pointer; touch-action:manipulation; }
+  .fbtn .ficon { font-size:1.5rem; line-height:1.15; }
+  .fbtn .flabel { font-size:.6875rem; font-weight:700; line-height:1.2; }
+  .fbtn[aria-pressed=true] { background:#fff; color:#111; }
+  .fbtn:focus-visible, .feedbtn:focus-visible, .ftray button:focus-visible { outline:3px solid #fff; outline-offset:2px; }
+  .ftray { position:absolute; right:calc(100% + 8px); bottom:0; display:flex; flex-wrap:wrap; justify-content:flex-end; gap:4px; width:max-content;
+           max-width:calc(100vw - 3.75rem - 32px); padding:6px; border-radius:24px; background:rgba(24,24,24,.94); box-shadow:0 4px 18px rgba(0,0,0,.45); }
+  .ftray[hidden] { display:none; }
+  .ftray button { width:2.75rem; height:2.75rem; border:0; border-radius:50%; background:none; color:#fff; font:inherit; font-size:1.5rem; cursor:pointer; }
+  .ftray button[aria-pressed=true] { background:rgba(255,255,255,.28); }
+  .ftray .fnone { width:auto; padding:0 12px; border-radius:99px; font-size:.875rem; font-weight:700; }
+  .fburst { position:absolute; z-index:3; font-size:5.5rem; line-height:1; pointer-events:none; animation:frburst .9s ease-out forwards; }
+  @keyframes frburst { 0% { opacity:0; transform:translate(-50%, -50%) scale(.4); } 25% { opacity:1; transform:translate(-50%, -50%) scale(1.15); }
+                       100% { opacity:0; transform:translate(-50%, -110%) scale(1); } }
+  .fend { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; padding:24px; text-align:center; background:#111; }
+  .fend .big { font-size:3rem; line-height:1; }
+  .fend p { margin:0; max-width:22rem; }
+  .fend .row { justify-content:center; }
+  .fend .plain { color:#fff; border-color:#888; }
+  .feedtop { position:absolute; top:0; left:0; right:0; z-index:4; display:flex; align-items:center; justify-content:space-between; gap:8px;
+             padding:calc(8px + env(safe-area-inset-top)) 10px 10px; background:linear-gradient(rgba(0,0,0,.5), transparent); pointer-events:none; }
+  .feedtop > * { pointer-events:auto; }
+  .feedbtn { flex:none; width:2.75rem; height:2.75rem; padding:0; border:0; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; font:inherit; font-size:1.25rem;
+             line-height:1; cursor:pointer; display:grid; place-items:center; }
+  .feedpos { font-weight:700; font-size:.9375rem; text-shadow:0 1px 2px rgba(0,0,0,.7); }
+  .feednav { display:none; }
+  @media (min-width:721px) {  /* a computer: the note in a tall column in the middle, the buttons beside it, ↑ ↓ on the right */
+    .fcard { display:flex; align-items:center; justify-content:center; gap:16px; }
+    .fstage { position:relative; inset:auto; flex:none; height:calc(100% - 32px); aspect-ratio:9 / 16; max-width:calc(100vw - 230px); border-radius:16px; }
+    .fnote { padding:64px 26px 160px; }
+    .fmeta { padding-right:14px; }
+    .frail { position:static; align-self:flex-end; margin-bottom:24px; }
+    .feednav { display:flex; flex-direction:column; gap:12px; position:absolute; right:24px; top:50%; transform:translateY(-50%); z-index:3; }
+    .feedbtn { background:rgba(255,255,255,.16); }
+    .fend { flex-direction:column; }
+  }
+  @media (prefers-reduced-motion: reduce) { .fheart .big, .cheart { animation:none; } .fburst { display:none; } }
+  /* The note sheet: full screen on a phone, a tall sheet on a computer; Send stays at the bottom. */
+  dialog.fullsheet { max-width:560px; max-height:calc(100dvh - 24px); }
+  dialog.fullsheet[open] { display:flex; flex-direction:column; }  /* Send sits at the bottom, however little is above it */
+  dialog.fullsheet[open] > * { flex-shrink:0; }
+  dialog.fullsheet .cfoot { margin-top:auto; }
+  .sheethead { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .sheethead h2 { margin:0; font-size:1.25rem; }
+  .ckinds { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:6px; margin:12px 0; }
+  .ckinds button { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; min-width:0; min-height:3.5rem; padding:6px 2px;
+                   border:2px solid var(--fieldLine); border-radius:12px; background:var(--card); color:var(--fg); font:inherit; font-size:.875rem; font-weight:600; cursor:pointer; }
+  .ckinds button span { font-size:1.25rem; line-height:1.2; }
+  .ckinds button[aria-pressed=true] { border-color:var(--accent); background:var(--accent); color:var(--onAccent); }
+  .cpane[hidden], #composeCapRow[hidden] { display:none; }
+  textarea.cnote { display:block; width:100%; min-height:11rem; padding:18px; border:0; border-radius:14px; background:var(--nb); color:#161616; font-size:1.375rem;
+                   font-weight:700; line-height:1.3; text-align:center; resize:none; }
+  textarea.cnote::placeholder { color:#5c5c5c; }
+  textarea.cnote:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
+  .ccolors { display:flex; align-items:center; justify-content:space-between; gap:4px 8px; flex-wrap:wrap; margin-top:6px; }
+  .cswatches { display:flex; gap:2px; flex-wrap:wrap; border:0; padding:0; margin:0; min-width:0; }
+  .cswatch { position:relative; display:inline-grid; place-items:center; width:44px; height:44px; cursor:pointer; }
+  .cswatch input { position:absolute; inset:0; opacity:0; width:100%; height:100%; margin:0; cursor:pointer; }
+  .cswatch i { width:30px; height:30px; border-radius:50%; background:var(--nb); border:2px solid var(--fieldLine); pointer-events:none; }
+  .cswatch input:checked + i { box-shadow:0 0 0 3px var(--card), 0 0 0 5px var(--accent); }
+  .cswatch input:focus-visible + i { outline:3px solid var(--accent); outline-offset:5px; }
+  .ccount { font-size:.8125rem; }
+  #composeCanvas { display:block; width:min(100%, calc(50dvh * 3 / 4)); height:auto; aspect-ratio:3 / 4; margin:0 auto; background:#fff; border:2px solid var(--fieldLine);
+                   border-radius:12px; touch-action:none; cursor:crosshair; }
+  .cdrawbar { justify-content:center; }
+  .cdrawbar button { min-height:44px; }
+  #composePens button[aria-pressed=true] { background:var(--accent); border-color:var(--accent); color:var(--onAccent); }
+  .cpic { display:block; max-width:100%; max-height:42dvh; margin:10px auto 0; border-radius:10px; }
+  .cpic[hidden], #composeNoPic[hidden], #composePrintImg[hidden] { display:none; }
+  .cheart { font-size:6rem; line-height:1.15; text-align:center; animation:frbeat 1.6s ease-in-out infinite; }
+  .cheartsay { text-align:center; margin:4px 0; }
+  .cto button { display:inline-flex; align-items:center; gap:6px; min-height:40px; }
+  .cto button[aria-pressed=true] { background:var(--accent); border-color:var(--accent); color:var(--onAccent); }
+  .cto button[aria-pressed=true]::before { content:"✓"; content:"✓" / ""; }
+  .cto .muted { padding:6px 0; }
+  .cprint { margin-top:12px; }
+  .cprint summary { cursor:pointer; color:var(--accent); font-weight:600; padding:8px 0; }
+  #composePrintImg { display:block; max-width:100%; max-height:44dvh; margin:8px auto 0; border:1px solid var(--line); border-radius:6px; background:#fff; }
+  #composePrintSay:empty, #composeMsg:empty { display:none; }
+  #composeMsg { margin:10px 0 0; overflow-wrap:anywhere; }
+  .cfoot { position:sticky; bottom:-18px; z-index:1; margin:12px -18px -18px; padding:10px 18px 18px; background:var(--card); border-top:1px solid var(--line); }
+  #composeSend { flex:1; min-height:48px; font-weight:700; font-size:1.0625rem; }
+  #frPrintDialog { max-width:560px; max-height:calc(100dvh - 24px); }
+  .frprintimg { display:block; max-width:100%; max-height:44dvh; margin:8px auto; border:1px solid var(--line); border-radius:6px; background:#fff; }
+  #frPrintOut:empty, #frAskMsg:empty, #frSheetSay:empty, #frPrintSay:empty { display:none; }
+  #frPrintOut p { margin:6px 0; overflow-wrap:anywhere; }
+  .actsheet { max-width:420px; }
+  .actsheet .menu button { min-height:48px; }
+  .frasktop { display:flex; gap:14px; align-items:center; }
+  .frasktop h2 { overflow-wrap:anywhere; }
+  .frqr { display:block; width:min(100%, 18rem); height:auto; margin:10px auto; background:#fff; border-radius:8px; image-rendering:pixelated; }
+  .frqr[hidden] { display:none; }
+  @media (max-width:720px) {
+    dialog.fullsheet { width:100%; max-width:none; height:100%; max-height:none; margin:0; border:0; border-radius:0; padding:12px 16px 0; }
+    .cfoot { bottom:0; margin:12px -16px 0; padding:10px 16px calc(12px + env(safe-area-inset-bottom)); }
+    .actsheet { width:100%; max-width:none; margin:auto 0 0; border-radius:16px 16px 0 0; border-bottom:0; padding-bottom:calc(18px + env(safe-area-inset-bottom)); }
+    #frShare, #frCopy, #frQr, #frRotate, #frAddGo, .fracts button, #frTilesMore, #frSentMore, #frReceiptGo, #frPrintGo, #frPrintClose, #frQrClose,
+    #frSheetClose, #frAskActs button, #composeClose, .frempty button, #frReqNoteGo, .fsent .linkish { min-height:44px; }
+    /* Six tabs at the bottom: the words get smaller before they'd squeeze into each other (large text, small phones). */
+    .bottombar button, .bottombar button.on { min-width:0; font-size:clamp(11px, 3.6vw, .75rem); }
+  }
 </style>
 </head>
 <body>
@@ -825,6 +1033,7 @@
   <button data-tab="print">Print</button>
   <button data-tab="scan">Snap<span class="navcount" data-waiting hidden></span></button>
   <button data-tab="journal">Journal</button>
+  <button data-tab="friends">Friends<span class="navcount" data-friends hidden></span></button>
   <button data-tab="printed">Printed</button>
   <button data-tab="board">Feedback board</button>
   <button data-tab="profile">Profile</button>
@@ -1039,6 +1248,74 @@
     <div class="row" id="jMore"><button class="plain" id="jOlder" hidden>Older days</button><span class="muted" id="jEnd" hidden>That's everything.</span></div>
   </section>
 
+  <!-- Friends and notes (SPEC §34): Notes (the feed opens full screen), Friends, Sent. app.js "Friends and notes". -->
+  <section id="friends">
+    <div class="card frhead">
+      <div class="frtop"><h2 id="frTitle" tabindex="-1">Friends</h2>
+        <button type="button" class="go" id="frNew" aria-haspopup="dialog"><span aria-hidden="true">＋ </span>New note</button></div>
+      <div class="viewseg frseg" id="frSeg" role="group" aria-label="Show">
+        <button type="button" data-frview="notes" aria-pressed="true">Notes<span class="frn" id="frNotesN"></span></button>
+        <button type="button" data-frview="people" aria-pressed="false">Friends<span class="frn" id="frPeopleN"></span></button>
+        <button type="button" data-frview="sent" aria-pressed="false">Sent</button>
+      </div>
+    </div>
+
+    <div id="frNotesView">
+      <div class="card frreqnote" id="frReqNote" hidden><span id="frReqNoteText"></span>
+        <button type="button" class="plain small" id="frReqNoteGo">See requests</button></div>
+      <div class="card frwatch" id="frWatchCard" hidden>
+        <div class="frwatchtext"><b id="frWatchHead"></b><span class="muted" id="frWatchSub"></span></div>
+        <button type="button" class="go frplay" id="frWatch" aria-haspopup="dialog"><span aria-hidden="true">▶ </span>Watch</button>
+      </div>
+      <div class="card frempty" id="frNotesEmpty" hidden></div>
+      <h3 class="sr-only" id="frTilesHead">Your notes</h3>
+      <div class="ntiles" id="frTiles" role="list" aria-labelledby="frTilesHead"></div>
+      <div class="row"><button type="button" class="plain" id="frTilesMore" hidden>Show more</button></div>
+      <p class="muted frkeepnote" id="frKeepNote" hidden>Notes you don't keep are deleted 30 days after they arrive. Only you and the friend who sent it can see a note.</p>
+    </div>
+
+    <div id="frPeopleView" hidden>
+      <div class="card" id="frReqCard" hidden><h2 id="frReqHead" tabindex="-1">Friend requests</h2><div id="frReqs"></div></div>
+      <div class="card" id="frAddCard"><h2 id="frAddHead" tabindex="-1">Add a friend</h2>
+        <p class="muted">Send your friend link to someone with a Next Box account. When they open it and say yes, you're friends.
+          Friends can send each other notes, doodles, photos and hearts.</p>
+        <label class="fieldlabel" for="frLink">Your friend link</label>
+        <input type="text" id="frLink" class="frlink" readonly spellcheck="false" autocomplete="off">
+        <div class="row">
+          <button type="button" class="go" id="frShare" hidden>Share</button>
+          <button type="button" class="plain" id="frCopy">Copy link</button>
+          <button type="button" class="plain" id="frQr" aria-haspopup="dialog">QR code</button>
+          <button type="button" class="linkish" id="frRotate">New link</button>
+        </div>
+        <h3 id="frNameHead">Or type their username</h3>
+        <form class="frname" id="frAddForm" autocomplete="off">
+          <input type="text" id="frName" aria-labelledby="frNameHead" aria-describedby="frNameHint" autocapitalize="none" spellcheck="false"
+            maxlength="32" placeholder="e.g. lee" enterkeyhint="send">
+          <button class="go" type="submit" id="frAddGo">Send request</button>
+        </form>
+        <p class="muted hint" id="frNameHint">Their exact username. Next Box never says whether a name has an account.</p>
+        <p id="frAddMsg" role="status" aria-live="polite"></p>
+      </div>
+      <div class="card" id="frListCard"><h2 id="frListHead">Your friends</h2>
+        <div id="frList"></div>
+        <div id="frOutBox" hidden><h3>Waiting for them</h3><div id="frOut"></div></div>
+      </div>
+      <details class="card frblocked" id="frBlockedCard" hidden><summary id="frBlockedHead">Blocked</summary>
+        <p class="muted">They can't send you friend requests or notes. Unblocking doesn't make you friends again.</p>
+        <div id="frBlocked"></div></details>
+      <p class="muted frreceipt"><span id="frReceiptSay"></span>
+        <button type="button" class="linkish" id="frReceiptGo">Change this in Settings</button></p>
+    </div>
+
+    <div id="frSentView" hidden>
+      <div class="card"><h2 id="frSentHead" tabindex="-1">Sent</h2>
+        <p class="muted">What you sent, and how far each got: Delivered, Seen or Printed. Some friends only ever show Delivered: that's their choice.</p>
+        <div id="frSentList"></div>
+        <div class="row"><button type="button" class="plain" id="frSentMore" hidden>Show older</button></div>
+      </div>
+    </div>
+  </section>
+
   <section id="printed">
     <div class="card"><h2>Printed</h2>
       <p class="muted">Everything you've printed or previewed. Print any of them on paper, or print it again.</p>
@@ -1113,7 +1390,7 @@
       <button data-jump="focusCard">Focus</button><button data-jump="markCard">Your marks</button><button data-jump="calCard">Calendars</button>
       <button data-jump="appCard">Linked app</button><button data-jump="labelCard">Label colors</button>
       <button data-jump="printCard">Printing</button><button data-jump="readCard">Read-back</button>
-      <button data-jump="helpCard">Help</button>
+      <button data-jump="friendsSetCard">Friends</button><button data-jump="helpCard">Help</button>
     </div>
 
     <div class="card" id="setGeneral"><h2>General</h2>
@@ -1218,6 +1495,13 @@
     <div class="card" id="readCard"><h2>Read-back</h2>
       <label class="setting"><div class="label"><b>Apply confident marks automatically</b><span>Off: every mark waits for Confirm. Deletes always wait, either way.</span></div><input type="checkbox" data-pref="auto_apply"></label>
       <label class="setting"><div class="label"><b>Confidence needed</b><span id="confLabel">Marks below this wait for you.</span></div><input type="range" min="0.5" max="0.95" step="0.05" data-pref="confidence" style="width:160px"></label>
+    </div>
+
+    <div class="card" id="friendsSetCard"><h2>Friends</h2>
+      <label class="setting"><div class="label"><b>Tell friends when I've seen or printed their notes</b>
+        <span>Their Sent list says Seen or Printed. Turned off, it only ever says Delivered.</span></div><input type="checkbox" data-pref="friend_receipts"></label>
+      <p class="muted">A friend's note prints only when you tap Print and say yes. Its label color is "Notes from friends", under:</p>
+      <p><button type="button" class="linkish" data-jump-to="labelCard">Printers &amp; label colors</button></p>
     </div>
 
     <div class="card" id="helpCard"><h2>Help</h2>
@@ -1360,6 +1644,7 @@
   <button data-go="print"><span aria-hidden="true">🖨</span>Print</button>
   <button data-go="scan"><span aria-hidden="true">📷</span>Snap<span class="navcount" data-waiting hidden></span></button>
   <button data-go="journal"><span aria-hidden="true">📓</span>Journal</button>
+  <button data-go="friends"><span aria-hidden="true">💌</span>Friends<span class="navcount" data-friends hidden></span></button>
   <button id="moreBtn" aria-haspopup="dialog"><span aria-hidden="true">☰</span>More</button>
 </nav>
 <dialog id="moreDialog" aria-label="More">
@@ -1431,6 +1716,8 @@
     <dt><kbd>g</kbd> then <kbd>p</kbd></dt><dd>Go to Print (nothing prints by itself)</dd>
     <dt><kbd>g</kbd> then <kbd>s</kbd></dt><dd>Go to Snap</dd>
     <dt><kbd>g</kbd> then <kbd>j</kbd></dt><dd>Go to Journal</dd>
+    <dt><kbd>g</kbd> then <kbd>f</kbd></dt><dd>Go to Friends</dd>
+    <dt><kbd>↓</kbd> <kbd>↑</kbd> or <kbd>j</kbd> <kbd>k</kbd></dt><dd>The next or last note, while you watch notes from friends</dd>
     <dt><kbd class="modkey">Ctrl</kbd>+<kbd>Enter</kbd></dt><dd>Add what you typed in Brain dump or Quick add, or save a journal note</dd>
     <dt><kbd class="modkey">Ctrl</kbd>+<kbd>Z</kbd></dt><dd>Undo, while My list shows an Undo message (after Done, → Tomorrow and the like)</dd>
     <dt><kbd>?</kbd></dt><dd>This list</dd>
@@ -1438,6 +1725,104 @@
   </dl>
   <p class="muted">Letters do nothing while you're typing in a box. To turn off the one-key ones (n, +, /, g, ?), use Settings → General → One-key shortcuts.</p>
   <div class="row" style="justify-content:flex-end"><button class="plain" id="keysClose">Close</button></div>
+</dialog>
+
+<!-- Friends and notes: the feed (full screen, one note per screen, swipe up), the note sheet, Print, and small asks. -->
+<dialog id="feedDialog" class="feedsheet" aria-label="Notes from friends">
+  <div class="feedtop">
+    <button type="button" class="feedbtn" id="feedClose"><span aria-hidden="true">✕</span><span class="sr-only">Close notes</span></button>
+    <span class="feedpos" id="feedPos" aria-hidden="true"></span>
+    <button type="button" class="feedbtn" id="feedNew" aria-haspopup="dialog"><span aria-hidden="true">＋</span><span class="sr-only">New note</span></button>
+  </div>
+  <div class="feedlist" id="feedList"></div>
+  <div class="feednav" id="feedNav">
+    <button type="button" class="feedbtn" id="feedUp"><span aria-hidden="true">↑</span><span class="sr-only">Last note</span></button>
+    <button type="button" class="feedbtn" id="feedDown"><span aria-hidden="true">↓</span><span class="sr-only">Next note</span></button>
+  </div>
+  <p class="sr-only" id="feedSay" role="status" aria-live="polite"></p>
+</dialog>
+
+<dialog id="composeDialog" class="fullsheet" aria-labelledby="composeTitle">
+  <div class="sheethead"><h2 id="composeTitle" tabindex="-1">New note</h2>
+    <button type="button" class="plain" id="composeClose">Close</button></div>
+  <div class="ckinds" id="composeKinds" role="group" aria-label="What to send">
+    <button type="button" data-ckind="note" aria-pressed="true"><span aria-hidden="true">Aa</span>Note</button>
+    <button type="button" data-ckind="draw" aria-pressed="false"><span aria-hidden="true">✍️</span>Draw</button>
+    <button type="button" data-ckind="photo" aria-pressed="false"><span aria-hidden="true">📷</span>Photo</button>
+    <button type="button" data-ckind="heart" aria-pressed="false"><span aria-hidden="true">♥</span>Heart</button>
+  </div>
+  <div class="cpane" id="composeNotePane">
+    <label for="composeText" class="sr-only">Your note</label>
+    <textarea id="composeText" class="cnote nc-yellow" maxlength="280" placeholder="Write a note…" aria-describedby="composeCount"></textarea>
+    <div class="ccolors">
+      <fieldset class="cswatches" id="composeColors"><legend class="sr-only">Note color</legend></fieldset>
+      <span class="muted ccount" id="composeCount">0 of 280</span>
+    </div>
+  </div>
+  <div class="cpane" id="composeDrawPane" hidden>
+    <canvas id="composeCanvas" width="900" height="1200" role="img" aria-label="Drawing area: draw with your finger or a mouse"></canvas>
+    <div class="row cdrawbar">
+      <div class="chips" id="composePens" role="group" aria-label="Pen">
+        <button type="button" data-pen="12" aria-pressed="true">Thin</button><button type="button" data-pen="28" aria-pressed="false">Thick</button></div>
+      <button type="button" class="plain small" id="composeUndo">Undo</button>
+      <button type="button" class="plain small" id="composeWipe">Clear</button>
+    </div>
+  </div>
+  <div class="cpane" id="composePhotoPane" hidden>
+    <input type="file" id="composeCam" class="sr-only" accept="image/*" capture="environment" tabindex="-1" aria-hidden="true">
+    <input type="file" id="composeLib" class="sr-only" accept="image/*" tabindex="-1" aria-hidden="true">
+    <div class="row"><button type="button" class="go" id="composeCamGo"><span aria-hidden="true">📷 </span>Take a photo</button>
+      <button type="button" class="plain" id="composeLibGo">Choose from photos</button></div>
+    <img id="composePic" class="cpic" alt="The photo you picked" hidden>
+    <p class="muted" id="composeNoPic" hidden>No preview for this kind of photo, but it can still be sent.</p>
+    <p class="muted">Its location and camera details are removed before it's sent.</p>
+  </div>
+  <div class="cpane" id="composeHeartPane" hidden>
+    <div class="cheart" aria-hidden="true">❤️</div>
+    <p class="cheartsay">One tap sends a heart. It prints as a big heart.</p>
+  </div>
+  <div class="field" id="composeCapRow" hidden><label for="composeCap">Caption (optional)</label>
+    <input type="text" id="composeCap" maxlength="140" enterkeyhint="done"></div>
+  <div class="field"><span class="fieldlabel" id="composeToLabel">Send to</span>
+    <div class="chips cto" id="composeTo" role="group" aria-labelledby="composeToLabel"></div></div>
+  <details class="cprint" id="composePrintBox" open><summary>How it prints</summary>
+    <p class="muted">Black and white, the way it comes out of a label printer if your friend taps Print.</p>
+    <p class="muted" id="composePrintSay" role="status" aria-live="polite"></p>
+    <img id="composePrintImg" alt="" hidden></details>
+  <p id="composeMsg" role="status" aria-live="polite"></p>
+  <div class="row cfoot"><button type="button" class="go" id="composeSend">Send</button></div>
+</dialog>
+
+<dialog id="frPrintDialog" aria-labelledby="frPrintTitle" aria-describedby="frPrintSay">
+  <h2 id="frPrintTitle" tabindex="-1">Print this note</h2>
+  <p class="muted" id="frPrintSay"></p>
+  <img id="frPrintImg" class="frprintimg" alt="">
+  <div id="frPrintOut" role="status" aria-live="polite"></div>
+  <div class="row"><button type="button" class="go" id="frPrintGo">Print</button></div>
+  <div id="frPrintPaper"></div>
+  <div class="row" style="justify-content:flex-end"><button type="button" class="plain" id="frPrintClose">Close</button></div>
+</dialog>
+
+<dialog id="frSheet" class="actsheet" aria-labelledby="frSheetTitle">
+  <h2 id="frSheetTitle" tabindex="-1"></h2>
+  <p class="muted" id="frSheetSay"></p>
+  <div class="menu" id="frSheetActs"></div>
+  <div class="row" style="justify-content:flex-end"><button type="button" class="plain" id="frSheetClose">Cancel</button></div>
+</dialog>
+
+<dialog id="frAskDialog" aria-labelledby="frAskTitle" aria-describedby="frAskSay">
+  <div class="frasktop"><div class="frav big" id="frAskAvatar" aria-hidden="true"></div>
+    <div><h2 id="frAskTitle" tabindex="-1"></h2><p class="muted" id="frAskSay"></p></div></div>
+  <p class="err" id="frAskMsg" role="alert"></p>
+  <div class="row" id="frAskActs"></div>
+</dialog>
+
+<dialog id="frQrDialog" aria-labelledby="frQrTitle">
+  <h2 id="frQrTitle" tabindex="-1">Your friend QR code</h2>
+  <p class="muted">A friend points their phone's camera at it, and it opens your friend link.</p>
+  <img id="frQrImg" class="frqr" alt="QR code of your friend link" hidden>
+  <p class="muted" id="frQrMsg" role="status"></p>
+  <div class="row" style="justify-content:flex-end"><button type="button" class="plain" id="frQrClose">Close</button></div>
 </dialog>
 </div>
 
