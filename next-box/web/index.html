@@ -927,7 +927,7 @@
   .ccount { font-size:.8125rem; }
   #composeCanvas { display:block; width:min(100%, calc(50dvh * 3 / 4)); height:auto; aspect-ratio:3 / 4; margin:0 auto; background:#fff; border:2px solid var(--fieldLine);
                    border-radius:12px; touch-action:none; cursor:crosshair; }
-  .cdrawbar { justify-content:center; }
+  .cdrawbar { justify-content:center; margin:0 0 8px; }
   .cdrawbar button { min-height:44px; }
   #composePens button[aria-pressed=true] { background:var(--accent); border-color:var(--accent); color:var(--onAccent); }
   .cpic { display:block; max-width:100%; max-height:42dvh; margin:10px auto 0; border-radius:10px; }
@@ -947,7 +947,8 @@
   #composeSend { flex:1; min-height:48px; font-weight:700; font-size:1.0625rem; }
   #frPrintDialog { max-width:560px; max-height:calc(100dvh - 24px); }
   .frprintimg { display:block; max-width:100%; max-height:44dvh; margin:8px auto; border:1px solid var(--line); border-radius:6px; background:#fff; }
-  #frPrintOut:empty, #frAskMsg:empty, #frSheetSay:empty, #frPrintSay:empty { display:none; }
+  #frPrintOut:empty, #frAskMsg:empty, #frSheetSay:empty, #frPrintSay:empty, #frPrintRow[hidden], #friendsLabelHas[hidden] { display:none; }
+  .frheart { color:#d6336c; font-size:1.125rem; line-height:1; }
   #frPrintOut p { margin:6px 0; overflow-wrap:anywhere; }
   .actsheet { max-width:420px; }
   .actsheet .menu button { min-height:48px; }
@@ -958,6 +959,8 @@
   @media (max-width:720px) {
     dialog.fullsheet { width:100%; max-width:none; height:100%; max-height:none; margin:0; border:0; border-radius:0; padding:12px 16px 0; }
     .cfoot { bottom:0; margin:12px -16px 0; padding:10px 16px calc(12px + env(safe-area-inset-bottom)); }
+    /* A phone: the canvas leaves room to see who it goes to (and to scroll past it), at any text size. */
+    #composeCanvas { width:min(100%, calc(40dvh * 3 / 4)); }
     .actsheet { width:100%; max-width:none; margin:auto 0 0; border-radius:16px 16px 0 0; border-bottom:0; padding-bottom:calc(18px + env(safe-area-inset-bottom)); }
     #frShare, #frCopy, #frQr, #frRotate, #frAddGo, .fracts button, #frTilesMore, #frSentMore, #frReceiptGo, #frPrintGo, #frPrintClose, #frQrClose,
     #frSheetClose, #frAskActs button, #composeClose, .frempty button, #frReqNoteGo, .fsent .linkish { min-height:44px; }
@@ -1500,8 +1503,10 @@
     <div class="card" id="friendsSetCard"><h2>Friends</h2>
       <label class="setting"><div class="label"><b>Tell friends when I've seen or printed their notes</b>
         <span>Their Sent list says Seen or Printed. Turned off, it only ever says Delivered.</span></div><input type="checkbox" data-pref="friend_receipts"></label>
-      <p class="muted">A friend's note prints only when you tap Print and say yes. Its label color is "Notes from friends", under:</p>
-      <p><button type="button" class="linkish" data-jump-to="labelCard">Printers &amp; label colors</button></p>
+      <p class="muted">A friend's note prints only when you tap Print and say yes.</p>
+      <div id="friendsLabelHas"><p class="muted">Its label color is "Notes from friends", under:</p>
+        <p><button type="button" class="linkish" data-jump-to="labelCard">Printers &amp; label colors</button></p></div>
+      <p class="muted" id="friendsLabelNone" hidden>When your household adds a label printer, you can pick the label color for friends' notes under Printers &amp; label colors.</p>
     </div>
 
     <div class="card" id="helpCard"><h2>Help</h2>
@@ -1760,13 +1765,13 @@
     </div>
   </div>
   <div class="cpane" id="composeDrawPane" hidden>
-    <canvas id="composeCanvas" width="900" height="1200" role="img" aria-label="Drawing area: draw with your finger or a mouse"></canvas>
     <div class="row cdrawbar">
       <div class="chips" id="composePens" role="group" aria-label="Pen">
         <button type="button" data-pen="12" aria-pressed="true">Thin</button><button type="button" data-pen="28" aria-pressed="false">Thick</button></div>
       <button type="button" class="plain small" id="composeUndo">Undo</button>
       <button type="button" class="plain small" id="composeWipe">Clear</button>
     </div>
+    <canvas id="composeCanvas" width="900" height="1200" role="img" aria-label="Drawing area: draw with your finger or a mouse"></canvas>
   </div>
   <div class="cpane" id="composePhotoPane" hidden>
     <input type="file" id="composeCam" class="sr-only" accept="image/*" capture="environment" tabindex="-1" aria-hidden="true">
@@ -1779,14 +1784,15 @@
   </div>
   <div class="cpane" id="composeHeartPane" hidden>
     <div class="cheart" aria-hidden="true">❤️</div>
-    <p class="cheartsay">One tap sends a heart. It prints as a big heart.</p>
+    <p class="cheartsay">Sends a heart. It prints as a big heart.</p>
+    <p class="muted cheartsay">Quicker: the ♥ next to a friend in Friends sends one in a tap.</p>
   </div>
   <div class="field" id="composeCapRow" hidden><label for="composeCap">Caption (optional)</label>
     <input type="text" id="composeCap" maxlength="140" enterkeyhint="done"></div>
   <div class="field"><span class="fieldlabel" id="composeToLabel">Send to</span>
     <div class="chips cto" id="composeTo" role="group" aria-labelledby="composeToLabel"></div></div>
   <details class="cprint" id="composePrintBox" open><summary>How it prints</summary>
-    <p class="muted">Black and white, the way it comes out of a label printer if your friend taps Print.</p>
+    <p class="muted">About how it prints on a label printer, in black and white, if your friend taps Print. Their printer may make it smaller.</p>
     <p class="muted" id="composePrintSay" role="status" aria-live="polite"></p>
     <img id="composePrintImg" alt="" hidden></details>
   <p id="composeMsg" role="status" aria-live="polite"></p>
@@ -1798,7 +1804,7 @@
   <p class="muted" id="frPrintSay"></p>
   <img id="frPrintImg" class="frprintimg" alt="">
   <div id="frPrintOut" role="status" aria-live="polite"></div>
-  <div class="row"><button type="button" class="go" id="frPrintGo">Print</button></div>
+  <div class="row" id="frPrintRow"><button type="button" class="go" id="frPrintGo">Print</button></div>
   <div id="frPrintPaper"></div>
   <div class="row" style="justify-content:flex-end"><button type="button" class="plain" id="frPrintClose">Close</button></div>
 </dialog>

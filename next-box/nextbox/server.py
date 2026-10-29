@@ -25,6 +25,7 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -2264,6 +2265,12 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     code_window = _Window(60, 3600)              # friend links looked up: far too few to guess one
     note_window = _Window(friendship.NOTES_PER_DAY, 86400)  # backs up the database's own daily counts
     note_preview_window = _Window(300, 3600)     # "how it prints" while composing
+    note_photo_preview_window = _Window(120, 3600)  # ...of a photo: each one is decoded (the app sends a small copy)
+    # Pictures are decoded and re-encoded off the server's event loop (in a worker thread), two at a time at
+    # most, so one big photo never holds up anyone else's requests and memory stays bounded.
+    picture_slots = threading.BoundedSemaphore(2)
+    TOO_MANY_NOTES = (f"That's {friendship.NOTES_PER_DAY} notes in the last 24 hours, the most for a day. "
+                      "Try again later.")
 
     def _privately(caller: Caller, action: str, fn, *args, **kwargs):
         """Call friends.py. Its FriendError is the sentence to show, with its status. Anything else is logged
@@ -2382,10 +2389,13 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         img.save(out, "PNG")
         return out.getvalue()
 
-    def _send_notes(caller: Caller, to: list[str], kind: str, text, color, image) -> dict:
+    def _note_allowed(caller: Caller) -> None:
         if not note_window.allow(caller.name):
-            raise HTTPException(429, f"That's {friendship.NOTES_PER_DAY} notes today, the most for one day. "
-                                     "Try again tomorrow.")
+            raise HTTPException(429, TOO_MANY_NOTES)
+
+    def _send_notes(caller: Caller, to: list[str], kind: str, text, color, image, counted: bool = False) -> dict:
+        if not counted:
+            _note_allowed(caller)
         result = _privately(caller, "note_send", _notes(caller).send, to, kind, text, color, image)
         events.log(caller.name, "note_send", detail={"count": result["sent"]}, household=caller.household)
         return result
@@ -2408,10 +2418,18 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         data = b"".join(chunks)
         if kind == "photo" and (image.content_type or "") in scan.HEIC_TYPES and not scan.heic_supported():
             raise HTTPException(415, scan.HEIC_HELP)
+        return await run_in_threadpool(_clean_picture, kind, data)
+
+    def _clean_picture(kind: str, data: bytes) -> bytes:
+        """In a worker thread, never on the event loop, and two pictures at a time at most."""
+        if not picture_slots.acquire(timeout=60):
+            raise HTTPException(503, "Next Box is busy with other pictures. Try again in a moment.")
         try:
             return friendship.clean_photo(data) if kind == "photo" else friendship.clean_doodle(data)
         except friendship.FriendError as exc:
             raise HTTPException(exc.status, exc.message) from None
+        finally:
+            picture_slots.release()
 
     def _recipients(to: list[str]) -> list[str]:
         return [t for item in to for t in str(item).split(",") if t.strip()][:100]
@@ -2429,9 +2447,16 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         people = _recipients(to)
         if not people:
             raise HTTPException(400, "Pick a friend to send it to.")
-        _privately(caller, "note_send", _notes(caller).check, kind, caption, None, b"?")  # the caption, before the work
+        notes = _notes(caller)
+        # Everything cheap first (the caption, the day's limits, that each one is a friend), so a picture is
+        # only read and decoded when it can actually be sent.
+        _privately(caller, "note_send", notes.check, kind, caption, None, b"?")
+        if kind not in ("draw", "photo"):
+            raise HTTPException(400, "Send a drawing or a photo here (a note or a heart goes to POST /notes).")
+        _note_allowed(caller)
+        await run_in_threadpool(_privately, caller, "note_send", notes.ready, people)
         data = await _upload(image, kind)
-        return _send_notes(caller, people, kind, caption, None, data)
+        return await run_in_threadpool(_send_notes, caller, people, kind, caption, None, data, True)
 
     def _preview_allowed(caller: Caller) -> None:
         if not note_preview_window.allow(caller.name):
@@ -2458,8 +2483,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     async def notes_preview_image(image: UploadFile | None = File(default=None), kind: str = Form(default="photo"),
                                   caption: str = Form(default="", max_length=4000), caller: Caller = Depends(person)):
         _preview_allowed(caller)
+        if kind == "photo" and not note_photo_preview_window.allow(caller.name):
+            raise HTTPException(429, "That's a lot of photo previews. Try again in a bit.")
         data = await _upload(image, kind)
-        return _preview(caller, kind, caption, None, data)
+        return await run_in_threadpool(_preview, caller, kind, caption, None, data)
 
     @app.get("/notes/feed")
     def notes_feed(limit: int = Query(30, ge=1, le=100), cursor: str | None = Query(None, max_length=60),

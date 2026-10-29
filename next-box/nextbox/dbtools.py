@@ -43,8 +43,9 @@ TABLE_NOTES = {
     "journal": "Each person's private journal pages: photo and notes (both hidden here), by day.",
     "task_slides": "How many times each task moved to a later day (task ids and counts only, never text).",
     "friend_codes": "Each person's friend link code (the link they share so friends can add them).",
-    "friendships": "Who is friends with whom, and friend requests waiting for an answer.",
-    "blocks": "Who blocked whom: no friend requests or notes from them.",
+    "friendships": "Who is friends with whom, and friend requests waiting for an answer (or taken back: shown to "
+                   "nobody, until they fade after 30 days).",
+    "blocks": "Who blocked whom (and the name the blocker saw, if any): no friend requests or notes from them.",
     "friend_notes": "Notes, doodles, photos and hearts between friends: private, so the words, pictures and "
                     "reactions are hidden here. Deleted 30 days after they arrive unless kept.",
 }

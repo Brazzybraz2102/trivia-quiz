@@ -245,7 +245,9 @@ friendships = Table(
     "friendships", metadata,
     Column("a", String(32), primary_key=True),                       # the pair, a < b
     Column("b", String(32), primary_key=True),
-    Column("status", String(12), nullable=False),                    # pending | accepted
+    # pending | accepted | withdrawn (a request taken back: shown to nobody, kept until it fades so taking
+    # it back and asking again can't get round the daily limit or undo a quiet no)
+    Column("status", String(12), nullable=False),
     Column("requested_by", String(32), nullable=False),
     Column("created", BigInteger, nullable=False),
     Column("accepted", BigInteger, nullable=True),
@@ -260,6 +262,9 @@ blocks = Table(
     Column("blocker", String(32), primary_key=True),
     Column("blocked", String(32), primary_key=True),
     Column("created", BigInteger, nullable=False),
+    # The name the blocker could already see (a friend's, a request's or a note's display name), else NULL
+    # and the Blocked list shows the username typed: it never tells whether that name has an account.
+    Column("shown", String(64), nullable=True),
 )
 
 friend_notes = Table(

@@ -718,13 +718,13 @@ def test_rate_limits_are_plain_sentences(site, monkeypatch):
     for _ in range(friends.NOTES_PER_FRIEND_PER_DAY):
         lee.post("/notes", json={"to": ["sam"], "kind": "heart"})
     r = lee.post("/notes", json={"to": ["sam"], "kind": "heart"})
-    assert r.status_code == 429 and r.json()["detail"] == "That's 30 notes to sam today. Try again tomorrow."
+    assert r.status_code == 429 and r.json()["detail"] == "That's 30 notes to sam in the last 24 hours. Try again later."
     monkeypatch.setattr(friends, "NOTES_PER_DAY", 3)
     r = sam.post("/notes", json={"to": ["lee"], "kind": "heart"})
     for _ in range(2):
         assert sam.post("/notes", json={"to": ["lee"], "kind": "heart"}).status_code == 200
     r = sam.post("/notes", json={"to": ["lee"], "kind": "heart"})
-    assert r.status_code == 429 and "the most for one day" in r.json()["detail"]
+    assert r.status_code == 429 and "the most for a day" in r.json()["detail"]
     ana = login("ana")
     names = [f"person{n}" for n in range(friends.REQUESTS_PER_DAY)]
     for name in names:

@@ -1126,36 +1126,52 @@ them a note, a doodle, a photo or a heart; read what they sent in a full-screen 
   that name is right, they'll see your request.", whether the account exists, blocked you, or was already asked,
   and the asker's own list shows only the name typed (never a display name), so nobody can find out who has an
   account. A request to a name nobody has (or from someone blocked) is kept `hidden`: never shown to anyone,
-  and someone who takes that name later never sees it. A request must be accepted; if both ask, they're friends
-  straight away. Declining is quiet (the asker's request just fades). Requests nobody answers fade after 30 days.
-  Remove a friend or take a request back (`DELETE /friends/{name}`); **Block** (only someone who is a friend,
-  asked, or sent you a note) ends the friendship, takes their notes out of your feed, and hides their requests
-  from you; unblock doesn't make you friends again. Friends can be in any household: the one deliberate,
-  consented way to reach someone outside yours (§1 rule 9). Only existing accounts (invite-only sign-up stays).
-  20 requests a day.
-- **Notes** (`friend_notes`): `note` (words, 280 characters at most, on a color from `render.NOTE_COLORS`, printed
-  as that color's pattern band), `draw` (a finger doodle: black ink, kept as a 1-bit PNG, at most 1200 px), `photo`
-  (camera or library, optional caption of 140) and `heart` (one tap). Sent to one or more accepted friends (20 at
-  a time); 30 a day to one friend, 100 a day in all, each over the limit a plain sentence (429). The send screen
-  shows "how it prints" (`POST /notes/preview`, `/notes/preview/image`: the 1-bit label, nothing kept).
+  and someone who takes that name later never sees it; asking again once that account exists is a new request
+  that reaches them (the account is newer than the request, so they never saw or declined it). A request must
+  be accepted; if both ask, they're friends straight away, even at the same moment (`Friends.request` tries a
+  second time and finds the other's request). Declining is quiet (the asker's request just fades), and it
+  stands: taking the request back and asking again doesn't show it again. Requests nobody answers fade after
+  30 days. Remove a friend or take a request back (`DELETE /friends/{name}`: a request taken back stays,
+  shown to nobody, as `withdrawn` until it fades, so it still counts towards the day's 20). **Block** (only
+  someone who is a friend, asked, or sent you a note) ends the friendship, takes their notes out of your feed,
+  and hides their requests from you; a request they'd sent stays on their side, unanswered, like a quiet no,
+  so they aren't told. The Blocked list shows a display name only when you could already see it (a friend, a
+  request you saw, a note), else the username typed (`blocks.shown`), and upkeep never removes a block on a
+  name with no account. Unblock doesn't make you friends again. Friends can be in any household: the one
+  deliberate, consented way to reach someone outside yours (§1 rule 9). Only existing accounts (invite-only
+  sign-up stays). 20 requests in any 24 hours, counted in the database (taken-back ones too).
+- **Notes** (`friend_notes`): `note` (words, 280 characters and 12 lines at most, blank lines in a row kept to
+  one, on a color from `render.NOTE_COLORS`, printed as that color's pattern band), `draw` (a finger doodle: black
+  ink, kept as a 1-bit PNG, at most 1200 px), `photo` (camera or library, optional caption of 140) and `heart` (the
+  ♥ next to a friend sends one in a tap; or from the note sheet). Sent to one or more accepted friends (20 at a
+  time); 30 to one friend and 100 in all in any 24 hours, each over the limit a plain sentence (429, "…in the
+  last 24 hours. Try again later."). The send screen shows "how it prints" (`POST /notes/preview`,
+  `/notes/preview/image`: the 1-bit label on a 62 mm roll, nothing kept; a friend's die-cut printer may make it
+  smaller, and the screen says so without showing whose printer).
 - **Pictures are cleaned on the server** (`friends.clean_photo`, `clean_doodle`): opened by Pillow (anything else:
   415), only JPEG/PNG/WebP/GIF/HEIC (HEIC with the `heic` extra, else `scan.HEIC_HELP`) for photos and
   PNG/JPEG/WebP for doodles, turned upright, at most 1600 px and about 450 KB, re-encoded into a new image so no
   EXIF, location, ICC or XMP is kept. Photos up to 15 MB in (`/notes/image` is allowed 16 MB like `/scan`),
-  doodles 3 MB and 4 megapixels; see-through canvases become black on white.
+  doodles 3 MB and 4 megapixels; see-through canvases become black on white. A picture is decoded only after
+  the cheap checks (`Notes.ready`: every recipient a friend, the day's limits), in a worker thread (never on
+  the server's event loop) and two at a time at most (`picture_slots`); a big JPEG is decoded at 1/2 to 1/8 of
+  its size (Pillow's draft), still at least 1600 px. Photo previews: 120 an hour.
 - **The feed** (`GET /notes/feed`): unseen notes first, then the rest, each newest first, with a cursor. The app
   shows one per screen (CSS `scroll-snap-type: y mandatory`) with a right-side rail: ♥ react (`friends.REACTIONS`),
   🖨 Print, ↩ Reply (compose to that friend), 🔖 Keep, ⋯ (Delete for me, Block); the sender and time at the bottom
   left. A note is marked seen (`POST /notes/{id}/seen`) once 60% visible for about 1 s (IntersectionObserver);
   arrow keys and j/k on a desktop; prefers-reduced-motion respected; `GET /notes/count` for the tab's badge.
   The sender's **Sent** list says Delivered, Seen or Printed, or only Delivered when the recipient turned off
-  `friend_receipts` ("Tell friends when I've seen or printed their notes", on by default). Reactions show there.
+  `friend_receipts` ("Tell friends when I've seen or printed their notes", on by default). Reactions show there,
+  except from someone you blocked (only Delivered, no reaction: nothing they do reaches you, and they aren't
+  told).
 - **Printing** (`POST /notes/{id}/print`): only by the recipient, only with `confirm: true`, which the app sends
   after "Send this to the printer?" (400 without). Nothing ever prints a note by itself (§1 rule 2): no automatic
   or per-friend auto-print. It goes to the recipient's own household printer (the "Notes from friends" label color
   rule, `printers.REASONS["friend"]`) through `printer.print_image` → `printer._send_raster`, with the same
   dry-run rules, Always preview only and the pause as every ticket (`jobs._printer_for`). The label is drawn at
-  that printer's own width (a die-cut label's size, the picture shrunk to fit it): "From <name> · <date>", the
+  that printer's own width (a die-cut label's size, the picture, a heart and the words shrunk to fit one label;
+  a long note runs onto a second only at the smallest size, `render._NOTE_SMALL`): "From <name> · <date>", the
   color band, then the words big, the doodle or the photo dithered to 1-bit with its caption, or a big heart and
   "<name> sent you a ♥". Emoji the label can't draw are left off (`render.printable`, `render.can_draw` and the
   fallback fonts). A household with no printer here gets a preview with `jobs.PRINT_AWAY` (or the no-printer
@@ -1166,12 +1182,16 @@ them a note, a doodle, a photo or a heart; read what they sent in a full-screen 
   tables (`tests/test_friends.py` walks every admin, super, usage, debug and ticket endpoint); events carry
   counts only (`note_send {count}`, `note_print {status}`, `friend_request`, never a name, word, id or picture),
   and an unexpected error is logged as its type only (a message could quote a note). The words and pictures are
-  stored nowhere but `friend_notes`, and `nextbox db sql` masks `body`, `image` and `reaction`. Every `/friends`
+  stored nowhere but `friend_notes`, and `nextbox db sql` masks `body`, `image` and `reaction` (it still shows
+  the Next Box computer's owner who is friends with whom and who sent what kind of note to whom, when; the
+  privacy page says no admin *screen* shows them). Every `/friends`
   and `/notes` answer is `no-store`. The shared key gets 403.
-- **Kept 30 days**: a note nobody **Kept** is deleted 30 days after it arrived, at startup upkeep and when a feed
-  is listed (at most once a minute): no timer or cron. **Delete for me** takes it out of your feed or your Sent
+- **Kept 30 days**: a note nobody **Kept** is deleted 30 days after it arrived, at startup upkeep and when a feed,
+  the badge's count or Sent is read (at most once a minute): no timer or cron. Every read leaves out older ones
+  anyway (`friends._alive`), so nothing past 30 days shows or opens before it's deleted. **Delete for me** takes it out of your feed or your Sent
   list; it's gone for good once both have. Download my data has your friends and your own sent and received
-  notes (§22); deleting an account deletes its friend link, friendships, requests, blocks and every note it sent
+  notes (§22): a note you got with everything about it, one you sent with only what Sent shows (its status and
+  reaction, never when it was seen or printed or whether it was kept); deleting an account deletes its friend link, friendships, requests, blocks and every note it sent
   or got; a household can only be removed once empty, and upkeep sweeps rows that name an account that's gone.
 - **No AI** anywhere here.
 - **In the app** (`web/app.js` "Friends and notes", `web/index.html` `#friends`): a **Friends** tab (in the phone's tab bar,
@@ -1182,6 +1202,7 @@ them a note, a doodle, a photo or a heart; read what they sent in a full-screen 
   full-screen dialog (Esc or ✕ closes it, focus goes back where it was); each note is a labelled region; a double tap
   sends ❤️. The note sheet (full screen on a phone) has Note/Draw/Photo/♥, the friends to send to, and "How it prints".
   Print opens a sheet with the label as it comes out of your printer, **Print** (a real print asks "Send this to the
-  printer?" first; when only a preview can happen, it says why and nothing is asked), Print on paper and Save label
-  image. A friend link (`#friend=CODE`) is taken off the address, kept for this tab until you're signed in, and asked
+  printer?" first), Print on paper and Save label image. When only a preview can happen (no printer here, the pause,
+  previews only, or the person's own **Preview only** box), it says why and there's no Print button: the preview is
+  already there, and Print on paper is the blue button. A friend link (`#friend=CODE`) is taken off the address, kept for this tab until you're signed in, and asked
   about once ("Add Lee as a friend?"), after the data notice and the setup questions.

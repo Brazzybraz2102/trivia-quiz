@@ -890,6 +890,7 @@ def render_focus(text: str, steps: list[str], code: str, tag: str = "", color: s
 # --- notes from friends (nextbox/friends.py, SPEC §34) ---------------------------------------
 NOTE_COLORS = ("yellow", "pink", "blue", "green", "purple", "white")  # a note's background, as a pattern band
 _NOTE_SIZES = (84, 72, 62, 54, 46, 40, 34)  # a note's words: the biggest size that keeps it to 7 lines
+_NOTE_SMALL = (30, 26, 22)  # ...and smaller, only to keep a long note on one die-cut label
 EMOJI_ONLY = "(an emoji this printer can't draw: open Next Box to see it)"
 
 
@@ -981,11 +982,19 @@ def render_friend_note(sender: str, when: str, kind: str, text: str = "", color:
     cap_f = font(32)
     caption = _wrap(d, text, cap_f, inner)[:6] if text and kind in ("draw", "photo") else []
     if kind == "heart":
-        size = round(inner * 0.5)
+        size, gap = round(inner * 0.5), round(24 * s)
+        f, step = font(40, True), round(50 * s)
+        said = _wrap(d, f"{sender} sent you a ♥", f, inner)[:3]
+        if max_height:  # a die-cut label: the heart (and if need be the words) shrink to fit on one label
+            def room() -> int:
+                return int((max_height - y - margin - gap - len(said) * step) / 0.88)
+            if room() < inner * 0.3:
+                f, step = font(28, True), round(36 * s)
+                said = _wrap(d, f"{sender} sent you a ♥", f, inner)[:2]
+            size = max(round(40 * s), min(size, room()))
         d.polygon(_heart_points(width / 2, y, size), fill=0)
-        y += round(size * 0.88) + round(24 * s)  # the curve is 29/34 of its width tall
-        f = font(40, True)
-        centered(_wrap(d, f"{sender} sent you a ♥", f, inner)[:3], f, round(50 * s))
+        y += round(size * 0.88) + gap  # the curve is 29/34 of its width tall
+        centered(said, f, step)
     elif kind in ("draw", "photo") and picture is not None:
         room = round(inner * 1.4)
         if max_height:  # a die-cut label: the picture gets what the words leave
@@ -996,12 +1005,22 @@ def render_friend_note(sender: str, when: str, kind: str, text: str = "", color:
         y += pic.height + round(14 * s)
         centered(caption, cap_f, round(42 * s))
     else:
+        # The biggest size that keeps the words to 7 lines; on a die-cut label, also on this one label (a
+        # long note goes smaller still before it ever runs onto a second label).
         words = text or EMOJI_ONLY
-        for size in _NOTE_SIZES:
+        room = max_height - y - margin if max_height else None
+        fallback = None
+        for size in _NOTE_SIZES + (_NOTE_SMALL if room else ()):
             f = font(size, True)
-            lines = _wrap(d, words, f, inner)
-            if len(lines) <= 7:
+            lines, step = _wrap(d, words, f, inner), round(f.size * 1.18)
+            fits = room is None or len(lines) * step <= room
+            if fits and len(lines) <= 7:
                 break
-        centered(lines, f, round(f.size * 1.18))
+            if room is not None and fits and fallback is None:
+                fallback = (f, lines, step)  # on the label, in more than 7 lines
+        else:
+            if fallback:
+                f, lines, step = fallback
+        centered(lines, f, step)
     y += margin
     return canvas.crop((0, 0, width, min(y, canvas.height)))

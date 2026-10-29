@@ -12,7 +12,8 @@ Friends
        "outgoing": [{username, name, at}], "blocked": [{username, name, at}], "code": "K7QW2MZP4X",
        "link": "https://<public url>/app/#friend=K7QW2MZP4X", "receipts": true}
        `outgoing` shows only the username that was typed (name == username), whether or not that account
-       exists, so the list can't be used to find out who has an account. Requests fade after 30 days.
+       exists, so the list can't be used to find out who has an account; `blocked` too, unless you could
+       already see their name (a friend, a request you saw, a note they sent you). Requests fade after 30 days.
 - POST /friends/code/rotate -> {"code", "link"}: a new friend link; the old one stops working.
 - GET  /friends/code/qr.png -> image/png: a QR code of your link (to show on screen).
 - GET  /friends/code/{code} -> {"username", "name", "status"}: who a friend link belongs to, before adding.
@@ -23,24 +24,29 @@ Friends
        SAME answer whether or not the name exists, is blocked, or already asked) or "Request sent. They'll
        see it in Friends." (by code). status "friends": "You're friends now." (they had asked you too) or
        "You're already friends." 400 "That's you." / "You blocked <name>. Unblock them first." /
-       "That isn't a username: ...". 429 after 20 a day.
+       "That isn't a username: ...". 429 after 20 in 24 hours (taken-back ones count). Asking again after the
+       account was made reaches it (a request typed before it existed never does); after a no, it doesn't.
 - POST /friends/{username}/accept -> <GET /friends>.  404 "That request isn't there anymore."
 - POST /friends/{username}/decline -> <GET /friends>. (They aren't told: their request just fades.)
-- DELETE /friends/{username} -> <GET /friends>: remove a friend, or cancel a request you sent.
+- DELETE /friends/{username} -> <GET /friends>: remove a friend, or take back a request you sent (it stays,
+       "withdrawn", shown to nobody, until it fades).
 - POST /friends/{username}/block -> <GET /friends>: no more requests or notes from them; ends the friendship,
-       and their notes leave your feed. Only someone who is a friend, asked to be one, or sent you a note.
+       and their notes leave your feed. Only someone who is a friend, asked to be one, or sent you a note. A
+       request they sent you stays on their side, unanswered (as after Decline): they aren't told.
 - DELETE /friends/{username}/block -> <GET /friends>: unblock (they aren't friends again until one asks).
 
-Notes  (kinds: "note" text ≤ 280 + a color from NOTE_COLORS; "draw" a doodle; "photo" + caption ≤ 140;
-        "heart" one tap)
+Notes  (kinds: "note" text ≤ 280 and ≤ 12 lines + a color from NOTE_COLORS; "draw" a doodle; "photo" +
+        caption ≤ 140; "heart" one tap. Blank lines in a row are kept to one.)
 - POST /notes {"to": ["lee", "ana"], "kind": "note"|"heart", "text": "...", "color": "yellow"}
        -> {"sent": 2, "ids": [...], "message": "Sent to Lee and Ana."}  To friends only, 20 at most.
 - POST /notes/image (multipart) to=lee&to=ana (or "lee,ana"), kind=draw|photo, caption=..., image=<file>
        -> the same. A photo (JPEG, PNG, WebP, GIF, HEIC with the heic extra) up to 15 MB is re-encoded here:
        no EXIF or location, 1600 px at most. A doodle (PNG/JPEG/WebP) up to 3 MB becomes black ink on white.
-       413 too big, 415 not a picture (or HEIC without the extra: scan.HEIC_HELP).
+       413 too big, 415 not a picture (or HEIC without the extra: scan.HEIC_HELP). Recipients and limits are
+       checked before the picture is read; it's decoded in a worker thread, two at a time (503 when busy).
 - POST /notes/preview {"kind", "text", "color"} and POST /notes/preview/image (multipart kind, caption,
        image) -> image/png: "how it prints", the black-and-white label, from you, today. Nothing is kept.
+       300 previews an hour, 120 of them photos.
 - GET  /notes/feed?limit=30&cursor= -> {"notes": [FEED], "next": "<cursor>"|null, "unseen": N}
        Unseen notes first, then the rest, each part newest first. Pass `next` back as `cursor` for more;
        a note marked seen meanwhile may come round again: skip ids you already have.
@@ -50,7 +56,8 @@ Notes  (kinds: "note" text ≤ 280 + a color from NOTE_COLORS; "draw" a doodle; 
 - GET  /notes/count -> {"unseen": N, "requests": M}  (the tab's badge: unseen notes, friend requests)
 - GET  /notes/sent?limit=30&cursor= -> {"notes": [SENT], "next"}
        SENT = {id, to: {username, name}, kind, text, color, image, created, reaction,
-               status: "delivered" | "seen" | "printed"}  ("delivered" only, when they turned receipts off)
+               status: "delivered" | "seen" | "printed"}  ("delivered" only, when they turned receipts off;
+               and with reaction null for someone you blocked). Never when it was seen or printed, or kept.
 - GET  /notes/{id}/image -> the doodle (PNG) or photo (JPEG): its sender or recipient only.
 - POST /notes/{id}/seen -> {"id", "seen"}         (recipient; the app sends it after ~1 s at 60% visible)
 - POST /notes/{id}/react {"reaction": "❤️"|null} -> FEED item  (REACTIONS; null takes it back)
@@ -67,11 +74,12 @@ Notes  (kinds: "note" text ≤ 280 + a color from NOTE_COLORS; "draw" a doodle; 
        label image instead. Never saved as a ticket.
 - PATCH /settings {"friend_receipts": false}: "Tell friends when I've seen or printed their notes".
 
-Limits: 20 friend requests a day; 30 notes a day to one friend and 100 a day in all; 20 friends per send.
+Limits, in any 24 hours: 20 friend requests; 30 notes to one friend and 100 in all; 20 friends per send.
 Privacy: notes live only in friend_notes (masked in `nextbox db sql`); no admin, superadmin, usage, debug
 bundle or event shows them or who your friends are (events carry counts only). Unsaved notes are deleted
-30 days after they arrive (startup upkeep and each feed listing; no timer). Download my data has your
-friends and your own sent and received notes; deleting your account deletes them all.
+30 days after they arrive (startup upkeep, and reading the feed, the count or Sent; no timer), and no read
+shows one past that. Download my data has your friends and your own notes: received ones in full, sent
+ones as SENT shows them. Deleting your account deletes them all.
 """
 from __future__ import annotations
 
@@ -90,6 +98,7 @@ from .render import NOTE_COLORS
 
 KINDS = ("note", "draw", "photo", "heart")
 MAX_TEXT = 280                # a note's words
+MAX_LINES = 12                # and its lines (blank lines in a row count as one): a label stays a label
 MAX_CAPTION = 140             # a photo's or doodle's caption
 REACTIONS = ("❤️", "😂", "😮", "😢", "👍", "🔥")
 MAX_TO = 20                   # friends per send
@@ -117,7 +126,7 @@ ALREADY = "You're already friends."
 NO_REQUEST = "That request isn't there anymore."
 BAD_CODE = "That friend link doesn't work. Ask them for a new one."
 NOT_A_NAME = "That isn't a username: usernames are 2 to 32 letters, numbers, dots, dashes or underscores."
-TOO_MANY_REQUESTS = "That's a lot of friend requests today. Try again tomorrow."
+TOO_MANY_REQUESTS = "That's a lot of friend requests in the last 24 hours. Try again later."
 NOT_FOUND = "That note isn't here anymore."
 CANT_BLOCK = "You can block people who are your friends, asked to be, or sent you a note."
 _NAME = re.compile(r"^[a-z0-9_.-]{2,32}$")
@@ -229,7 +238,7 @@ class Friends:
             return "you"
         with self.db.connect() as conn:
             row = conn.execute(select(db.friendships).where(_pair_is(self.me, other))).mappings().first()
-        if not row:
+        if not row or row["status"] == "withdrawn":
             return "none"
         if row["status"] == "accepted":
             return "friends"
@@ -248,6 +257,7 @@ class Friends:
 
     # asking, answering
     def requests_today(self) -> int:
+        """Requests asked in the last 24 hours, including ones taken back since (they stay, "withdrawn")."""
         with self.db.connect() as conn:
             return conn.execute(select(func.count()).select_from(db.friendships).where(
                 db.friendships.c.requested_by == self.me, db.friendships.c.created > _now() - DAY)).scalar() or 0
@@ -270,33 +280,61 @@ class Friends:
             raise FriendError("That's you. Share your friend link with someone else.")
         if self.requests_today() >= REQUESTS_PER_DAY:
             raise FriendError(TOO_MANY_REQUESTS, 429)
+        for tries_left in (1, 0):
+            try:
+                return self._ask(target) or {"status": "requested", "message": sent}
+            except IntegrityError:
+                # Someone wrote the pair at the same moment: two taps at once, or they asked you just now.
+                # Once more, reading what they wrote (both asked: friends straight away).
+                if not tries_left:
+                    break
+        return {"status": "requested", "message": sent}
+
+    def _before_their_account(self, conn, target: str, row) -> bool:
+        """This hidden request of yours was asked before `target` had an account (so they never saw it, and
+        never said no to it), they have one now, and they haven't blocked you."""
+        made = conn.execute(select(db.users.c.created).where(db.users.c.username == target)).scalar()
+        return made is not None and made > row["created"] and not _blocked(conn, target, self.me)
+
+    def _ask(self, target: str) -> dict | None:
+        """One try at asking, in one transaction: an answer when you're friends now (or already), else None."""
         now = _now()
         a, b = _pair(self.me, target)
-        try:
-            with self.db.begin() as conn:
-                if _blocked(conn, self.me, target):
-                    raise FriendError(f"You blocked {target}. Unblock them first, in Friends → Blocked.")
-                row = conn.execute(select(db.friendships).where(_pair_is(a, b)).with_for_update()).mappings().first()
-                joined = conn.execute(select(db.users.c.created).where(db.users.c.username == self.me)).scalar() or 0
-                if row is not None and row["hidden"] and row["requested_by"] != self.me and row["created"] < joined:
-                    # Asked for this name before this account existed: meant for someone else, never shown.
-                    conn.execute(delete(db.friendships).where(_pair_is(a, b)))
-                    row = None
-                if row is not None and row["status"] == "accepted":
-                    return {"status": "friends", "message": ALREADY}
-                if row is not None and row["requested_by"] != self.me and _exists(conn, target):
-                    # They asked first (even one you'd said no to): both asked, so you're friends now.
+        with self.db.begin() as conn:
+            if _blocked(conn, self.me, target):
+                raise FriendError(f"You blocked {target}. Unblock them first, in Friends → Blocked.")
+            row = conn.execute(select(db.friendships).where(_pair_is(a, b)).with_for_update()).mappings().first()
+            joined = conn.execute(select(db.users.c.created).where(db.users.c.username == self.me)).scalar() or 0
+            if row is not None and row["requested_by"] != self.me and (
+                    row["status"] == "withdrawn" or (row["hidden"] and row["created"] < joined)):
+                # They took it back, or asked for this name before this account existed (meant for someone
+                # else, never shown): it's as if they hadn't asked.
+                conn.execute(delete(db.friendships).where(_pair_is(a, b)))
+                row = None
+            if row is not None and row["status"] == "accepted":
+                return {"status": "friends", "message": ALREADY}
+            if row is not None and row["requested_by"] != self.me and _exists(conn, target):
+                # They asked first (even one you'd said no to): both asked, so you're friends now.
+                conn.execute(update(db.friendships).where(_pair_is(a, b)).values(
+                    status="accepted", accepted=now, hidden=False))
+                return {"status": "friends", "message": NOW_FRIENDS}
+            if row is None:
+                # Never shown to them when there's no such account or they blocked you.
+                hidden = not _exists(conn, target) or _blocked(conn, target, self.me)
+                conn.execute(insert(db.friendships).values(a=a, b=b, status="pending", requested_by=self.me,
+                                                           created=now, accepted=None, hidden=hidden))
+            elif row["requested_by"] == self.me:
+                # Asking again. A quiet no (or a block) stands; but a request typed before their account
+                # existed reaches them now, as a new one (they never saw the first).
+                fresh = bool(row["hidden"]) and self._before_their_account(conn, target, row)
+                if row["status"] == "withdrawn":
+                    hidden = (bool(row["hidden"]) and not fresh) or not _exists(conn, target) \
+                        or _blocked(conn, target, self.me)
                     conn.execute(update(db.friendships).where(_pair_is(a, b)).values(
-                        status="accepted", accepted=now, hidden=False))
-                    return {"status": "friends", "message": NOW_FRIENDS}
-                if row is None:
-                    # Never shown to them when there's no such account or they blocked you.
-                    hidden = not _exists(conn, target) or _blocked(conn, target, self.me)
-                    conn.execute(insert(db.friendships).values(a=a, b=b, status="pending", requested_by=self.me,
-                                                               created=now, accepted=None, hidden=hidden))
-        except IntegrityError:
-            pass  # two taps at once: the first one made it
-        return {"status": "requested", "message": sent}
+                        status="pending", created=now, hidden=hidden))
+                elif fresh:
+                    conn.execute(update(db.friendships).where(_pair_is(a, b)).values(created=now, hidden=False))
+        return None
 
     def _incoming(self, conn, other: str):
         row = conn.execute(select(db.friendships).where(_pair_is(self.me, other))).mappings().first()
@@ -319,34 +357,55 @@ class Friends:
             conn.execute(update(db.friendships).where(_pair_is(self.me, other)).values(hidden=True))
 
     def remove(self, other: str) -> None:
-        """Stop being friends, or take back a request you sent."""
+        """Stop being friends, or take back a request you sent. A request taken back stays, shown to nobody
+        ("withdrawn"), until it fades: so it still counts towards the day's requests, and asking again
+        doesn't undo a quiet no."""
         other = clean_name(other)
         f = db.friendships.c
         with self.db.begin() as conn:
-            done = conn.execute(delete(db.friendships).where(_pair_is(self.me, other), or_(
-                f.status == "accepted", f.requested_by == self.me))).rowcount
+            done = conn.execute(delete(db.friendships).where(_pair_is(self.me, other), f.status == "accepted")).rowcount
+            if not done:
+                done = conn.execute(update(db.friendships).where(
+                    _pair_is(self.me, other), f.status == "pending", f.requested_by == self.me).values(
+                    status="withdrawn")).rowcount
         if not done:
             raise FriendError("They aren't on your friends list.", 404)
 
-    def _related(self, conn, other: str) -> bool:
+    def _knows(self, conn, other: str) -> bool | None:
+        """Can you block them, and could you already see their name? None: you've never been in touch (you
+        can't block them). False: only a request you sent (their name was never shown to you, so the Blocked
+        list mustn't show it either: it would tell you the account exists). True: a friend, someone whose
+        request you could see, or someone who sent you a note."""
         f, n = db.friendships.c, db.friend_notes.c
         row = conn.execute(select(f.status, f.requested_by, f.hidden).where(_pair_is(self.me, other))).first()
-        if row and (row.status == "accepted" or not row.hidden or row.requested_by == self.me):
+        if row and (row.status == "accepted" or (row.status == "pending" and row.requested_by == other
+                                                  and not row.hidden)):
             return True
-        return conn.execute(select(n.id).where(n.sender == other, n.recipient == self.me).limit(1)).first() is not None
+        if conn.execute(select(n.id).where(n.sender == other, n.recipient == self.me).limit(1)).first() is not None:
+            return True
+        if row and row.status == "pending" and row.requested_by == self.me:
+            return False
+        return None
 
     def block(self, other: str) -> None:
-        """No more requests or notes from them. Ends the friendship, and their notes leave your feed."""
+        """No more requests or notes from them. Ends the friendship, and their notes leave your feed. A
+        request they sent you stays on their side, unanswered, as a quiet no does (a request that vanished
+        would tell them they're blocked)."""
         other = clean_name(other)
         if other == self.me:
             raise FriendError("That's you.")
-        n = db.friend_notes.c
+        f, n = db.friendships.c, db.friend_notes.c
         with self.db.begin() as conn:
             if not _blocked(conn, self.me, other):
-                if not self._related(conn, other):
+                knows = self._knows(conn, other)
+                if knows is None:
                     raise FriendError(CANT_BLOCK, 404)
-                conn.execute(insert(db.blocks).values(blocker=self.me, blocked=other, created=_now()))
-            conn.execute(delete(db.friendships).where(_pair_is(self.me, other)))
+                shown = names(conn, [other])[other] if knows else None
+                conn.execute(insert(db.blocks).values(blocker=self.me, blocked=other, created=_now(),
+                                                      shown=shown if shown != other else None))
+            theirs_asked = and_(f.status == "pending", f.requested_by == other)
+            conn.execute(update(db.friendships).where(_pair_is(self.me, other), theirs_asked).values(hidden=True))
+            conn.execute(delete(db.friendships).where(_pair_is(self.me, other), ~theirs_asked))
             theirs = and_(n.sender == other, n.recipient == self.me)
             conn.execute(delete(db.friend_notes).where(theirs, n.gone_sender.is_(True)))
             conn.execute(update(db.friend_notes).where(theirs).values(gone_recipient=True, kept=False))
@@ -373,11 +432,13 @@ class Friends:
     def lists(self) -> dict:
         f = db.friendships.c
         with self.db.connect() as conn:
-            rows = conn.execute(select(db.friendships).where(or_(f.a == self.me, f.b == self.me))
+            rows = conn.execute(select(db.friendships).where(or_(f.a == self.me, f.b == self.me),
+                                                              f.status != "withdrawn")
                                 .order_by(f.created.desc())).mappings().all()
-            blocked = conn.execute(select(db.blocks.c.blocked, db.blocks.c.created).where(
+            blocked = conn.execute(select(db.blocks.c.blocked, db.blocks.c.created, db.blocks.c.shown).where(
                 db.blocks.c.blocker == self.me).order_by(db.blocks.c.created.desc())).all()
-            others = [r["b"] if r["a"] == self.me else r["a"] for r in rows] + [b for b, _ in blocked]
+            others = [r["b"] if r["a"] == self.me else r["a"] for r in rows
+                      if r["status"] == "accepted" or (r["requested_by"] != self.me and not r["hidden"])]
             shown = names(conn, others)
         out: dict[str, list] = {"friends": [], "incoming": [], "outgoing": [], "blocked": []}
         for r in rows:
@@ -389,7 +450,8 @@ class Friends:
             elif not r["hidden"]:
                 out["incoming"].append({**person(other, shown), "at": r["created"]})
         out["friends"].sort(key=lambda p: p["name"].lower())
-        out["blocked"] = [{**person(b, shown), "at": at} for b, at in blocked]
+        # Only a name you could already see (Friends.block keeps it); else the username, like `outgoing`.
+        out["blocked"] = [{"username": b, "name": name or b, "at": at} for b, at, name in blocked]
         return out
 
     def incoming_count(self) -> int:
@@ -401,7 +463,7 @@ class Friends:
 
 
 # --- pictures ------------------------------------------------------------------------------------
-def _open(data: bytes, formats: set[str], what: str, max_pixels: int):
+def _open(data: bytes, formats: set[str], what: str, max_pixels: int, edge: int | None = None):
     from PIL import Image
 
     from .scan import HEIC_HELP, MAX_PIXELS, heic_supported
@@ -414,6 +476,11 @@ def _open(data: bytes, formats: set[str], what: str, max_pixels: int):
             raise FriendError(f"That file isn't a {what} Next Box can use. Try a JPEG or PNG.", 415)
         if img.width * img.height > max_pixels:
             raise FriendError(f"That {what} is far too large.", 413)
+        if edge and fmt in ("JPEG", "MPO") and max(img.size) > edge:
+            # A big JPEG is decoded at 1/2, 1/4 or 1/8 of its size, still at least `edge` on its long side:
+            # a phone's 12 MP photo decodes about four times faster, and it's shrunk to `edge` anyway.
+            s = edge / max(img.size)
+            img.draft(None, (max(1, round(img.width * s)), max(1, round(img.height * s))))
         img.load()
         return img
     except FriendError:
@@ -446,7 +513,7 @@ def clean_photo(data: bytes) -> bytes:
         raise FriendError("That photo is too big. Pick one under 15 MB.", 413)
     if not data:
         raise FriendError("Pick a photo first.")
-    img = _open(data, PHOTO_FORMATS, "photo", 50_000_000)
+    img = _open(data, PHOTO_FORMATS, "photo", 50_000_000, edge=PHOTO_EDGE)
     img = _flatten(ImageOps.exif_transpose(img))
     img.thumbnail((PHOTO_EDGE, PHOTO_EDGE))
     fresh = Image.new("RGB", img.size, "white")
@@ -526,12 +593,17 @@ class Notes:
         """What would be kept: (words, color). Raises FriendError for anything that can't be sent."""
         if kind not in KINDS:
             raise FriendError("Pick a note, a drawing, a photo or a heart.")
-        words = "\n".join(line.rstrip() for line in str(text or "").replace("\r\n", "\n").split("\n")).strip()
+        words = "\n".join(line.rstrip() for line in str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+                          .split("\n")).strip()
+        words = re.sub(r"\n{3,}", "\n\n", words)  # blank lines in a row: one (a label isn't a roll of paper)
         if kind == "note":
             if not words:
                 raise FriendError("Write something first.")
             if len(words) > MAX_TEXT:
                 raise FriendError(f"Keep a note to {MAX_TEXT} characters (this one has {len(words)}).")
+            lines = words.count("\n") + 1
+            if lines > MAX_LINES:
+                raise FriendError(f"Keep a note to {MAX_LINES} lines (this one has {lines}).")
             color = color or "yellow"
             if color not in NOTE_COLORS:
                 raise FriendError("Pick one of the note colors.")
@@ -544,10 +616,10 @@ class Notes:
             raise FriendError("Draw something first." if kind == "draw" else "Pick a photo first.")
         return words, None
 
-    def send(self, to: list[str], kind: str, text: str | None = None, color: str | None = None,
-             image: bytes | None = None) -> dict:
-        """Send one note to each friend in `to`. `image` is already cleaned (clean_photo / clean_doodle)."""
-        words, color = self.check(kind, text, color, image)
+    def ready(self, to: list[str]) -> tuple[list[str], dict[str, str]]:
+        """Who a note can go to: (usernames, {username: name}). Raises FriendError unless every one is a
+        friend (and neither has blocked the other) and the limits allow it. Cheap, so a photo is checked
+        against it before it's read or decoded."""
         people = list(dict.fromkeys(clean_name(t) for t in to or [] if clean_name(t)))
         if not people:
             raise FriendError("Pick a friend to send it to.")
@@ -563,11 +635,20 @@ class Notes:
                 n.sender == self.me, n.created > now - DAY).group_by(n.recipient)).all())
             shown = names(conn, people)
         if sum(today.values()) + len(people) > NOTES_PER_DAY:
-            raise FriendError(f"That's {NOTES_PER_DAY} notes today, the most for one day. Try again tomorrow.", 429)
+            raise FriendError(f"That's {NOTES_PER_DAY} notes in the last 24 hours, the most for a day. "
+                              "Try again later.", 429)
         for other in people:
             if today.get(other, 0) >= NOTES_PER_FRIEND_PER_DAY:
-                raise FriendError(f"That's {NOTES_PER_FRIEND_PER_DAY} notes to {shown[other]} today. "
-                                  "Try again tomorrow.", 429)
+                raise FriendError(f"That's {NOTES_PER_FRIEND_PER_DAY} notes to {shown[other]} in the last 24 hours. "
+                                  "Try again later.", 429)
+        return people, shown
+
+    def send(self, to: list[str], kind: str, text: str | None = None, color: str | None = None,
+             image: bytes | None = None) -> dict:
+        """Send one note to each friend in `to`. `image` is already cleaned (clean_photo / clean_doodle)."""
+        words, color = self.check(kind, text, color, image)
+        people, shown = self.ready(to)
+        n, now = db.friend_notes.c, _now()
         ids = []
         with self.db.begin() as conn:
             for other in people:
@@ -586,7 +667,7 @@ class Notes:
         if not re.fullmatch(r"[0-9a-f]{12}", note_id or ""):
             return None
         n = db.friend_notes.c
-        return conn.execute(select(db.friend_notes).where(n.id == note_id, or_(
+        return conn.execute(select(db.friend_notes).where(n.id == note_id, _alive(), or_(
             and_(n.recipient == self.me, n.gone_recipient.is_(False)),
             and_(n.sender == self.me, n.gone_sender.is_(False))))).mappings().first()
 
@@ -622,7 +703,7 @@ class Notes:
         prune(self.db)
         limit = max(1, min(int(limit), 100))
         n = db.friend_notes.c
-        mine = and_(n.recipient == self.me, n.gone_recipient.is_(False),
+        mine = and_(n.recipient == self.me, n.gone_recipient.is_(False), _alive(),
                     n.sender.not_in(select(db.blocks.c.blocked).where(db.blocks.c.blocker == self.me)))
         q = select(*self._cols()).where(mine)
         after = _after(cursor, feed=True)
@@ -645,45 +726,58 @@ class Notes:
         n = db.friend_notes.c
         with self.db.connect() as conn:
             r = conn.execute(select(*self._cols()).where(
-                n.id == note_id, n.recipient == self.me, n.gone_recipient.is_(False))).mappings().first()
+                n.id == note_id, n.recipient == self.me, n.gone_recipient.is_(False), _alive())).mappings().first()
             if r is None:
                 raise FriendError(NOT_FOUND, 404)
             shown = names(conn, [r["sender"]])
         return self._feed_item(r, shown, set(Friends(self.db, self.me).friends()))
 
+    def _sent_items(self, conn, rows) -> list[dict]:
+        """What you sent, as Sent shows it: how far each got (delivered, seen or printed) and their reaction.
+        Someone who turned off "Tell friends when I've seen or printed their notes" shows as delivered, and
+        so does anyone you blocked, with no reaction (whatever they do now doesn't reach you, and they
+        aren't told they're blocked). Never when they saw or printed it, or whether they kept it."""
+        people = {r["recipient"] for r in rows}
+        shown = names(conn, people)
+        quiet = {u for u, prefs in conn.execute(select(db.users.c.username, db.users.c.prefs).where(
+            db.users.c.username.in_(people))) if (prefs or {}).get("friend_receipts") is False}
+        blocked = set(conn.execute(select(db.blocks.c.blocked).where(
+            db.blocks.c.blocker == self.me, db.blocks.c.blocked.in_(people))).scalars())
+        out = []
+        for r in rows:
+            status, reaction = "delivered", r["reaction"]
+            if r["recipient"] in blocked:
+                reaction = None
+            elif r["recipient"] not in quiet:
+                status = "printed" if r["printed"] else "seen" if r["seen"] else "delivered"
+            out.append({"id": r["id"], "to": person(r["recipient"], shown), "kind": r["kind"], "text": r["body"] or "",
+                        "color": r["color"], "image": f"/notes/{r['id']}/image" if r["has_image"] else None,
+                        "created": r["created"], "reaction": reaction, "status": status})
+        return out
+
     def sent(self, limit: int = 30, cursor: str | None = None) -> dict:
-        """What you sent, newest first, with how far each got: delivered, seen or printed. Someone who
-        turned off "Tell friends when I've seen or printed their notes" shows as delivered."""
+        """What you sent, newest first, with how far each got (_sent_items)."""
+        prune(self.db)
         limit = max(1, min(int(limit), 100))
         n = db.friend_notes.c
-        q = select(*self._cols()).where(n.sender == self.me, n.gone_sender.is_(False))
+        q = select(*self._cols()).where(n.sender == self.me, n.gone_sender.is_(False), _alive())
         after = _after(cursor, feed=False)
         if after is not None:
             q = q.where(after)
         q = q.order_by(n.created.desc(), n.id.desc()).limit(limit + 1)
         with self.db.connect() as conn:
             rows = conn.execute(q).mappings().all()
-            people = {r["recipient"] for r in rows}
-            shown = names(conn, people)
-            quiet = {u for u, prefs in conn.execute(select(db.users.c.username, db.users.c.prefs).where(
-                db.users.c.username.in_(people))) if (prefs or {}).get("friend_receipts") is False}
-        more = len(rows) > limit
-        rows = rows[:limit]
-        out = []
-        for r in rows:
-            status = "delivered"
-            if r["recipient"] not in quiet:
-                status = "printed" if r["printed"] else "seen" if r["seen"] else "delivered"
-            out.append({"id": r["id"], "to": person(r["recipient"], shown), "kind": r["kind"], "text": r["body"] or "",
-                        "color": r["color"], "image": f"/notes/{r['id']}/image" if r["has_image"] else None,
-                        "created": r["created"], "reaction": r["reaction"], "status": status})
+            more = len(rows) > limit
+            rows = rows[:limit]
+            out = self._sent_items(conn, rows)
         return {"notes": out, "next": f"1.{rows[-1]['created']}.{rows[-1]['id']}" if more and rows else None}
 
     def counts(self) -> dict:
+        prune(self.db)  # the badge asks every minute: old notes go on time even if nobody opens Friends
         n = db.friend_notes.c
         with self.db.connect() as conn:
             unseen = conn.execute(select(func.count()).select_from(db.friend_notes).where(
-                n.recipient == self.me, n.gone_recipient.is_(False), n.seen.is_(None),
+                n.recipient == self.me, n.gone_recipient.is_(False), n.seen.is_(None), _alive(),
                 n.sender.not_in(select(db.blocks.c.blocked).where(db.blocks.c.blocker == self.me)))).scalar() or 0
         return {"unseen": unseen, "requests": Friends(self.db, self.me).incoming_count()}
 
@@ -733,21 +827,22 @@ class Notes:
                                                        n.gone_recipient.is_(True)))
 
     def export(self) -> dict:
-        """Your own sent and received notes, for Download my data (images: has_image; the .zip has them)."""
+        """Your own sent and received notes, for Download my data (images: has_image; the .zip has them).
+        A note you got has everything about it; one you sent says only what Sent shows (_sent_items)."""
         n = db.friend_notes.c
         with self.db.connect() as conn:
-            rows = conn.execute(select(*self._cols()).where(or_(
-                and_(n.recipient == self.me, n.gone_recipient.is_(False)),
-                and_(n.sender == self.me, n.gone_sender.is_(False)))).order_by(n.created)).mappings().all()
+            got = conn.execute(select(*self._cols()).where(
+                n.recipient == self.me, n.gone_recipient.is_(False), _alive()).order_by(n.created)).mappings().all()
+            sent = conn.execute(select(*self._cols()).where(
+                n.sender == self.me, n.gone_sender.is_(False), _alive()).order_by(n.created)).mappings().all()
+            sent_items = self._sent_items(conn, sent)
         keys = ("id", "kind", "color", "created", "seen", "printed", "kept", "reaction")
-        out: dict[str, list] = {"received": [], "sent": []}
-        for r in rows:
-            item = {**{k: r[k] for k in keys}, "text": r["body"] or "", "has_image": bool(r["has_image"])}
-            if r["recipient"] == self.me:
-                out["received"].append({**item, "from": r["sender"]})
-            if r["sender"] == self.me:
-                out["sent"].append({**item, "to": r["recipient"]})
-        return out
+        received = [{**{k: r[k] for k in keys}, "text": r["body"] or "", "has_image": bool(r["has_image"]),
+                     "from": r["sender"]} for r in got]
+        mine = [{"id": i["id"], "kind": i["kind"], "color": i["color"], "created": i["created"], "text": i["text"],
+                 "has_image": i["image"] is not None, "to": i["to"]["username"], "reaction": i["reaction"],
+                 "status": i["status"]} for i in sent_items]
+        return {"received": received, "sent": mine}
 
     def image(self, note_id: str) -> bytes:
         row = self.get(note_id)
@@ -757,13 +852,20 @@ class Notes:
 
 
 # --- upkeep --------------------------------------------------------------------------------------
+def _alive(now: int | None = None):
+    """Notes that are still here: kept, or not yet 30 days old (in case prune hasn't run yet)."""
+    n = db.friend_notes.c
+    return or_(n.kept.is_(True), n.created >= (now if now is not None else _now()) - KEEP_DAYS * DAY)
+
+
 _pruned: dict[int, float] = {}
 _prune_lock = threading.Lock()
 
 
 def prune(engine: Engine, now: int | None = None, force: bool = False) -> dict:
-    """Delete notes nobody kept 30 days after they arrived, and requests nobody answered in 30 days. At
-    startup (upkeep) and when a feed is listed (at most once a minute): there's no timer."""
+    """Delete notes nobody kept 30 days after they arrived, and requests nobody answered (or taken back) in
+    30 days. At startup (upkeep), and when a feed, the badge's count or Sent is read (at most once a minute):
+    there's no timer."""
     with _prune_lock:
         if not force and now is None and time.time() - _pruned.get(id(engine), 0) < 60:
             return {"notes": 0, "requests": 0}
@@ -774,7 +876,7 @@ def prune(engine: Engine, now: int | None = None, force: bool = False) -> dict:
         notes = conn.execute(delete(db.friend_notes).where(
             n.kept.is_(False), n.created < now - KEEP_DAYS * DAY)).rowcount
         requests = conn.execute(delete(db.friendships).where(
-            f.status == "pending", f.created < now - REQUEST_DAYS * DAY)).rowcount
+            f.status.in_(("pending", "withdrawn")), f.created < now - REQUEST_DAYS * DAY)).rowcount
     return {"notes": notes, "requests": requests}
 
 
@@ -790,7 +892,9 @@ def forget_user(engine: Engine, username: str) -> None:
 
 def sweep(engine: Engine) -> int:
     """Friends' rows that name an account that's gone (deleted before this version, or a household removed).
-    A request to a name that never had an account stays until it fades, like any other."""
+    A request to a name that never had an account stays until it fades, like any other, and a block on one
+    stays too (forget_user removes blocks on an account that's deleted): a block that vanished would tell
+    the blocker that name has no account."""
     f, b, n = db.friendships.c, db.blocks.c, db.friend_notes.c
     people = select(db.users.c.username)
     with engine.begin() as conn:
@@ -798,7 +902,7 @@ def sweep(engine: Engine) -> int:
         gone += conn.execute(delete(db.friendships).where(or_(
             f.requested_by.not_in(people),
             and_(f.status == "accepted", or_(f.a.not_in(people), f.b.not_in(people)))))).rowcount
-        gone += conn.execute(delete(db.blocks).where(or_(b.blocker.not_in(people), b.blocked.not_in(people)))).rowcount
+        gone += conn.execute(delete(db.blocks).where(b.blocker.not_in(people))).rowcount
         gone += conn.execute(delete(db.friend_notes).where(or_(n.sender.not_in(people),
                                                                n.recipient.not_in(people)))).rowcount
     return gone

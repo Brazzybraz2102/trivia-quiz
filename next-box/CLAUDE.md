@@ -36,9 +36,11 @@ Read SPEC.md first. Its §1 rules override everything:
   or debug bundles, masked in `nextbox db sql`. A note's words and pictures live only in `friend_notes`, and a
   printed note is never saved as a ticket. Export only to the sender/recipient; deleted with the account.
   - A note prints only when its recipient taps Print and confirms (`confirm: true`): never automatically.
-  - Adding by username answers the same whether or not the account exists (no enumeration).
-  - Photos are re-encoded (`friends.clean_photo`: no EXIF or location). Unsaved notes go after 30 days
-    (startup upkeep and feed listing: no timer).
+  - Adding by username answers the same whether or not the account exists (no enumeration): so do the
+    Blocked list (`blocks.shown`) and a block (their request stays, like a quiet no).
+  - Photos are re-encoded (`friends.clean_photo`: no EXIF or location), off the event loop and only after
+    `Notes.ready`. Unsaved notes go after 30 days (startup upkeep, and reading the feed, count or Sent: no
+    timer). Sent and its export never say when a note was seen or printed, or whether it was kept.
 - Feedback is anonymous: the `feedback_identities` table is the ONLY place a person is linked to feedback.
   Never log feedback to events, never put usernames in `feedback`, and audit reveals by feedback id only.
 - `nextbox db sql` stays read-only on the real database and keeps masking hashes and secrets (`dbtools.py`).

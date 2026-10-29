@@ -66,7 +66,11 @@ def test_a_note_prints_only_from_the_print_button():
     assert "json: { confirm: true, dry_run }" in go
     assert re.findall(r"frPrintGo\(", JS) == ["frPrintGo("] * 2  # its definition and the button's onclick
     assert '$("#frPrintGo").onclick = () => frPrintGo();' in FR
-    assert 'const frPrintWhy = () => ($("#dry").dataset.forced ? $("#dryWhy").textContent : "");' in FR
+    # Only a preview: when Next Box can't print here, and when the person ticked Preview only themselves
+    why = FR[FR.index("const frPrintWhy = () =>"):]
+    why = why[:why.index(";\n")]
+    assert '$("#dry").dataset.forced ? $("#dryWhy").textContent' in why and '$("#dry").checked ? "you ticked the box' in why
+    assert '$("#frPrintRow").hidden = !!why;' in fn("frPrintOpen", FR)  # nothing to tap that only makes the same preview
     # nothing on a timer sends, prints or changes a note; the one repeating thing only reads the badge's numbers
     assert FR.count("setInterval(") == 1
     assert 'setInterval(() => { if (document.visibilityState === "visible") frCountLoad(); }, 60000);' in FR
@@ -136,3 +140,27 @@ def test_names_times_and_how_long_a_note_stays():
     assert got[:4] == ["Lee", "Lee and Ana", "Lee, Ana and Sam", "Lee, Ana and 2 others"]
     assert got[4] == "1:00p" and got[5] == "Yesterday 2:00p" and got[6] == "Sep 19"
     assert got[7:] == ["Kept: it stays until you delete it.", "Goes in 30 days unless you keep it.", "Goes today unless you keep it."]
+
+
+def test_what_the_checks_found_in_the_app_stays_fixed():
+    # A heart in one tap from Your friends (it never prints by itself), and the sheet says no more than it does
+    assert 'data-fr-heart="${esc(p.username)}"' in FR and 'aria-label="Send ${esc(p.name)} a heart"' in FR
+    heart = fn("frHeartSend", FR)
+    assert 'json: { to: [u], kind: "heart" }' in heart and "confirm(" not in heart and "/print" not in heart
+    assert "One tap sends a heart" not in HTML and "Sends a heart. It prints as a big heart." in HTML
+    # The Watch card counts every new note (the server's number), not just the first page
+    assert "Math.max(fresh.length, frCounts.unseen || 0)" in fn("frNotesDraw", FR)
+    # Seen: the card stops saying New (swiping back up), after a reaction too
+    assert "frCardSeen(card);" in fn("frSeen", FR) and "frCardSeen(card);" in fn("frReact", FR)
+    assert '.querySelector(".fnew")?.remove();' in fn("frCardSeen", FR) and "/, new$/" in fn("frCardSeen", FR)
+    # Focus never lands on nothing: the phone's tab bar when the top bar is hidden, the first new tile after Show more
+    assert '$(".bottombar button.on")' in fn("frSomewhere", FR) and "frSomewhere()" in FR
+    assert '(tiles[at] || tiles.at(-1))?.focus();' in FR
+    # Settings → Friends points at the label color rule only when there is one (a printer)
+    assert '$("#friendsLabelHas").hidden = none; $("#friendsLabelNone").hidden = !none;' in fn("loadLabels")
+    assert 'id="friendsLabelNone" hidden>When your household adds a label printer' in HTML
+    # "How it prints" doesn't claim to be the friend's own printer; the doodle's tools sit above the canvas
+    assert "Their printer may make it smaller." in HTML
+    draw = HTML[HTML.index('id="composeDrawPane"'):HTML.index('id="composePhotoPane"')]
+    assert draw.index('id="composeWipe"') < draw.index('id="composeCanvas"')
+    assert "#composeCanvas { width:min(100%, calc(40dvh * 3 / 4)); }" in HTML

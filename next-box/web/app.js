@@ -325,6 +325,7 @@ async function loadLabels() {
   // rules need a printer, so they're hidden; every ticket still works as a preview and on paper.
   for (const id of ["#defPrinterRow", "#ruleHead", "#colorRules"]) $(id).hidden = none;
   $("#noPrinter").hidden = !none;
+  $("#friendsLabelHas").hidden = none; $("#friendsLabelNone").hidden = !none;  // Settings → Friends: the rule is shown with a printer
   // Outside Home, the next step is PRINT_AWAY (shown here only, not again below).
   $("#noPrinterNext").textContent = !printsHere() ? PRINT_AWAY : noPrinterNext();
   $("#noPrinterGo").hidden = !none || !printsHere() || !canAddPrinter();
@@ -5988,6 +5989,7 @@ function frPeopleDraw() {
   $("#frList").innerHTML = d.friends.length ? d.friends.map((p) => `<div class="frrow">${frAv(p)}
       <div class="frwho"><b>${esc(p.name)}</b><span class="muted">@${esc(p.username)} · friends since ${esc(frWhen(p.since))}</span></div>
       <div class="fracts"><button type="button" class="go small" data-fr-send="${esc(p.username)}" aria-label="Send a note to ${esc(p.name)}">Send a note</button>
+        <button type="button" class="plain small frheart" data-fr-heart="${esc(p.username)}" aria-label="Send ${esc(p.name)} a heart" title="Send a heart">♥</button>
         <button type="button" class="plain small" data-fr-more="${esc(p.username)}" aria-haspopup="dialog" aria-label="More for ${esc(p.name)}">⋯</button></div></div>`).join("")
     : `<p class="muted">No friends yet. Share your friend link above, or type a friend's username.</p>`;
   $("#frOutBox").hidden = !d.outgoing.length;
@@ -6057,6 +6059,8 @@ $("#frPeopleView").addEventListener("click", async (e) => {
     if (await frChange(b, `/friends/${frWho(d.frUnblock)}/block`, "DELETE", `Unblocked ${name}. You're friends again only if one of you asks.`)) frFocusAfter("#frAddHead");
   } else if (d.frSend) {
     frComposeOpen({ to: [d.frSend], opener: b });
+  } else if (d.frHeart) {
+    await hold(b, () => frHeartSend(d.frHeart));
   } else if (d.frMore) {
     const u = d.frMore, name = who(u);
     frSheetShow(name, `@${u}`, [
@@ -6069,6 +6073,14 @@ $("#frPeopleView").addEventListener("click", async (e) => {
     ], b);
   }
 });
+// One tap sends a friend a heart (it never prints by itself, so nothing needs asking).
+async function frHeartSend(u) {
+  const name = frName(frPersonOf(u));
+  try { await api("/notes", { method: "POST", json: { to: [u], kind: "heart" } }); }
+  catch (e) { return toast(errText(e)); }
+  toast(`Heart sent to ${name}.`);
+  if (frSentList.loaded) frSentLoad();
+}
 function frFocusAfter(...sels) {  // the row you were on has gone: carry on from the nearest heading that's still there
   const el = sels.map((s) => $(s)).find((x) => x?.offsetParent);
   if (!el) return;
@@ -6154,12 +6166,13 @@ function frNotesDraw() {
   $("#frReqNoteText").textContent = inc.length === 1 ? `${inc[0].name} wants to be friends.` : `${inc.length} people want to be friends.`;
   if (!frFeed.loaded) return;
   const notes = frFeed.notes, fresh = notes.filter((n) => !n.seen);
+  const unseen = fresh.length ? Math.max(fresh.length, frCounts.unseen || 0) : 0;  // the server's count: more than one page
   $("#frWatchCard").hidden = !notes.length;
   $("#frKeepNote").hidden = !notes.length;
   if (notes.length) {
     const from = [...new Set(fresh.map((n) => frName(n.from)))];
-    $("#frWatchHead").textContent = fresh.length ? `${fresh.length} new ${fresh.length === 1 ? "note" : "notes"}` : "You're all caught up";
-    $("#frWatchSub").textContent = fresh.length ? `From ${frList(from)}.` : "Watch your notes again any time.";
+    $("#frWatchHead").textContent = unseen ? `${unseen} new ${unseen === 1 ? "note" : "notes"}` : "You're all caught up";
+    $("#frWatchSub").textContent = unseen ? `From ${frList(from)}${unseen > fresh.length ? " and more" : ""}.` : "Watch your notes again any time.";
   }
   $("#frNotesEmpty").hidden = !!notes.length || !frData;
   if (!notes.length && frData) {
@@ -6193,7 +6206,12 @@ $("#friends").addEventListener("click", (e) => {
   else if (b.dataset.frUnsend) frUnsend(b.dataset.frUnsend, b);
 });
 $("#frWatch").onclick = () => frWatch(null, $("#frWatch"));
-$("#frTilesMore").onclick = () => hold($("#frTilesMore"), frFeedMore);
+$("#frTilesMore").onclick = () => hold($("#frTilesMore"), async () => {
+  const at = frFeed.notes.length;
+  await frFeedMore();
+  const tiles = $$("#frTiles [data-fr-open]");
+  if ($("#frTilesMore").hidden) (tiles[at] || tiles.at(-1))?.focus();  // the button has gone: on to what it showed
+});
 $("#frNew").onclick = () => frComposeOpen({ opener: $("#frNew") });
 
 // Pictures: each one fetched once per visit (they're never kept by the browser), when it's about to be seen.
@@ -6313,6 +6331,11 @@ async function frSeen(id) {
   try { n.seen = (await api(`${frPath(id)}/seen`, { method: "POST" })).seen; } catch { return; }
   frCounts.unseen = Math.max(0, frCounts.unseen - 1);
   frBadge();
+  frCardSeen(card);
+}
+function frCardSeen(card) {  // swiping back to it: no "New" on a note already seen
+  card.querySelector(".fnew")?.remove();
+  card.setAttribute("aria-label", card.getAttribute("aria-label").replace(/, new$/, ""));
 }
 function frFeedAt(card) {  // the note on screen now: "2 of 7", trays elsewhere closed, the next page fetched in time
   if (!card) return;
@@ -6382,7 +6405,7 @@ async function frReact(card, reaction) {
   const was = n.seen;
   try { Object.assign(n, await api(`${frPath(n.id)}/react`, { method: "POST", json: { reaction: reaction || null } })); }
   catch (e) { return toast(errText(e)); }
-  if (!was && n.seen) { frCounts.unseen = Math.max(0, frCounts.unseen - 1); frBadge(); }
+  if (!was && n.seen) { frCounts.unseen = Math.max(0, frCounts.unseen - 1); frBadge(); frCardSeen(card); }
   frRailDraw(card, n);
   frFeedSay(n.reaction ? `You reacted ${n.reaction}.` : "Reaction taken back.");
 }
@@ -6787,7 +6810,9 @@ async function frPreview() {
 }
 
 // ---- Print a note a friend sent you: on your own household's printer, only when you tap Print
-const frPrintWhy = () => ($("#dry").dataset.forced ? $("#dryWhy").textContent : "");  // why it can only be a preview (applyDry)
+// Why it can only be a preview: Next Box can't print here (applyDry), or the person ticked Preview only.
+const frPrintWhy = () => ($("#dry").dataset.forced ? $("#dryWhy").textContent
+  : $("#dry").checked ? "you ticked the box at the top of My list and Print." : "");
 function frPaperRow(id, main) {  // main: paper is the way to print it here (the blue button)
   const size = me?.prefs?.paper_size || "letter", q = encodeURIComponent(id);
   return `<div class="row paperrow"><a class="${main ? "go" : "plain"} small" style="text-decoration:none" data-paper-link href="/notes/${q}/paper.pdf?paper=${esc(size)}" target="_blank" rel="noopener">Print on paper</a>
@@ -6805,7 +6830,7 @@ function frPrintOpen(n, opener) {
   img.src = n.label;
   $("#frPrintOut").innerHTML = "";
   $("#frPrintPaper").innerHTML = frPaperRow(n.id, !!why);
-  $("#frPrintGo").className = why ? "plain" : "go";
+  $("#frPrintRow").hidden = !!why;  // the preview is already on screen: Print on paper is the way to print it
   if (!$("#frPrintDialog").open) $("#frPrintDialog").showModal();
   $("#frPrintTitle").focus();
 }
@@ -6889,11 +6914,16 @@ $("#frAskDialog").addEventListener("close", () => {
   const el = frAskOpener; frAskOpener = null;
   setTimeout(() => {
     const at = document.activeElement;
-    if (!at || at === document.body) (el?.isConnected && el.offsetParent ? el : $("#topnav button.on") || document.body).focus?.({ preventScroll: true });
+    if (!at || at === document.body) (el?.isConnected && el.offsetParent ? el : frSomewhere()).focus?.({ preventScroll: true });
   }, 0);
 });
 
 // A friend link (#friend=CODE): asked about once signed in, the data notice agreed and the setup questions done.
+function frSomewhere() {  // the current tab's button (top bar on a computer, tab bar on a phone), else the page
+  const el = [$("#topnav button.on"), $(".bottombar button.on"), $("#frTitle")].find((x) => x?.offsetParent);
+  if (el && el.id === "frTitle" && !el.hasAttribute("tabindex")) el.tabIndex = -1;
+  return el || document.body;
+}
 function frLinkRead() {
   const m = location.hash.match(/[#&]friend=([A-Za-z0-9]{4,80})/);
   if (!m) return;

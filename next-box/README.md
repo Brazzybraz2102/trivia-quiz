@@ -411,7 +411,8 @@ each one can come out of your printer, only when you tap **Print** and say yes.
   someone outside yours, and only once they say yes. Only people who already have a Next Box account
   (invite only, as always) can be friends.
 - **Typing a username never says whether that account exists:** the answer is always "If that name is
-  right, they'll see your request."
+  right, they'll see your request.", and blocking that name shows only the name typed. Blocking someone
+  who asked you looks, on their side, like a quiet no.
 - **Send:** a note (up to 280 characters, on a color), a doodle in black ink, a photo with a caption, or a
   heart, to one friend or several. The send screen shows **how it prints**, in black and white.
 - **Read:** notes from friends come up full screen, one at a time; swipe up for the next, like video apps
@@ -426,7 +427,9 @@ each one can come out of your printer, only when you tap **Print** and say yes.
   the activity log or debug bundles, and `nextbox db sql` hides their words and pictures. Notes you didn't
   **Keep** are deleted 30 days after they arrive. Photos lose their location and camera details when
   they're sent. Remove a friend, or **Block** someone (no requests or notes from them), any time.
-- **Limits:** 20 friend requests a day, 30 notes a day to one friend and 100 in all.
+- **A heart in one tap:** the ♥ next to a friend in Friends sends them one.
+- **Limits:** in any 24 hours, 20 friend requests (taking one back still counts), 30 notes to one friend and
+  100 in all.
 - Download my data includes your friends and your sent and received notes; deleting your account deletes
   them all.
 
