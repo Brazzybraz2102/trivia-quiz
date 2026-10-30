@@ -566,7 +566,7 @@ function pwBack() { pwiz.step = pwiz.back.pop() || "kind"; pwDraw(); }
 // One screen: its heading gets focus (and is read out), its buttons at the bottom.
 function pwDraw() {
   const s = pwiz.step, n = PW_STEP[s];
-  $("#pwMsg").textContent = "";
+  $("#pwizMsg").textContent = "";
   $("#pwStep").textContent = s === "done" ? "All done" : n ? `Step ${n} of 5` : "";
   $("#pwBar").style.width = `${Math.round(100 * ((n || 5) - (s === "done" ? 0 : 1)) / 5)}%`;
   $("#pwBack").hidden = !pwiz.back.length;
@@ -707,12 +707,12 @@ function pwPick(address, byHand = true) {
 function pwFindNext() {
   if (pwiz.driver === "cups") {
     pwiz.typed = $("#pwCups").value.trim();
-    if (!pwiz.typed) { $("#pwMsg").textContent = "Type the printer's name as this computer shows it."; return $("#pwCups").focus(); }
+    if (!pwiz.typed) { $("#pwizMsg").textContent = "Type the printer's name as this computer shows it."; return $("#pwCups").focus(); }
     return pwGo("name");
   }
   if (!pwiz.typed && (pwiz.found || []).some((f) => f.address === pwiz.pick && pwWrong(f))) { pwiz.pick = ""; pwShowFound(); }  // never the wrong kind
   if (!pwAddress()) {
-    $("#pwMsg").textContent = pwCanLook() ? "Pick your printer, or type its address." : "Type the printer's address.";
+    $("#pwizMsg").textContent = pwCanLook() ? "Pick your printer, or type its address." : "Type the printer's address.";
     if ($("#pwType")) $("#pwType").open = true;
     return $("#pwAddr")?.focus();
   }
@@ -813,8 +813,8 @@ function pwSetSize(v) {
 function pwOwnSize() {
   const k = $("#pwUnit").value === "in" ? 25.4 : 1, dpi = Number($("#pwDpi").value) || 203;
   const w = Number($("#pwW").value) * k, h = Number($("#pwH")?.value || 0) * k, dots = Math.round(w / 25.4 * dpi);
-  if (!(dots >= 96 && dots <= 2400)) { $("#pwMsg").textContent = "Type the width: between 12 and 300 mm (½ to 12 inches)."; return $("#pwW").focus(); }
-  if (!(h >= 0 && h <= 1000)) { $("#pwMsg").textContent = "The height is up to 1000 mm. Leave it empty for one long roll."; return $("#pwH").focus(); }
+  if (!(dots >= 96 && dots <= 2400)) { $("#pwizMsg").textContent = "Type the width: between 12 and 300 mm (½ to 12 inches)."; return $("#pwW").focus(); }
+  if (!(h >= 0 && h <= 1000)) { $("#pwizMsg").textContent = "The height is up to 1000 mm. Leave it empty for one long roll."; return $("#pwH").focus(); }
   Object.assign(pwiz, { size: "own", dots, dpi, heightMm: Math.round(h * 10) / 10, dirty: true });
   pwGo("name");
 }
@@ -851,7 +851,7 @@ function pwKeepName() {  // what's typed and ticked on Name it, kept when going 
 async function pwSave() {
   pwKeepName();
   const name = pwiz.name.trim();
-  if (!name) { $("#pwMsg").textContent = "Give it a name, like Kitchen or Label printer."; return $("#pwNameIn").focus(); }
+  if (!name) { $("#pwizMsg").textContent = "Give it a name, like Kitchen or Label printer."; return $("#pwNameIn").focus(); }
   const body = { name, driver: pwiz.driver, address: pwAddress(), stock_color: pwiz.color, ink: pwiz.ink };
   if (pwBrother()) {
     Object.assign(body, { model: pwiz.model, label: pwiz.label,
@@ -863,7 +863,7 @@ async function pwSave() {
   try {
     cfg = await api(pwiz.pid ? `/admin/printers/${encodeURIComponent(pwiz.pid)}` : "/admin/printers",
                     { method: pwiz.pid ? "PATCH" : "POST", json: body });
-  } catch (e) { $("#pwMsg").textContent = errText(e); return; }
+  } catch (e) { $("#pwizMsg").textContent = errText(e); return; }
   const added = !pwiz.pid;
   Object.assign(pwiz, { pid: cfg.id, dirty: false, tested: null });
   if (added && (pwiz.first || pwiz.usual)) {  // the first printer is your usual one
@@ -1016,8 +1016,8 @@ $("#pwBody").addEventListener("click", (e) => {
 });
 $("#pwBody").addEventListener("change", (e) => {
   if (!pwiz) return;
-  if (e.target.name === "pwFound") { pwPick(e.target.value); $("#pwMsg").textContent = ""; }
-  else if (e.target.name === "pwLabel") { pwiz.dirty = true; $("#pwMsg").textContent = ""; }
+  if (e.target.name === "pwFound") { pwPick(e.target.value); $("#pwizMsg").textContent = ""; }
+  else if (e.target.name === "pwLabel") { pwiz.dirty = true; $("#pwizMsg").textContent = ""; }
   else if (e.target.id === "pwModelAll") pwSetModel(e.target.value);
 });
 $("#pwBody").addEventListener("input", (e) => {
@@ -1035,7 +1035,7 @@ $("#pwNext").onclick = () => hold($("#pwNext"), async () => {
   if (s === "labels") {
     const picked = $("#pwBody [name=pwLabel]:checked")?.value;
     if (!picked) {
-      $("#pwMsg").textContent = pwiz.model.startsWith("PT-") ? "Pick the tape that's in it." : "Pick the labels that are in it.";
+      $("#pwizMsg").textContent = pwiz.model.startsWith("PT-") ? "Pick the tape that's in it." : "Pick the labels that are in it.";
       return $("#pwBody [name=pwLabel]")?.focus();
     }
     return pwUse(picked);

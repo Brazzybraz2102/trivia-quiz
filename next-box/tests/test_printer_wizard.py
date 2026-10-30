@@ -13,6 +13,7 @@ conftest printer guard (no_real_printer) still fails any test that tries to prin
 """
 from __future__ import annotations
 
+import collections
 import dataclasses
 import ipaddress
 import json
@@ -26,6 +27,7 @@ import threading
 import time
 import types
 from datetime import date
+from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -651,8 +653,32 @@ def test_the_walkthrough_is_a_dialog_with_a_heading_back_and_next(html):
     assert '<button type="button" class="linkish" id="pwClose">Close</button>' in d
     assert '<button type="button" class="plain" id="pwBack">← Back</button>' in d
     assert '<button type="button" class="go" id="pwNext">Next</button>' in d
-    assert '<p class="err" id="pwMsg" role="alert"></p>' in d
+    assert '<p class="err" id="pwizMsg" role="alert"></p>' in d
     assert 'class="quizbar" aria-hidden="true"' in d  # the bar is decoration: "Step 2 of 5" says it in words
+
+
+def test_no_id_is_used_twice_so_each_message_shows_where_it_belongs(js, html):
+    """$("#id") finds the first element with that id. When Profile → Password and the walkthrough both had
+    id="pwMsg", "Type the printer's address." went to the Password card, behind the dialog, and Next seemed
+    to do nothing."""
+    class Ids(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.ids = []
+
+        def handle_starttag(self, tag, attrs):
+            self.ids += [v for k, v in attrs if k == "id"]
+
+    page = Ids()
+    page.feed(html)
+    assert len(page.ids) > 600  # it read the whole page
+    assert sorted(i for i, k in collections.Counter(page.ids).items() if k > 1) == []
+    # the walkthrough says it in its own line; the password row keeps its own for Profile → Password
+    for name in ("pwDraw", "pwFindNext", "pwOwnSize", "pwSave"):
+        assert '$("#pwizMsg").textContent' in fn(js, name), name
+    pw = js[js.index('$("#pwForm").onsubmit'):]
+    pw = pw[:pw.index("\n\n")]
+    assert js.count('$("#pwMsg")') == pw.count('$("#pwMsg")') == 5
 
 
 def test_the_five_steps_in_plain_words(js):

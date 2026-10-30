@@ -166,7 +166,7 @@
   #pwDialog h2 { font-size:1.375rem; margin:10px 0 4px; overflow-wrap:anywhere; }
   #pwDialog h2:focus { outline:none; }
   #pwDialog :is(p, li, label, summary, .muted) { overflow-wrap:anywhere; }
-  #pwHint:empty, #pwMsg:empty { display:none; }
+  #pwHint:empty, #pwizMsg:empty { display:none; }
   #pwClose { white-space:nowrap; flex:none; }
   #pwDialog details { margin-top:12px; }
   #pwDialog details summary { cursor:pointer; color:var(--accent); font-weight:600; }
@@ -1866,7 +1866,7 @@
   <h2 id="pwTitle" tabindex="-1"></h2>
   <p class="muted" id="pwHint"></p>
   <div id="pwBody"></div>
-  <p class="err" id="pwMsg" role="alert"></p>
+  <p class="err" id="pwizMsg" role="alert"></p>
   <div class="row quiznav quizfoot" id="pwNav">
     <button type="button" class="plain" id="pwBack">← Back</button>
     <button type="button" class="go" id="pwNext">Next</button>
