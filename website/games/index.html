@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fall Fest Games · Braznarkel Ranch</title>
+<meta name="description" content="Ten party games for the Braznarkel Ranch Fall Fest. One big screen, and every phone is a controller.">
+<meta name="theme-color" content="#15100d">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rye&family=Alfa+Slab+One&family=Barlow:wght@500;600;700;800&display=swap">
+<style>
+/* Same ranch-after-dark look as the games: walnut ground, brass, barn red, parchment.
+   Layout: one centered column; a two-up hero on wide screens, cards in a grid below. */
+:root {
+  --night: #15100d;
+  --leather: #241a14;
+  --worn: #3a2a1f;
+  --brass: #e7b54a;
+  --barn: #b8322f;
+  --turq: #4f9a95;
+  --pumpkin: #e2702c;
+  --cream: #f6ead2;
+  --muted: #c4ad8f;
+  --ink: #1d140e;
+  --brass-grad: linear-gradient(180deg, #fbe7a8 0%, #e9b648 48%, #b0761f 100%);
+  --f-brand: "Rye", "Rockwell", Georgia, serif;
+  --f-display: "Alfa Slab One", "Rockwell Extra Bold", Georgia, serif;
+  --f-ui: "Barlow", "Segoe UI", system-ui, sans-serif;
+  --shadow: 0 6px 0 #070504;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; color: var(--cream); font: 500 18px/1.55 var(--f-ui);
+  background: radial-gradient(90% 50% at 50% 0%, #3b2618 0%, transparent 70%), var(--night);
+  padding-inline: 16px;
+}
+a { color: var(--brass); }
+:focus-visible { outline: 3px solid var(--brass); outline-offset: 3px; }
+h1, h2, h3 { margin: 0; text-wrap: balance; font-weight: 400; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-block: 28px 64px; display: flex; flex-direction: column; gap: 72px; }
+.eyebrow { font-weight: 800; font-size: 13px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
+.brass { background: var(--brass-grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+header img { width: 200px; height: auto; display: block; }
+header nav { display: flex; gap: 20px; font-weight: 700; }
+header nav a { color: var(--cream); text-decoration: none; }
+header nav a:hover { color: var(--brass); }
+
+.hero { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 40px; align-items: center; }
+.hero h1 { font-family: var(--f-brand); font-size: clamp(48px, 7vw, 92px); line-height: 1; filter: drop-shadow(0 5px 0 #070504); }
+.hero .ribbon {
+  display: inline-block; margin-top: 14px; background: var(--barn); color: var(--cream); font-family: var(--f-display);
+  letter-spacing: .3em; padding: 4px 18px 4px 22px; box-shadow: 0 4px 0 #070504;
+  clip-path: polygon(0 0, 100% 0, calc(100% - 12px) 50%, 100% 100%, 0 100%, 12px 50%);
+}
+.hero p.lede { font-size: clamp(19px, 2vw, 23px); max-width: 34ch; margin: 22px 0 0; }
+.ctas { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 800; font-size: 18px;
+  border-radius: 12px; padding: 14px 24px; box-shadow: 0 4px 0 #070504; transition: transform .08s, box-shadow .08s, filter .15s;
+}
+.btn:hover { filter: brightness(1.1); }
+.btn:active { transform: translateY(3px); box-shadow: 0 1px 0 #070504; }
+.btn.primary { background: var(--brass-grad); color: var(--ink); }
+.btn.ghost { color: var(--cream); border: 2px solid var(--worn); box-shadow: none; }
+.small { font-size: 14px; color: var(--muted); margin-top: 10px; }
+
+/* the "how it looks" mock: a TV and a phone */
+.scene { position: relative; aspect-ratio: 5 / 4; max-width: 100%; }
+.tv {
+  position: absolute; inset: 0 12% 18% 0; background: #0b0807; border: 10px solid #2a1e16; border-radius: 16px;
+  box-shadow: var(--shadow); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; text-align: center;
+}
+.tv .q { font-family: var(--f-display); font-size: clamp(15px, 2vw, 22px); line-height: 1.15; }
+.tv .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; width: 100%; }
+.tv .opts span { border-radius: 8px; padding: 6px 8px; color: var(--ink); font-weight: 800; font-size: clamp(11px, 1.3vw, 14px); text-align: left; }
+.phone {
+  position: absolute; right: 0; bottom: 0; width: 30%; aspect-ratio: 9 / 17; background: var(--night); border: 6px solid #2a1e16;
+  border-radius: 18px; box-shadow: var(--shadow); padding: 10px 7px; display: flex; flex-direction: column; gap: 5px;
+}
+.phone span { border-radius: 6px; flex: 1; display: grid; place-items: center; color: var(--ink); font-family: var(--f-display); font-size: 14px; }
+.o1 { background: var(--pumpkin); } .o2 { background: var(--turq); } .o3 { background: #c9483f; } .o4 { background: var(--brass); }
+
+section > h2 { font-family: var(--f-brand); font-size: clamp(34px, 4.5vw, 52px); color: var(--brass); display: flex; align-items: center; gap: 16px; margin-bottom: 8px; }
+section > h2::after { content: ""; flex: 1; height: 3px; background: repeating-linear-gradient(90deg, var(--worn) 0 10px, transparent 10px 16px); }
+section > p.intro { color: var(--muted); max-width: 62ch; margin: 0 0 24px; }
+
+.mix {
+  position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 16px 28px;
+  background: linear-gradient(120deg, var(--worn), var(--leather)); border: 2px solid #e7b54a66; border-radius: 20px; padding: 24px 28px; box-shadow: var(--shadow); margin-bottom: 24px;
+}
+.mix h3 { font-family: var(--f-brand); font-size: clamp(32px, 4vw, 48px); line-height: 1; }
+.mix p { margin: 6px 0 0; color: var(--muted); max-width: 60ch; }
+
+.games { display: grid; grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); gap: 16px; }
+.game { position: relative; border-radius: 16px; padding: 20px; color: var(--ink); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.game::after { content: ""; position: absolute; inset: 7px; border-radius: 11px; border: 2px dashed #1d140e40; pointer-events: none; }
+.game h3 { font-family: var(--f-display); font-size: 23px; line-height: 1.05; }
+.game p { margin: 0; font-weight: 600; font-size: 16px; flex: 1; }
+.game .who { font-size: 13px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; opacity: .7; }
+.game:nth-child(5n+1) { background: var(--pumpkin); }
+.game:nth-child(5n+2) { background: var(--brass); }
+.game:nth-child(5n+3) { background: var(--turq); }
+.game:nth-child(5n+4) { background: var(--cream); }
+.game:nth-child(5n+5) { background: var(--barn); color: var(--cream); }
+.game:nth-child(5n+5)::after { border-color: #f6ead240; }
+
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; counter-reset: s; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 16px; background: var(--leather); border-radius: 16px; padding: 18px 20px; box-shadow: var(--shadow); }
+.steps li::before { content: counter(s); width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; background: var(--brass-grad); color: var(--ink); font-family: var(--f-display); font-size: 24px; }
+.steps h3 { font-family: var(--f-display); font-size: 21px; margin-bottom: 4px; }
+.steps p { margin: 0; color: var(--muted); }
+.steps code { font-size: .95em; background: #0e0a08; color: var(--cream); border-radius: 6px; padding: 1px 7px; }
+
+.faq { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.faq div { background: var(--leather); border-radius: 14px; padding: 18px 20px; border-left: 4px solid var(--barn); }
+.faq h3 { font-family: var(--f-display); font-size: 18px; margin-bottom: 6px; }
+.faq p { margin: 0; color: var(--muted); font-size: 16px; }
+
+footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 15px; border-top: 2px dashed var(--worn); padding-top: 24px; }
+
+@media (max-width: 820px) {
+  .hero { grid-template-columns: 1fr; }
+  .wrap { gap: 56px; }
+  .faq { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } html { scroll-behavior: auto; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a href="/" aria-label="Braznarkel Ranch home"><img src="logo.svg" alt="Braznarkel Ranch" width="200" height="54"></a>
+    <nav aria-label="On this page"><a href="#games">The games</a><a href="#host">How to host</a></nav>
+  </header>
+
+  <section class="hero" aria-labelledby="title">
+    <div>
+      <div class="eyebrow">Braznarkel Ranch presents</div>
+      <h1 id="title" class="brass">Fall Fest Games</h1>
+      <span class="ribbon">2026</span>
+      <p class="lede">Ten party games on one big screen, and every phone in the crowd is a controller. Trivia, bluffing, drawing and voting, all with one running leaderboard.</p>
+      <div class="ctas">
+        <a class="btn primary" href="braznarkel-ranch-fall-fest-2026.zip" download>Download the games</a>
+        <a class="btn ghost" href="#host">How to host</a>
+      </div>
+      <p class="small">Free · Windows or Mac · No app for players · Works without internet once it's running</p>
+    </div>
+    <div class="scene" aria-hidden="true">
+      <div class="tv">
+        <div class="eyebrow" style="color:#4f9a95">Ranch Life</div>
+        <div class="q">What is a baby horse called?</div>
+        <div class="opts"><span class="o1">A · A foal</span><span class="o2">B · A calf</span><span class="o3">C · A kid</span><span class="o4">D · A cub</span></div>
+      </div>
+      <div class="phone"><span class="o1">A</span><span class="o2">B</span><span class="o3">C</span><span class="o4">D</span></div>
+    </div>
+  </section>
+
+  <section id="games" aria-labelledby="games-title">
+    <h2 id="games-title">The games</h2>
+    <p class="intro">Play one at a time, or let Mix It Up pick for you. Scores carry from game to game all night.</p>
+    <div class="mix">
+      <div>
+        <h3 class="brass">Mix It Up</h3>
+        <p>A random run of 2 to 12 games back to back with short rounds. The scoreboard shows between games, then the next one starts by itself.</p>
+      </div>
+    </div>
+    <div class="games">
+      <article class="game"><h3>Pumpkin Patch Pop Quiz</h3><p>Multiple-choice trivia across ten categories. Faster right answers score more.</p><span class="who">1+ players</span></article>
+      <article class="game"><h3>Fact or Fiction</h3><p>Ten seconds to call it true or made up. Build a streak for bonus points.</p><span class="who">1+ players</span></article>
+      <article class="game"><h3>Scarecrow Sketch</h3><p>Draw a secret word on your phone while it appears live on the TV. Everyone else races to guess.</p><span class="who">2+ players</span></article>
+      <article class="game"><h3>Fib-o-Lantern</h3><p>Write a fake answer to a strange true fact, then find the real one. Fool your friends for points.</p><span class="who">2+ players</span></article>
+      <article class="game"><h3>Hayride Head-to-Head</h3><p>Two players answer the same funny prompt and the crowd votes for the better one.</p><span class="who">3+ players</span></article>
+      <article class="game"><h3>Emoji Roundup</h3><p>Name the movie, song or thing from a few emoji. Small typos still count.</p><span class="who">1+ players</span></article>
+      <article class="game"><h3>Line 'Em Up</h3><p>Tap four answers into the right order, from oldest to newest or fewest legs to most.</p><span class="who">1+ players</span></article>
+      <article class="game"><h3>Guess the Gourd</h3><p>Every answer is a number. Closest guess wins, and an exact hit gets a bonus.</p><span class="who">1+ players</span></article>
+      <article class="game"><h3>Herd Mentality</h3><p>No right answers. Pick what you think most people will pick, and run with the herd.</p><span class="who">2+ players</span></article>
+      <article class="game"><h3>Most Likely To</h3><p>"Who's most likely to fall asleep on the hayride?" Vote for a player and score by picking who the room picks.</p><span class="who">3+ players</span></article>
+    </div>
+  </section>
+
+  <section id="host" aria-labelledby="host-title">
+    <h2 id="host-title">How to host</h2>
+    <p class="intro">One laptop runs the games and shows them on the TV. Players join on their phones over the same Wi-Fi. Setup takes about five minutes.</p>
+    <ol class="steps">
+      <li><div><h3>Install Node.js</h3><p>On the laptop that will drive the TV, install the LTS version from <a href="https://nodejs.org" rel="noopener">nodejs.org</a>. You only do this once.</p></div></li>
+      <li><div><h3>Download and unzip the games</h3><p>Use the download button above, then unzip it anywhere, like your Desktop.</p></div></li>
+      <li><div><h3>Start it</h3><p>In the unzipped folder, double-click <code>start-mac.command</code> on a Mac or <code>start-windows.bat</code> on Windows. On a Mac, if it's blocked, right-click it and choose Open. If Windows asks about the firewall, choose Allow. Keep the black window open while you play.</p></div></li>
+      <li><div><h3>Put it on the TV</h3><p>The big screen opens in your browser. Move that window to the TV and press Fullscreen.</p></div></li>
+      <li><div><h3>Players scan and join</h3><p>Everyone connects to the same Wi-Fi as the laptop, scans the QR code on the TV, and picks a name and icon. Then press Mix it up!</p></div></li>
+    </ol>
+  </section>
+
+  <section aria-labelledby="help-title">
+    <h2 id="help-title">If something's off</h2>
+    <div class="faq">
+      <div><h3>Phones can't open the page</h3><p>Some venue Wi-Fi keeps devices apart. Turn on a phone's personal hotspot, connect the laptop and players to it, then restart the games so the new address shows.</p></div>
+      <div><h3>"Port is already in use"</h3><p>The games are already running in another window. Close it and start again.</p></div>
+      <div><h3>Someone's being silly</h3><p>Click the ✕ next to their name in the lobby to remove them. Typed answers also pass through a family-friendly word filter.</p></div>
+      <div><h3>Adding your own questions</h3><p>Open <code>content.json</code> in the games folder with any text editor. Changes load the next time a game starts.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Braznarkel Ranch · Fall Fest 2026</span>
+    <a href="/">Back to Braznarkel.com</a>
+  </footer>
+</div>
+</body>
+</html>

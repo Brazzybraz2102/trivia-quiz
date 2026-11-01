@@ -705,7 +705,10 @@ function broadcast() {
 setInterval(() => { for (const c of clients) { try { c.res.write(": ping\n\n"); } catch { /* closed */ } } }, 15000);
 
 // ---------- http ----------
-const isLocal = req => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
+// On a laptop, the host screen opened on that same computer needs no key. Once deployed
+// (HOST_KEY set), the host screen always needs the key, even behind a local proxy.
+const ONLINE = !!process.env.HOST_KEY;
+const isLocal = req => !ONLINE && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress);
 const isHost = (req, key) => key === HOST_KEY || isLocal(req);
 
 function lanIPs() {
@@ -745,6 +748,7 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
 
   if (req.method === "GET") {
+    if (p === "/healthz") { res.writeHead(200, { "Content-Type": "text/plain" }); return res.end("ok"); }
     if (p === "/" || p === "/play") return serveFile(res, "play.html");
     if (p === "/host") return serveFile(res, "host.html");
     if (p === "/events") {
@@ -827,9 +831,10 @@ server.listen(PORT, "0.0.0.0", () => {
   const ips = lanIPs();
   const b = content.brand;
   console.log(`\n  🤠  ${b.ranch} ${b.year} ${b.event} is running\n`);
-  console.log(`  Big screen (open on this computer):  http://localhost:${PORT}/host`);
-  for (const ip of ips) console.log(`  Big screen from another device:      http://${ip}:${PORT}/host?key=${HOST_KEY}`);
+  if (ONLINE) console.log(`  Online mode. Big screen: ${joinUrl()}/host?key=<HOST_KEY>`);
+  else console.log(`  Big screen (open on this computer):  http://localhost:${PORT}/host`);
+  if (!ONLINE) for (const ip of ips) console.log(`  Big screen from another device:      http://${ip}:${PORT}/host?key=${HOST_KEY}`);
   console.log(`\n  Players join at:                     ${joinUrl()}`);
-  if (!ips.length) console.log("  (No Wi-Fi network found. Connect this computer to the same Wi-Fi as the players.)");
+  if (!ONLINE && !ips.length) console.log("  (No Wi-Fi network found. Connect this computer to the same Wi-Fi as the players.)");
   console.log("\n  Press Ctrl+C to stop.\n");
 });
