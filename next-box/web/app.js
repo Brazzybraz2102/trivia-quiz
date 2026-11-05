@@ -622,7 +622,7 @@ function pwFind() {
   const brother = pwBrother(), typed = `<div class="field"><label for="pwAddr">The printer's address</label>
       <input type="text" id="pwAddr" maxlength="100" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="192.168.1.50" value="${esc(pwiz.typed)}" aria-describedby="pwAddrHelp"></div>
     <div id="pwAddrHelp"><p class="muted">How to find it:</p><ul class="pwlist muted">
-      <li><b>Print its settings page.</b> ${brother ? "Hold the printer's info (i) button for a second." : "The printer's manual says how: often by holding its Feed button."} The page shows its IP address.</li>
+      <li><b>Print its settings page.</b> ${brother ? "On a QL-1110NWB hold the Cutter button for 2 seconds; other Brothers have an info (i) button for it." : "The printer's manual says how: often by holding its Feed button."} The page shows its IP address.</li>
       <li><b>Or look in your Wi-Fi router's app</b> (or its web page), in the list of connected devices.</li>
       ${brother ? "<li>A Brother's name there starts with <b>BRW</b>, like BRW5413795FE5CF. Its address is next to it.</li>" : ""}</ul></div>`;
   if (!pwCanLook()) {  // a household outside Home: its printers aren't on this computer's network

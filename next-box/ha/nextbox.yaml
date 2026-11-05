@@ -5,6 +5,8 @@
 #      nextbox_print_today_url: http://<desktop-ip>:8787/print/today
 #      nextbox_key: <same NEXTBOX_KEY as next-box/.env>
 # 4. Replace the two CHANGEME entity IDs below, then reload YAML.
+#    A changed secrets.yaml (a new address after moving Next Box to another PC) needs a restart of
+#    Home Assistant: a YAML reload isn't enough to be sure the new address is used.
 #
 # The office-entry automation is the ONLY automatic print. The server guards it: a second
 # source="auto" call on the same day returns {"status": "skipped"}, so HA retries,

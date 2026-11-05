@@ -888,14 +888,9 @@ def what_moved(c: dict) -> str:
 
 
 def home_path(path) -> str:
-    """A path as Mike would type it from his home folder: ~/next-box rather than /home/mike/next-box."""
-    import shlex
-    path, home = str(path), str(Path.home()).rstrip("/")
-    if path == home:
-        return "~"
-    if home and path.startswith(home + "/"):
-        return "~/" + shlex.quote(path[len(home) + 1:])  # quoted, so a space in a folder name pastes
-    return shlex.quote(path)
+    """A path as Mike would type it from his home folder: ~/next-box rather than /home/mike/next-box
+    (quoted, so a space in a folder name pastes)."""
+    return mc.home_path(path)
 
 
 def lan_ip() -> str:
@@ -904,22 +899,32 @@ def lan_ip() -> str:
 
 
 def next_steps(port: int, home_assistant: bool, public_url: bool, ip: str | None = None,
-               tunnel_here: str | None = None) -> list[str]:
+               tunnel_here: str | None = None, addresses: tuple[list, str] | None = None) -> list[str]:
+    """What's left after a move, in order: the phone address (and which one, when this PC has two), Home
+    Assistant's line, the tunnel. `addresses`: (this PC's addresses, the default route's interface)."""
     ip = ip or lan_ip()
     lines = [f"On your phone (same Wi-Fi): http://{ip}:{port}/app  (sign in as before)"]
+    from .doctor import addresses_note, lan_addresses
+    many, route = lan_addresses() if addresses is None else addresses
+    if len(many) > 1:
+        note = addresses_note(many, route)
+        lines.append(note[0].upper() + note[1:] + ".")
     if home_assistant:
         lines += ["Home Assistant prints from this PC now. In Home Assistant's secrets.yaml change this line,",
-                  "then restart Home Assistant (the key stays the same):",
-                  f"  nextbox_print_today_url: http://{ip}:{port}/print/today"]
+                  "then restart Home Assistant (a YAML reload isn't enough to be sure; the key stays the same):",
+                  f"  nextbox_print_today_url: http://{ip}:{port}/print/today",
+                  "The once-a-day print happens the next time the office sensor turns on, not at the restart."]
     if public_url and tunnel_here:  # moved back: move-in.sh turned this PC's tunnel on again
         lines += [f"The internet tunnel is on again here. Check it with: curl {tunnel_here.rstrip('/')}/version"]
     elif public_url:
-        lines += ["Your internet address (NEXTBOX_PUBLIC_URL) has to move here too: the old PC's tunnel is off now.",
-                  f"Run {home_path(PROJECT_DIR)}/scripts/go-online.sh on this PC (README \"Move Next Box to another PC\", "
-                  "step 4)."]
+        lines += ["Your internet address (NEXTBOX_PUBLIC_URL) has to move here too. Make sure the old PC's tunnel is",
+                  "off (there: sudo systemctl disable --now cloudflared), then run "
+                  f"{home_path(PROJECT_DIR)}/scripts/go-online.sh on this PC",
+                  "(README \"Move Next Box to another PC\", step 4). The tunnel's page must then list only this PC "
+                  "under Replicas."]
         if int(port) != DEFAULT_PORT:
-            lines += [f"Next Box uses port {port} here, so in the Cloudflare dashboard set your public hostname's "
-                      f"service to: http://localhost:{port}"]
+            lines += [f"Next Box uses port {port} here, so in the Cloudflare dashboard, on the tunnel's Routes tab "
+                      f"(Published application routes), set the nextbox route's service to: http://localhost:{port}"]
     return lines
 
 

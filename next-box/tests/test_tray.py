@@ -629,6 +629,7 @@ def _scenario(name, tmp, mp):
     mp.delenv("NEXTBOX_HOSTING", raising=False)
     mp.setattr(scan, "heic_supported", lambda: True)
     mp.setattr(doctor, "_lan_ip", lambda: "192.168.1.20")
+    mp.setattr(doctor, "lan_addresses", lambda: ([], ""))  # one address (two add a note)
     mp.setattr("nextbox.movecheck.local_zone", lambda: "America/New_York")  # a home PC (a UTC clock adds a note)
     mp.setattr(doctor, "_last_error", lambda: "")
     mp.setattr(doctor.shutil, "which", lambda n: None)
@@ -728,7 +729,7 @@ All good.
     → using a Cloudflare Tunnel? Add NEXTBOX_HOSTING=Cloudflare to .env, then: systemctl --user restart nextbox
 • preview only (NEXTBOX_DRY_RUN=1): nothing is sent to a printer
 ✗ PRINTER_IP is still the example address
-    → put your printer's IP in .env (hold its info button to print it) or add it in Admin → Printers, delete NEXTBOX_DRY_RUN=1, then: systemctl --user restart nextbox. No label printer? Delete the PRINTER_IP line instead
+    → put your printer's IP in .env (its settings page shows it: on a Brother QL-1110NWB hold the Cutter button for 2 seconds, on other printers the info (i) button) or add it in Admin → Printers, delete NEXTBOX_DRY_RUN=1, then: systemctl --user restart nextbox. No label printer? Delete the PRINTER_IP line instead
 
 6 thing(s) to fix above.
 """),
@@ -751,7 +752,7 @@ All good.
 • PRINTER_IP in .env is still the example address, so it isn't used
     → delete that line, or put your printer's IP there
 ✗ printer Office (192.168.1.77) does not answer
-    → this PC is on the printer's network, so check the printer is switched on and awake, and still at 192.168.1.77: hold its info (i) button to print its settings. If its address changed, open Admin → Printers → Edit in the web app, which finds it again
+    → this PC is on the printer's network, so check the printer is switched on and awake, and still at 192.168.1.77 (its settings page shows it: on a Brother QL-1110NWB hold the Cutter button for 2 seconds, on other printers the info (i) button). If its address changed, open Admin → Printers → Edit in the web app, which finds it again
 
 3 thing(s) to fix above.
 """),

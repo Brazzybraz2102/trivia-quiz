@@ -22,6 +22,11 @@ from .printers import EXAMPLE_PRINTER_IP, Printers
 OK, BAD, NOTE = "✓", "✗", "•"
 MOVED_AWAY = "Next Box was moved to another"  # the first line on a PC Next Box moved away from (nothing to fix)
 MARKS = {OK: "ok", BAD: "bad", NOTE: "note"}  # in `nextbox doctor --json`
+# How to find a printer's address: Mike's QL-1110NWB has no info button (the Cutter button prints its settings).
+SETTINGS_PAGE = ("its settings page shows it: on a Brother QL-1110NWB hold the Cutter button for 2 seconds, on other "
+                 "printers the info (i) button")
+TUNNEL_STILL_ON = ("the internet tunnel (cloudflared) is still on here, so Cloudflare sends some visitors to this PC, "
+                   "where Next Box is off")
 
 
 def _service_state() -> str:
@@ -50,6 +55,50 @@ def _lan_ip() -> str:
         return "<this computer's IP>"
 
 
+def lan_addresses() -> tuple[list[tuple[str, str]], str]:
+    """Every IPv4 address this PC has, as [(address, interface)], and the default route's interface."""
+    from .movecheck import lan_addresses as _addresses
+    return _addresses()
+
+
+def addresses_note(addresses: list[tuple[str, str]], route: str) -> str:
+    """A PC with a cable and Wi-Fi (Mike's server) has two addresses: the one to give phones and Home Assistant."""
+    from .movecheck import interface_kind
+    parts = []
+    for ip, dev in addresses:
+        kind = interface_kind(dev)
+        parts.append(f"{ip} ({dev}{', ' + kind if kind else ''}{', the default route' if dev == route else ''})")
+    return (f"this PC has more than one address: {', '.join(parts)}. Give phones and Home Assistant the cable's, "
+            "with a DHCP reservation in your router (or turn Wi-Fi off on this PC), or the address can change")
+
+
+def _cloudflared_on() -> bool:
+    """Is the tunnel service running, or set to start with the PC? (False where systemd can't be asked.)"""
+    if not shutil.which("systemctl"):
+        return False
+    for check in ("is-active", "is-enabled"):
+        r = subprocess.run(["systemctl", check, "cloudflared"], capture_output=True, text=True)
+        if r.stdout.strip() in ("active", "activating", "enabled"):
+            return True
+    return False
+
+
+def _firewall(port: int, conf: str = "/etc/ufw/ufw.conf") -> tuple[str, bool]:
+    """(the firewall's state: active, inactive or unknown-rules, does it allow the port). `ufw status` needs root;
+    without it ufw's config file (readable by everyone) says whether ufw is on at all."""
+    r = subprocess.run(["ufw", "status"], capture_output=True, text=True)
+    if "Status: active" in r.stdout:
+        return "active", str(port) in r.stdout
+    if "Status: inactive" in r.stdout:
+        return "inactive", True
+    try:
+        with open(conf) as fh:
+            enabled = any(line.strip() == "ENABLED=yes" for line in fh)
+    except OSError:
+        enabled = False
+    return ("unknown-rules", False) if enabled else ("inactive", True)
+
+
 def _networks() -> list:
     """This PC's own IPv4 networks (e.g. 192.168.68.0/22), from `ip -4 -o addr`. Empty when that can't be read."""
     import ipaddress
@@ -73,13 +122,13 @@ def printer_hint(address: str, networks: list | None = None) -> str:
     nets = [n for n in (_networks() if networks is None else networks) if n.version == ip.version] if ip else []
     if ip and any(ip in net for net in nets):
         return (f"this PC is on the printer's network, so check the printer is switched on and awake, and still at "
-                f"{ip}: hold its info (i) button to print its settings. If its address changed, open Admin → "
+                f"{ip} ({SETTINGS_PAGE}). If its address changed, open Admin → "
                 "Printers → Edit in the web app, which finds it again")
     if ip and nets:
         return (f"this PC isn't on the printer's network ({ip} isn't in {', '.join(map(str, nets))}): connect it to "
                 "the same router or Wi-Fi as the printer, and check the printer is on")
-    return ("check the printer is switched on and awake, on the same network as this PC, and still at that address: "
-            "hold its info (i) button to print its settings")
+    return ("check the printer is switched on and awake, on the same network as this PC, and still at that address "
+            f"({SETTINGS_PAGE})")
 
 
 def _page_answers(port: int) -> bool:
@@ -117,7 +166,7 @@ def run_doctor(settings: Settings, accounts: Accounts | None, as_json: bool = Fa
         return 1
     problems = sum(mark == BAD for mark, _, _ in checks)
     print()
-    if any(text.startswith(MOVED_AWAY) for _, text, _ in checks):
+    if any(text.startswith(MOVED_AWAY) for _, text, _ in checks) and not problems:
         print("Nothing to fix here: Next Box runs on the new PC now.")
         return 0
     print("All good." if not problems else f"{problems} thing(s) to fix above.")
@@ -140,6 +189,8 @@ def _checks(settings: Settings, accounts: Accounts | None, say) -> bool:
     if marker is not None:  # scripts/move-out.sh: everything else is off here on purpose, so that's all to say
         say(NOTE, f"{MOVED_AWAY} PC{moved_on(marker)}, so it stays off on this one",
             f"use Next Box on the new PC. {UNDO_HINT}")
+        if _cloudflared_on():  # ...except a tunnel move-out.sh couldn't turn off (two PCs on it split the visitors)
+            say(BAD, TUNNEL_STILL_ON, "sudo systemctl disable --now cloudflared")
         return True
     from . import db as _db
     from .dbtools import describe_location, is_postgres
@@ -190,13 +241,19 @@ def _checks(settings: Settings, accounts: Accounts | None, say) -> bool:
     if _page_answers(settings.port):
         say(OK, f"the web app answers on this computer: http://localhost:{settings.port}/app")
         say(NOTE, f"on your phone (same Wi-Fi): http://{_lan_ip()}:{settings.port}/app")
+        addresses, route = lan_addresses()
+        if len(addresses) > 1:
+            say(NOTE, addresses_note(addresses, route))
         if settings.host not in ("0.0.0.0", "::", ""):
             say(BAD, f"NEXTBOX_HOST is {settings.host}, so phones can't reach it", "set NEXTBOX_HOST=0.0.0.0 in .env")
         if shutil.which("ufw"):
-            r = subprocess.run(["ufw", "status"], capture_output=True, text=True)
-            if "Status: active" in r.stdout and str(settings.port) not in r.stdout:
+            state, allowed = _firewall(settings.port)
+            if state == "active" and not allowed:
                 say(BAD, "the firewall is on and doesn't allow port 8787, so phones can't connect",
                     f"sudo ufw allow from 192.168.0.0/16 to any port {settings.port} proto tcp")
+            elif state == "unknown-rules":
+                say(NOTE, "the firewall (ufw) is on, and its rules can't be read without sudo",
+                    f"if phones can't connect: sudo ufw allow from 192.168.0.0/16 to any port {settings.port} proto tcp")
     else:
         say(BAD, f"nothing answers at http://localhost:{settings.port}", "see the service line above")
 
@@ -224,7 +281,7 @@ def _printer_checks(settings: Settings, say) -> None:
     added = [p for p in printers if p.address != EXAMPLE_PRINTER_IP]
     if settings.printer_ip == EXAMPLE_PRINTER_IP and not added:
         say(BAD, "PRINTER_IP is still the example address",
-            "put your printer's IP in .env (hold its info button to print it) or add it in Admin → Printers, "
+            f"put your printer's IP in .env ({SETTINGS_PAGE}) or add it in Admin → Printers, "
             "delete NEXTBOX_DRY_RUN=1, then: systemctl --user restart nextbox. "
             "No label printer? Delete the PRINTER_IP line instead")
     elif settings.printer_ip == EXAMPLE_PRINTER_IP:  # printers were added in the web app: the line is left over

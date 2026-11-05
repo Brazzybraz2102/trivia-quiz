@@ -216,7 +216,8 @@ One decision per screen in a dialog, phone-first, with Back and Next:
    your network**, never picked for you: one that can't be that kind is shown greyed out and can't be picked (for a
    Brother, anything but a Brother; for the other kinds, a Brother), and an unknown model can still be picked for
    the other kinds. So a Brother that's asleep never leaves the HP or the TV picked in its place.
-   **Type its address instead** says how to find it: the printer's settings page (hold its info button), the router's
+   **Type its address instead** says how to find it: the printer's settings page (a QL-1110NWB: hold the Cutter
+   button for 2 seconds; other printers: the info button; `doctor.SETTINGS_PAGE` says the same), the router's
    list of devices, a Brother's name starting with BRW. A CUPS printer asks for its name on this computer instead.
 3. **Which labels are in it?** For a Brother on the network, `GET /admin/printers/media?address=…` reads the printer's
    own status page (`http://<printer>/general/status.html`, else `/`): its **Media Type** (and the model, if the page
@@ -1044,7 +1045,7 @@ list, so "Your own" brings it back; changing a preset's marks makes them their o
 - **`nextbox move unpack FILE [--replace] [--replace-newer] [--port N]`**: refuses a file made by a newer Next Box
   ("Get the newest Next Box code first", README step 1, or scripts/update.sh where it's installed); an older one is fine (the server's start adds tables and columns and
   runs upkeep). Refuses another time zone, the same file twice ("This move file is already in place here (since
-  <day>). Nothing to do."), and while a Next Box answers on this PC's port. The target is this PC's data folder
+  <day>)."; move-in.sh then says whether anything is left to finish), and while a Next Box answers on this PC's port. The target is this PC's data folder
   (700). It holds data when its `nextbox.db` has an account, or there's a `secret.key` with no database beside it:
   then `--replace` is needed, and when that Next Box was used after the file's last change, `--replace-newer` (the
   file is older than what's here). What's there (the database with its -wal/-shm, `secret.key`) goes to
@@ -1058,31 +1059,61 @@ list, so "Your own" brings it back; changing a preset's marks makes them their o
   `MOVED-AWAY` marker is removed (it's back). No value is ever printed. The summary: what moved (counts), the linked
   apps that unlock, each network printer from the printers table and `PRINTER_IP` tried with a TCP connect only
   (2 s, nothing sent; one per address; the fix is `doctor.printer_hint`, the same words doctor uses: on this PC's
-  own network (`ip -4 -o addr`) it's the printer: asleep, off or a new address; otherwise the network), USB/CUPS printers
-  named as staying behind, and the next steps (`nextbox move next-steps`): the phone address, Home Assistant's exact
-  new `nextbox_print_today_url` line when it has printed (auto_guard or a `source="auto"` ticket in the last 60
-  days), and `scripts/go-online.sh` when `NEXTBOX_PUBLIC_URL` is set (with the public hostname's new
-  `localhost:<port>` when it isn't 8787). `auto_guard` moves too, so the once-a-day print can't happen twice on
-  moving day.
+  own network (`ip -4 -o addr`) it's the printer: asleep, off or a new address (`doctor.SETTINGS_PAGE`: a QL-1110NWB
+  prints its settings page when the Cutter button is held for 2 seconds; it has no info button); otherwise the
+  network), USB/CUPS printers named as staying behind, and the next steps (`nextbox move next-steps`): the phone
+  address (and, when `ip -4 -o addr` shows more than one, `doctor.addresses_note`: use the cable's, with a DHCP
+  reservation, or turn Wi-Fi off), Home Assistant's exact new `nextbox_print_today_url` line when it has printed
+  (auto_guard or a `source="auto"` ticket in the last 60 days; restart Home Assistant, a YAML reload isn't enough;
+  the print comes at the next office entry), and `scripts/go-online.sh` when `NEXTBOX_PUBLIC_URL` is set (first make
+  sure the old PC's tunnel is off; with the route's new `localhost:<port>` on the Routes tab when it isn't 8787).
+  `auto_guard` moves too, so the once-a-day print can't happen twice on moving day.
+- **`nextbox move status`** (`nextbox/movecheck.py`, standard library only, so `python3 -I nextbox/movecheck.py
+  --status [CODE_DIR]` gives the same report on a PC without a .venv; `scripts/status.sh` picks whichever works
+  and masks `eyJ...` once more): where the move stands on this PC, one `label: value` line each, safe to paste
+  into a chat. Values are only versions, yes/no, service states, host names, addresses, days, zone names and the
+  tunnel's id (the token's `t`); never a .env value, a key, a token or a password. Lines: the host, time and zone;
+  code (folder, version, .venv); data (folder, database, `DATABASE_URL set: PostgreSQL`, secret.key); the marker
+  (MOVED-AWAY with its day, file and what was turned off; MOVED-IN with its day, the file's day and host; or
+  neither); the user service (file, active, enabled, linger); whether `http://127.0.0.1:<port>/version` answers
+  (and with which version); Home Assistant's last real auto print day (auto_guard, read only: the SQLite file in
+  `mode=ro`, or through SQLAlchemy when `DATABASE_URL` is set); the public address (host only) and whether it
+  answers from here (same version as this PC, another version = another PC is on the tunnel, 502 = the tunnel
+  reaches a PC where Next Box is off, 530 = no PC connected); cloudflared (unit file, active, enabled; the tunnel id
+  from the unit's `--token` (cloudflared before 2026.7), from the `--token-file` file when readable (`sudo -n`),
+  else from `journalctl -u cloudflared` ("tunnelID="), else "unknown: the token file needs sudo"; the last
+  Unauthorized/error line of its log, masked; a cloudflared running by hand, by process id only); each network
+  printer (one TCP connect); this PC's addresses with their interface, cable/Wi-Fi and the default route; whether
+  suspend.target is masked. Then `looks like:` (Next Box runs here (moved in on <day>) | moved away from here on
+  <day>[, but the tunnel is still on here] | moved in but the setup never finished | set up but not running | the
+  code is here but nothing moved in | isn't on this PC) and `next:` with the one command to run. Exit 0 always.
 - **`scripts/move-out.sh [--undo | --forget]`** (old PC; refuses root): says what happens in 3 lines and asks for
   `MOVE` (any case). Already moved away (the marker)? It says so, with the day and file, and asks again before a
   second file (only if the first or its passphrase is lost). It stops the service, packs (if that fails, or the
   terminal closes or it's killed before the marker is written, the service starts again and nothing else changes),
   writes the `MOVED-AWAY` marker (JSON: moved_at, file, turned_off), disables the service, removes the status
   square (`install-tray.sh --remove`) and, if cloudflared is active or enabled, `sudo systemctl disable --now
-  cloudflared` (two connectors would split visitors). Before that it asks whether the tunnel also carries other
-  websites ([Y/n], Enter turns it off); with `n`, or `NEXTBOX_TUNNEL=shared` in `.env` (go-online.sh writes it when
-  it put Next Box on a tunnel that was already there), the tunnel stays on and it says to delete only Next Box's
-  hostname from it and give the new PC a tunnel of its own. It ends with the file and the one line to paste on the new PC
+  cloudflared` (two connectors would split visitors; also its `cloudflared-update.timer`). Before that it asks
+  whether the tunnel also carries other websites ([Y/n], Enter turns it off); with `n`, or `NEXTBOX_TUNNEL=shared`
+  in `.env` (go-online.sh writes it when it put Next Box on a tunnel that was already there), the tunnel stays on
+  and it says to delete only Next Box's route from it (the Routes tab) and give the new PC a tunnel of its own.
+  When the disable fails (a missed password prompt: Mike's Oct 28), the marker doesn't record cloudflared, and the
+  "Done" block says "NOT done yet: the internet tunnel is still on here" with the two lines to run (the disable,
+  then `nextbox move marker set --off cloudflared`); the same when the unit is still active or enabled at the end.
+  It ends with the file and the one line to paste on the new PC
   (get the code into `~/next-box` + `move-in.sh user@ip:path`, the address from `nextbox move address`, the route's
   own; or `move-in.sh ~/<file>` after a USB stick; both end with `--replace` when this PC has `MOVED-IN`, i.e.
-  Next Box came here from the PC it's going back to). `--undo` is for "changed my mind before using the new PC": it
-  says how to move back instead and to switch the new PC off with its own `move-out.sh`, asks for `UNDO`, removes
-  the marker and turns back on exactly what it lists. `--forget` (after a week) refuses without the marker ("this
-  is a PC it runs on, so nothing was deleted"), asks for the PC's name, then removes the data folder, the code, the
-  unit (+ daemon-reload), the status square, the hotkey and the move files in `~`, and offers `sudo cloudflared
-  service uninstall` (when it had turned the tunnel off) and dropping the local PostgreSQL `nextbox` and
-  `nextbox_practice` databases (when DATABASE_URL pointed at them).
+  Next Box came here from the PC it's going back to), and names `scripts/status.sh`. `--undo` is for "changed my
+  mind before using the new PC": it says how to move back instead and to switch the new PC off with its own
+  `move-out.sh`, asks for `UNDO`, removes the marker and turns back on exactly what it lists. It refuses (exit 1)
+  while `NEXTBOX_PUBLIC_URL/version` answers with Next Box, i.e. the new PC serves it (two copies would split Home
+  Assistant and the tunnel; move back instead); `--undo --anyway` for a new PC that was never used. `--forget`
+  (after a week) refuses without the marker ("this is a PC it runs on, so nothing was deleted"), asks for the PC's
+  name, then removes the data folder, the code, the unit (+ daemon-reload), the status square, the hotkey and the
+  move files in `~`, and offers `sudo cloudflared service uninstall` whenever cloudflared is installed and the
+  tunnel isn't shared (the marker can't tell when the disable had failed) and dropping the local PostgreSQL
+  `nextbox` and `nextbox_practice` databases (when DATABASE_URL pointed at them); it says the move file on the new
+  PC is wherever it was put.
 - **`scripts/move-in.sh [--check] FILE|user@host:path [--replace] [--replace-newer] [--port N]`** (new PC, in a copy
   of the code; a relative FILE is found from the folder it's run in): checks first, each failure saying what to
   do: not root, Linux, systemd with a working `systemctl --user`, Python 3.11+ with venv (`scripts/python.sh`: the
@@ -1092,19 +1123,47 @@ list, so "Your own" brings it back; changing a preset's marks makes them their o
   back with `--replace`. `--check` stops there (plus the time zone and pypi.org) and changes nothing. Then scp if
   needed ("type yes"), `movecheck.py` (seconds), the packages (`install_packages`: a pip failure says whether
   Python is too old, pypi.org can't be reached, or neither), `move info`, stopping a Next Box already running here
-  (only now), `move unpack` (a failure restarts what it stopped; exit 6 with Next Box not running here means an
-  earlier run stopped before the install, so it says "Finishing the setup..." and carries on with install.sh),
+  (only now), `move unpack` (a failure restarts what it stopped; exit 6 means this file is already in place: with Next Box not
+  running here an earlier run stopped before the install, so it says "Finishing the setup..." and carries on with
+  install.sh; with Next Box running and the version pip installed into .venv (`importlib.metadata`) older than
+  pyproject's, the README's step-1 line was pasted over a running Next Box, so it finishes that update with
+  install.sh ("its code was updated since it was set up (2.0.1 → 2.1.0)"); otherwise "Nothing was changed",
+  `update.sh` and `status.sh` named, and `move next-steps` repeated),
   `scripts/install.sh` (keeps the `.env`), turning
   the tunnel back on when the marker listed it, `nextbox doctor`, the next steps (`--tunnel-here` when it turned
   the tunnel back on: "The internet tunnel is on again here") with every ✗ from the summary
-  repeated, the tunnel offered (y/N; the token only ever goes into go-online.sh's silent prompt), the status square
-  suggested on a desktop, and when to `--forget` and delete the move file.
+  repeated, the tunnel offered (y/N; first make sure the old PC's tunnel is off, Rotate token if the token was ever
+  pasted elsewhere, then Replicas → + Add a replica → Debian; the token only ever goes into go-online.sh's silent
+  prompt), the status square suggested on a desktop, when to `--forget`, and the move file to delete by its real
+  path (`~/Desktop/NextBox/...`, not `~/nextbox-move-*`).
 - **`scripts/go-online.sh`** installs cloudflared with apt (no apt: it says where to get it and stops before asking
-  for the token), and when a tunnel already runs here compares its tunnel id (the token's `t`, from `systemctl cat
-  cloudflared`) with the pasted one. It always ends by fetching `$PUBLIC/version`: "Done" only when that's Next
-  Box; otherwise what to set in the dashboard (`<host> → HTTP → localhost:<port>`), or, when this PC already runs
-  another tunnel: delete the hostname from Next Box's old tunnel first (and a leftover DNS record), then add it to
-  this one; `NEXTBOX_TUNNEL=shared` goes into `.env`.
+  for the token). The token comes only through the hidden prompt (`read -rs`; a command pasted as several lines is
+  read on until the token is found, so no part of it runs in the shell; the dashboard's command may start with
+  `curl`); it is passed to `sudo cloudflared service install` as an argument (cloudflared has no other form:
+  sudo's own log line holds it, and cloudflared writes it to `/etc/cloudflared/token`, 0600 root, with
+  `--token-file` on ExecStart since 2026.7.2; older installs put `--token eyJ...` on ExecStart). A cloudflared
+  running by hand (`pgrep -x cloudflared` while the unit isn't active: Mike's foreground `tunnel run`) must be
+  closed first. The service here is identified by `unit_tunnel`: the token on ExecStart, else `sudo cat` of the
+  `--token-file` path, else `journalctl -u cloudflared` ("tunnelID="). With the unit active: the same tunnel and
+  the same token = nothing to install; the same tunnel with another token (rotated) = `sudo cloudflared service
+  uninstall` + install with the pasted one; another tunnel = `NEXTBOX_TUNNEL=shared` and the address moves onto
+  it; unknown = asked ([Y/n], n = shared). With a unit file but the service off (Mike's server: cloudflared refuses
+  "already installed"): Next Box's or unknown = removed and installed; another tunnel = asked ([y/N]). A failed
+  install prints cloudflared's own last lines (masked) and, for "already installed", `sudo cloudflared service
+  uninstall`. After an install it waits up to 30 s for the unit to be active. `systemctl --user restart nextbox`
+  failing (no service yet) says to run install.sh. It always ends by fetching `$PUBLIC/version` with its status
+  code: 200 with this PC's version = "Done" (another version = the old PC is still on the tunnel); 502 = the tunnel
+  reaches a PC where Next Box is off (the old PC: `sudo systemctl disable --now cloudflared` there); 530 = no PC
+  connected (`journalctl -u cloudflared -n 20`, Unauthorized = rotated token, run again); 000 = no internet here;
+  else check the route on the Routes tab (`<host> → HTTP → localhost:<port>`); when this PC runs another tunnel:
+  delete the route from Next Box's old tunnel first (and a leftover DNS record), then add it to this one. Every
+  ending says that the tunnel's Replicas table must list only this PC.
+- **Cloudflare's dashboard names** (late 2026; it renames things, so the old names are given once in parentheses in
+  README and the scripts): Zero Trust → Networks → Tunnels (newer dashboards: Networking → Tunnels) → the tunnel;
+  tabs Overview / Routes / Live logs; the install command under Replicas → + Add a replica (Debian, 64-bit); the
+  addresses on the Routes tab (Published application routes; formerly Public Hostname, on a page called Configure);
+  Rotate token in the Refresh token box. Rotating a token stops new connections with the old one, but a connector
+  that's already running stays until it restarts: turning the old PC's cloudflared off is a separate, manual step.
 - **The MOVED-AWAY guard** (`<data dir>/MOVED-AWAY`, 600): `nextbox serve` (and `server.build_default_app`) exit with
   78 and "Next Box was moved to another PC on <day>, so it doesn't start here ... scripts/move-out.sh --undo";
   install.sh's unit has `RestartPreventExitStatus=78`, and with the marker install.sh skips the tests, leaves the
@@ -1113,7 +1172,11 @@ list, so "Your own" brings it back; changing a preset's marks makes them their o
   Box runs on the new PC now."), and stops there. Every other CLI command that could print, serve
   or change data refuses too (exit 78; `clip` says it with notify-send for the hotkey; tests never call the real
   notify-send, a conftest fixture records it); `move`, `doctor`, `db`, `status` and `printed` still work. A marker
-  that can't be read still counts.
+  that can't be read still counts. On a moved-away PC doctor adds one ✗ when cloudflared is still active or enabled
+  there (`doctor.TUNNEL_STILL_ON`, fix `sudo systemctl disable --now cloudflared`): then it's "1 thing(s) to fix",
+  exit 1, not "Nothing to fix here". doctor's firewall check reads `ufw status` (root only) and otherwise
+  `/etc/ufw/ufw.conf`'s `ENABLED=`: on, rules unreadable = a note with the allow line; install.sh reads the same
+  file. doctor notes a PC with more than one address (`doctor.addresses_note`).
 
 ## 34. Friends and notes
 `nextbox/friends.py` (its top has the API contract: every path, request and answer), endpoints in `server.py`,

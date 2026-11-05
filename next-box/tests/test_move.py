@@ -26,7 +26,7 @@ from sqlalchemy import select
 
 from nextbox import cli, db, dbtools, jobs, move, movecheck, printer
 from nextbox.auth import Accounts
-from nextbox.config import PROJECT_DIR, Settings
+from nextbox.config import PROJECT_DIR, Settings, app_version
 from nextbox.journal import Journal
 from nextbox.mylist import LocalTasks
 from nextbox.printers import Printers
@@ -794,7 +794,7 @@ def test_the_same_move_file_twice_changes_nothing(old, tmp_path):
         ask = asks(PASS)
         with pytest.raises(move.AlreadyHere) as err:
             unpack(new, packed.path, env, ask=ask, replace=replace)
-        assert str(err.value) == f"This move file is already in place here (since {date.today()}). Nothing to do."
+        assert str(err.value) == f"This move file is already in place here (since {date.today()})."
         assert not ask.asked
     assert movecheck.main([str(packed.path), str(new), "--replace"]) == movecheck.ALREADY_HERE == 6
     with sqlite3.connect(new / "nextbox.db") as conn:
@@ -883,7 +883,7 @@ def test_another_port_goes_into_the_env_and_the_next_steps(old, tmp_path):
     assert mode(env) == 0o600
     text = "\n".join(move.summary(result, ip="192.168.68.50"))
     assert "http://192.168.68.50:8788/app" in text and "nextbox_print_today_url: http://192.168.68.50:8788/" in text
-    assert "public hostname's service to: http://localhost:8788" in text
+    assert "set the nextbox route's service to: http://localhost:8788" in text
     move.set_env_value(env, "NEXTBOX_PORT", "8790")
     assert [line for line in env.read_text().splitlines() if "NEXTBOX_PORT" in line] == ["NEXTBOX_PORT=8790"]
 
@@ -971,7 +971,7 @@ def test_install_sh_respects_the_marker_and_never_loops():
 
 
 @pytest.mark.parametrize("name", ["move-in.sh", "move-out.sh", "install.sh", "update.sh", "go-online.sh",
-                                  "python.sh"])
+                                  "status.sh", "python.sh"])
 def test_the_scripts_are_valid_bash_and_never_show_env(name):
     path = SCRIPTS / name
     assert subprocess.run(["bash", "-n", str(path)], capture_output=True).returncode == 0
@@ -1001,10 +1001,12 @@ def _fake_bin(folder: Path, log: Path, **behaviour) -> Path:
 echo "systemctl $*" >> "{log}"
 args=" $* "
 unit="${{@: -1}}"; unit="${{unit%.service}}"
+say() {{ [[ "$args" == *" --quiet "* || "$args" == *" -q "* ]] || echo "$1"; }}  # states, like the real one
 case "$args" in
   *" show-environment "*) exit {behaviour.get('user_session', 0)} ;;
-  *" is-active "*) [[ -f "{state}/$unit" ]] && exit 0 || exit 3 ;;
-  *" is-enabled "*) [[ -f "{state}/$unit" || -f "{state}/$unit.enabled" ]] && exit 0 || exit 1 ;;
+  *" is-active "*) [[ -f "{state}/$unit" ]] && {{ say active; exit 0; }} || {{ say inactive; exit 3; }} ;;
+  *" is-enabled "*) [[ -f "{state}/$unit.masked" ]] && {{ say masked; exit 1; }}
+                   [[ -f "{state}/$unit" || -f "{state}/$unit.enabled" ]] && {{ say enabled; exit 0; }} || {{ say disabled; exit 1; }} ;;
   *" disable --now "*) rm -f "{state}/$unit" "{state}/$unit.enabled" ;;
   *" disable "*) rm -f "{state}/$unit.enabled" ;;
   *" stop "*) rm -f "{state}/$unit" ;;
@@ -1014,15 +1016,29 @@ case "$args" in
 esac
 exit 0
 """)
-    (folder / "sudo").write_text(f'#!/usr/bin/env bash\necho "sudo $*" >> "{log}"\n"$@"\n')
-    (folder / "loginctl").write_text(f'#!/usr/bin/env bash\necho "loginctl $*" >> "{log}"\n')
+    (folder / "sudo").write_text(f'#!/usr/bin/env bash\necho "sudo $*" >> "{log}"\n'
+                                 '[[ -n "${SUDO_FAILS:-}" && "$*" == *"${SUDO_FAILS}"* ]] && { echo "sudo: a password is required" >&2; exit 1; }\n'
+                                 '"$@"\n')
+    (folder / "loginctl").write_text(f'#!/usr/bin/env bash\necho "loginctl $*" >> "{log}"\n'
+                                     '[[ "$*" == *Linger* ]] && echo "${FAKE_LINGER:-no}"\nexit 0\n')
+    (folder / "journalctl").write_text(f'#!/usr/bin/env bash\n[[ -f "{state}/cloudflared.journal" ]] && cat "{state}/cloudflared.journal"\nexit 0\n')
+    (folder / "pgrep").write_text(f'#!/usr/bin/env bash\n[[ -f "{state}/cloudflared.pids" ]] && {{ cat "{state}/cloudflared.pids"; exit 0; }}\nexit 1\n')
+    (folder / "ip").write_text(f"""#!/usr/bin/env bash
+if [[ "$*" == "-4 -o addr show scope global" ]]; then
+  echo '2: enp5s0    inet 192.168.68.159/22 brd 192.168.71.255 scope global dynamic noprefixroute enp5s0\\       valid_lft 86000sec preferred_lft 86000sec'
+  [[ -f "{state}/wifi" ]] && echo '3: wlp2s0    inet 192.168.68.146/22 brd 192.168.71.255 scope global dynamic noprefixroute wlp2s0\\       valid_lft 86000sec preferred_lft 86000sec'
+elif [[ "$*" == "route show default" ]]; then
+  echo 'default via 192.168.68.1 dev enp5s0 proto dhcp src 192.168.68.159 metric 100'
+fi
+exit 0
+""")
     (folder / "scp").write_text(f'#!/usr/bin/env bash\necho "scp $*" >> "{log}"\ncp "${{1#*:}}" "$2"\n')
     # Test machines often run as root: the scripts refuse root, so `id -u` says an ordinary user here.
     (folder / "id").write_text('#!/usr/bin/env bash\n[[ "${1:-}" == -u ]] && { echo "${FAKE_UID:-1000}"; exit 0; }\n'
                                'exec /usr/bin/id "$@"\n')
     (folder / "hostname").write_text('#!/usr/bin/env bash\necho "${FAKE_HOSTNAME:-oldpc}"\n')
     (folder / "sleep").write_text("#!/usr/bin/env bash\nexit 0\n")  # the scripts' waits, made instant
-    for f in ("systemctl", "sudo", "loginctl", "scp", "id", "hostname", "sleep"):
+    for f in ("systemctl", "sudo", "loginctl", "scp", "id", "hostname", "sleep", "journalctl", "pgrep", "ip"):
         (folder / f).chmod(0o755)
     return state
 
@@ -1032,7 +1048,7 @@ def _copy_scripts(root: Path) -> Path:
     system's python3 before anything is installed) and pyproject.toml (this copy's version)."""
     (root / "scripts").mkdir(parents=True)
     (root / "nextbox").mkdir()
-    for name in ("move-in.sh", "move-out.sh", "python.sh", "go-online.sh"):
+    for name in ("move-in.sh", "move-out.sh", "python.sh", "go-online.sh", "status.sh"):
         shutil.copy2(SCRIPTS / name, root / "scripts" / name)
     shutil.copy2(PROJECT_DIR / "nextbox" / "movecheck.py", root / "nextbox" / "movecheck.py")
     shutil.copy2(PROJECT_DIR / "pyproject.toml", root / "pyproject.toml")
@@ -1376,7 +1392,8 @@ def test_move_in_sh_checks_the_file_against_this_pc_before_installing(old, tmp_p
     (state / "nextbox").touch()  # ...and running
     r = run(str(packed.path), "--replace")  # the same command again, from the history
     assert r.returncode == 0 and "This move file is already in place here" in r.stdout
-    assert "Nothing was changed." in r.stdout and not (data / "backups").exists()
+    assert "and Next Box runs. Nothing was changed." in r.stdout and not (data / "backups").exists()
+    assert "Nothing to do." not in r.stdout and f"{root}/scripts/status.sh" in r.stdout
     assert not (root / ".venv").exists()
     # An earlier run stopped after the files were in place, before the install (Next Box isn't running):
     # running it again finishes the setup instead of saying "nothing to do".
@@ -1391,7 +1408,8 @@ chmod 755 .venv/bin/nextbox
     (root / "scripts" / "install.sh").chmod(0o755)
     r = run(str(packed.path))
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "already in place here. Finishing the setup..." in r.stdout and "Nothing was changed." not in r.stdout
+    assert "an earlier run stopped before the install." in r.stdout and "Finishing the setup..." in r.stdout
+    assert "Nothing was changed." not in r.stdout and "Nothing to do." not in r.stdout  # the two never contradict
     steps = log.read_text().splitlines()
     assert steps[0] == "install.sh" and "nextbox doctor" in steps and "nextbox move next-steps" in steps
     assert not any("unpack" in x for x in steps) and not (data / "backups").exists()
@@ -1451,60 +1469,263 @@ def test_move_in_sh_names_the_program_holding_the_port_and_offers_another_port(t
 
 
 def _go_online(tmp_path: Path):
+    """A PC for go-online.sh: stand-ins for systemctl and friends (state in files), a cloudflared that installs
+    like the real one (refuses while a unit file exists; keeps the token in a root-only file, --token-file),
+    and a curl that answers with the code and version the test asks for."""
     root = _copy_scripts(tmp_path / "nb")
     (root / ".env").write_text("NEXTBOX_KEY=k\n")
     log = tmp_path / "log"
     state = _fake_bin(tmp_path / "bin", log)
-    for name, body in (("cloudflared", f'echo "cloudflared $*" >> "{log}"'),
-                       ("curl", '[[ -n "${CURL_OK:-}" ]] && { echo \'{"version": "0.14.11"}\'; exit 0; }; exit 22')):
-        (tmp_path / "bin" / name).write_text(f"#!/usr/bin/env bash\n{body}\n")
+    (tmp_path / "bin" / "cloudflared").write_text(f"""#!/usr/bin/env bash
+echo "cloudflared $*" >> "{log}"
+if [[ "$1 $2" == "service install" ]]; then
+  if [[ -f "{state}/cloudflared.unit" ]]; then
+    echo "cloudflared service is already installed at /etc/systemd/system/cloudflared.service; if you are running a cloudflared tunnel, you can point it to multiple origins, avoiding running cloudflared services on the same machine; otherwise if you are really sure, you can do \\`cloudflared service uninstall\\` to clean up the existing service and then try again this command" >&2
+    exit 1
+  fi
+  printf '%s' "$3" > "{state}/cloudflared.token"
+  echo "ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file {state}/cloudflared.token" > "{state}/cloudflared.unit"
+  touch "{state}/cloudflared" "{state}/cloudflared.enabled"
+  exit 0
+fi
+if [[ "$1 $2" == "service uninstall" ]]; then
+  rm -f "{state}/cloudflared.unit" "{state}/cloudflared.token" "{state}/cloudflared" "{state}/cloudflared.enabled"
+  echo "INF Linux service for cloudflared uninstalled successfully" >&2
+  exit 0
+fi
+exit 0
+""")
+    (tmp_path / "bin" / "curl").write_text("""#!/usr/bin/env bash
+out=""
+while [[ $# -gt 0 ]]; do [[ "$1" == -o ]] && { out="$2"; shift; }; shift; done
+code="${CURL_CODE:-000}"
+[[ -n "${CURL_OK:-}" ]] && code=200
+body="error page"
+[[ "$code" == 200 ]] && body="{\\"version\\": \\"${CURL_VERSION:-$NB_VERSION}\\"}"
+[[ -n "$out" ]] && printf '%s' "$body" > "$out"
+[[ "$code" == 000 ]] && { printf '000'; exit 7; }
+printf '%s' "$code"
+exit 0
+""")
+    for name in ("cloudflared", "curl"):
         (tmp_path / "bin" / name).chmod(0o755)
-    env = {"PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}", "HOME": str(tmp_path), "USER": "mike"}
+    env = {"PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}", "HOME": str(tmp_path), "USER": "mike",
+           "NB_VERSION": app_version(), "FAKE_HOSTNAME": "newpc"}
 
-    def token(tunnel: str) -> str:
+    def token(tunnel: str, secret: str = "SENTINEL-tunnel-secret") -> str:
         import base64
-        return base64.b64encode(json.dumps({"a": "account-id-1234", "t": tunnel, "s": "SENTINEL-tunnel-secret"})
-                                .encode()).decode()
+        return base64.b64encode(json.dumps({"a": "account-id-1234", "t": tunnel, "s": secret}).encode()).decode()
 
-    def run(pasted: str, **extra):
+    def run(pasted: str, answer: str = "", **extra):
         return subprocess.run(["bash", str(root / "scripts" / "go-online.sh"), "https://nextbox.example.com"],
-                              input=f"sudo cloudflared service install {pasted}\n", text=True, capture_output=True,
-                              env={**env, **extra}, timeout=60)
+                              input=f"sudo cloudflared service install {pasted}\n{answer}", text=True,
+                              capture_output=True, env={**env, **extra}, timeout=60)
     return run, root, state, log, token
 
 
-def test_go_online_checks_the_address_really_reaches_next_box(tmp_path):
+NB_TUNNEL = "4e283dab-857a-429e-9841-13fc0d4eedfd"
+OTHER_TUNNEL = "11111111-2222-4333-8444-555555555555"
+
+
+def _unit(state: Path, token_file_text: str | None = None, token_arg: str | None = None, active: bool = True):
+    """A cloudflared service on the PC: the newer kind (--token-file, a root-only file) or the older one (the
+    token on the ExecStart line)."""
+    if token_arg is not None:
+        (state / "cloudflared.unit").write_text(f"ExecStart=/usr/bin/cloudflared tunnel run --token {token_arg}\n")
+    else:
+        (state / "cloudflared.token").write_text(token_file_text or "")
+        (state / "cloudflared.unit").write_text("ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run "
+                                                f"--token-file {state}/cloudflared.token\n")
+    for name in ("cloudflared", "cloudflared.enabled"):
+        if active:
+            (state / name).touch()
+        else:
+            (state / name).unlink(missing_ok=True)
+
+
+def _clean(state: Path, log: Path):
+    for p in list(state.iterdir()):
+        p.unlink()
+    log.unlink(missing_ok=True)
+
+
+def _steps(log: Path) -> list[str]:
+    return [re.sub(r"eyJ\S+", "<token>", line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+def test_go_online_installs_the_tunnel_and_checks_the_address_really_reaches_next_box(tmp_path):
     run, root, state, log, token = _go_online(tmp_path)
-    r = run(token("tunnel-nextbox"), CURL_OK="1")  # nothing running yet: installs it
+    r = run(token(NB_TUNNEL), CURL_OK="1")  # nothing on this PC yet: installs it
     assert r.returncode == 0, r.stdout + r.stderr
     assert "Done: https://nextbox.example.com reaches Next Box on this PC" in r.stdout
+    assert "Replicas must list only newpc" in r.stdout and "sudo systemctl disable --now cloudflared" in r.stdout
+    assert "Tunnel installed." in r.stdout and "Waiting for it to connect" in r.stdout
     assert any(s.startswith("sudo cloudflared service install ") for s in log.read_text().splitlines())
+    assert "sudo cloudflared service uninstall" not in _steps(log)
     assert "NEXTBOX_PUBLIC_URL=https://nextbox.example.com" in (root / ".env").read_text().splitlines()
-    # The tunnel runs, the address doesn't answer: never "Done", but what to check in the dashboard.
-    (state / "cloudflared").touch()
-    (state / "cloudflared.unit").write_text(f"ExecStart=/usr/bin/cloudflared tunnel run --token {token('tunnel-nextbox')}\n")
-    r = run(token("tunnel-nextbox"))
-    assert r.returncode == 1 and "Done" not in r.stdout and "It's Next Box's tunnel." in r.stdout
-    assert "nextbox.example.com → HTTP → localhost:8787" in r.stdout
-    # A server that already runs another tunnel for something else: Next Box's address goes on that one.
-    (state / "cloudflared.unit").write_text(f"ExecStart=/usr/bin/cloudflared tunnel run --token {token('tunnel-other')}\n")
-    (root / ".env").write_text("NEXTBOX_KEY=k\nNEXTBOX_PORT=8788\n")
-    r = run(token("tunnel-nextbox"))
-    assert r.returncode == 1 and "Done" not in r.stdout
-    assert "This PC already runs another Cloudflare tunnel" in r.stdout
-    assert "nextbox.example.com → HTTP → localhost:8788" in r.stdout
-    # The address leaves Next Box's old tunnel first (Cloudflare refuses a name that's still in use), and the
-    # shared tunnel is remembered, so move-out.sh leaves it on if Next Box moves away later.
-    assert r.stdout.index("delete nextbox.example.com") < r.stdout.index("Add: nextbox.example.com")
-    assert (root / ".env").read_text().splitlines().count("NEXTBOX_TUNNEL=shared") == 1
-    r = run(token("tunnel-nextbox"))
-    assert (root / ".env").read_text().splitlines().count("NEXTBOX_TUNNEL=shared") == 1  # once, also on a re-run
+    assert (state / "cloudflared").exists() and (state / "cloudflared.token").read_text() == token(NB_TUNNEL)
+    # The pasted command may come as several lines (curl ... && dpkg ... && the install): all of it is swallowed,
+    # so the token is found and no part of it runs in the shell afterwards.
+    _clean(state, log)
+    r = run("", answer=f"sudo dpkg -i cloudflared.deb &&\nsudo cloudflared service install {token(NB_TUNNEL)}\n", CURL_OK="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (state / "cloudflared.token").read_text() == token(NB_TUNNEL)
+    # No token at all: says so and does nothing.
+    _clean(state, log)
+    r = run("")
+    assert r.returncode == 1 and "That didn't contain a tunnel token" in r.stdout and "Add a replica" in r.stdout
+    assert not (state / "cloudflared.unit").exists()
     for out in (r.stdout, r.stderr):
         assert "SENTINEL" not in out and "eyJ" not in out
     script = (SCRIPTS / "go-online.sh").read_text()
     # No apt (Fedora): it says what to install and stops before asking for the token.
     assert script.index("command -v apt-get") < script.index("https://pkg.cloudflare.com (Fedora") \
-        < script.index("exit 1") < script.index("Paste the command")
+        < script.index("exit 1") < script.index("Paste the whole command")
+    assert "~/%q/scripts" in script  # hints that run from the home folder
+
+
+def test_go_online_replaces_a_tunnel_service_left_on_the_pc(tmp_path):
+    """Mike's server: a cloudflared.service from an earlier try is there but not running. cloudflared refuses to
+    install over it ('already installed'); the script removes it first, and says so."""
+    run, root, state, log, token = _go_online(tmp_path)
+    _unit(state, token_file_text=token(NB_TUNNEL, "SENTINEL-old"), active=False)
+    r = run(token(NB_TUNNEL), CURL_OK="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "A tunnel service from before is on this PC but isn't running (it's Next Box's tunnel)" in r.stdout
+    assert "Replacing it with the command you pasted" in r.stdout and "Done:" in r.stdout
+    steps = _steps(log)
+    assert steps.index("sudo cloudflared service uninstall") < steps.index("sudo cloudflared service install <token>")
+    assert (state / "cloudflared.token").read_text() == token(NB_TUNNEL)  # the new token, not the old one
+    # A leftover unit whose tunnel can't be told (no token to read, nothing in the log): replaced too.
+    _clean(state, log)
+    (state / "cloudflared.unit").write_text("ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file /etc/cloudflared/token\n")
+    r = run(token(NB_TUNNEL), CURL_OK="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "can't tell whose" in r.stdout and "sudo cloudflared service uninstall" in _steps(log)
+    # The leftover unit's log names the tunnel: that's enough to know it's Next Box's.
+    _clean(state, log)
+    (state / "cloudflared.unit").write_text("ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file /etc/cloudflared/token\n")
+    (state / "cloudflared.journal").write_text(f"INF Starting tunnel tunnelID={NB_TUNNEL}\nERR Unauthorized: Invalid tunnel secret\n")
+    r = run(token(NB_TUNNEL), CURL_OK="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "(it's Next Box's tunnel)" in r.stdout
+    # A leftover unit for ANOTHER tunnel: asked first; n changes nothing and says how to use that tunnel instead.
+    _clean(state, log)
+    _unit(state, token_file_text=token(OTHER_TUNNEL), active=False)
+    r = run(token(NB_TUNNEL), answer="n\n", CURL_OK="1")
+    assert r.returncode == 1 and "A tunnel service for another tunnel (not Next Box's) is on this PC" in r.stdout
+    assert "Nothing was changed." in r.stdout and "sudo systemctl enable --now cloudflared" in r.stdout
+    assert "service install" not in " ".join(_steps(log)) and (state / "cloudflared.token").read_text() == token(OTHER_TUNNEL)
+    r = run(token(NB_TUNNEL), answer="y\n", CURL_OK="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (state / "cloudflared.token").read_text() == token(NB_TUNNEL)
+    # cloudflared still refusing after the removal (the unit is somewhere else): its own words, and the command.
+    _clean(state, log)
+    (tmp_path / "bin" / "cloudflared").write_text(f'#!/usr/bin/env bash\necho "cloudflared $*" >> "{log}"\n'
+                                                  '[[ "$1 $2" == "service install" ]] && { echo "cloudflared service is already installed at /etc/systemd/system/cloudflared.service; run cloudflared service uninstall" >&2; exit 1; }\nexit 0\n')
+    r = run(token(NB_TUNNEL), CURL_OK="1")
+    assert r.returncode == 1 and "Couldn't install the tunnel. cloudflared said:" in r.stdout
+    assert "already installed" in r.stdout and "  sudo cloudflared service uninstall" in r.stdout
+    assert "check the command you copied" not in r.stdout
+    for out in (r.stdout, r.stderr):
+        assert "SENTINEL" not in out and "eyJ" not in out
+
+
+def test_go_online_renews_a_running_tunnel_after_the_token_was_rotated(tmp_path):
+    """A service that runs Next Box's tunnel with an older token (rotated in the dashboard since) can never
+    connect again after its next restart: it's reinstalled with the pasted command. The same token: nothing
+    to install. Another tunnel: Next Box's address goes onto it instead."""
+    run, root, state, log, token = _go_online(tmp_path)
+    _unit(state, token_file_text=token(NB_TUNNEL))  # the same token, the newer --token-file kind
+    r = run(token(NB_TUNNEL), CURL_OK="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "It's Next Box's tunnel, with this same token. Nothing to install." in r.stdout
+    assert "service uninstall" not in " ".join(_steps(log)) and "service install" not in " ".join(_steps(log))
+    # The token was rotated: the service here has the old one (the older kind, on the ExecStart line).
+    _clean(state, log)
+    _unit(state, token_arg=token(NB_TUNNEL, "SENTINEL-rotated-away"))
+    r = run(token(NB_TUNNEL), CURL_OK="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "It's Next Box's tunnel. Reinstalling it with the command you pasted" in r.stdout
+    steps = _steps(log)
+    assert steps.index("sudo cloudflared service uninstall") < steps.index("sudo cloudflared service install <token>")
+    assert (state / "cloudflared.token").read_text() == token(NB_TUNNEL)
+    # The token file can't be read, but the service's log names the tunnel: reinstalled as well.
+    _clean(state, log)
+    (state / "cloudflared.unit").write_text("ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file /etc/cloudflared/token\n")
+    (state / "cloudflared").touch()
+    (state / "cloudflared.journal").write_text(f"INF Starting tunnel tunnelID={NB_TUNNEL}\n")
+    r = run(token(NB_TUNNEL), CURL_OK="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Reinstalling it" in r.stdout and "sudo cloudflared service uninstall" in _steps(log)
+    # Nothing to go by: asked (Enter replaces; n keeps it and treats it as shared).
+    _clean(state, log)
+    (state / "cloudflared.unit").write_text("ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file /etc/cloudflared/token\n")
+    (state / "cloudflared").touch()
+    r = run(token(NB_TUNNEL), answer="n\n")
+    assert r.returncode == 1 and "Couldn't tell which tunnel the service here runs" in r.stdout
+    assert "This PC already runs another Cloudflare tunnel" in r.stdout
+    assert "service uninstall" not in " ".join(_steps(log))
+    # Another tunnel runs here (for something else): the address moves onto it, in the dashboard's Routes tab,
+    # leaving Next Box's old tunnel first (Cloudflare refuses a name that's still in use); the shared tunnel is
+    # remembered once, so move-out.sh leaves it on if Next Box moves away later.
+    _clean(state, log)
+    _unit(state, token_file_text=token(OTHER_TUNNEL))
+    (root / ".env").write_text("NEXTBOX_KEY=k\nNEXTBOX_PORT=8788\n")
+    r = run(token(NB_TUNNEL))
+    assert r.returncode == 1 and "Done" not in r.stdout
+    assert "The tunnel here is another one (for something else)" in r.stdout
+    assert "This PC already runs another Cloudflare tunnel" in r.stdout
+    assert "Published application: nextbox.example.com → HTTP → localhost:8788" in r.stdout
+    assert r.stdout.index("delete nextbox.example.com") < r.stdout.index("Published application: nextbox.example.com")
+    assert "Routes" in r.stdout and "Public Hostname" in r.stdout  # the old name, once, so Mike recognises it
+    assert (root / ".env").read_text().splitlines().count("NEXTBOX_TUNNEL=shared") == 1
+    assert "service uninstall" not in " ".join(_steps(log)) and (state / "cloudflared.token").read_text() == token(OTHER_TUNNEL)
+    r = run(token(NB_TUNNEL))
+    assert (root / ".env").read_text().splitlines().count("NEXTBOX_TUNNEL=shared") == 1  # once, also on a re-run
+    for out in (r.stdout, r.stderr):
+        assert "SENTINEL" not in out and "eyJ" not in out
+
+
+def test_go_online_says_what_each_kind_of_miss_means(tmp_path):
+    """The public check's answer tells which PC Cloudflare reached: 502 is a PC where Next Box is off (the old
+    PC still on the tunnel), 530 no connector at all, 000 no internet here, another version the other PC."""
+    run, root, state, log, token = _go_online(tmp_path)
+    r = run(token(NB_TUNNEL), CURL_CODE="502")
+    assert r.returncode == 1 and "Cloudflare reached a PC where Next Box isn't running" in r.stdout
+    assert "another PC (the old one?)" in r.stdout and "On the old PC: sudo systemctl disable --now cloudflared" in r.stdout
+    assert "Replicas must list only newpc" in r.stdout and "Public Hostname" not in r.stdout.split("Replicas")[0]
+    _clean(state, log)
+    r = run(token(NB_TUNNEL), CURL_CODE="530")
+    assert r.returncode == 1 and "No PC is connected to the tunnel" in r.stdout
+    assert "journalctl -u cloudflared -n 20 --no-pager" in r.stdout and "Unauthorized" in r.stdout
+    _clean(state, log)
+    r = run(token(NB_TUNNEL))  # 000: curl can't connect at all
+    assert r.returncode == 1 and "can't reach nextbox.example.com right now" in r.stdout
+    _clean(state, log)
+    r = run(token(NB_TUNNEL), CURL_CODE="404")
+    assert r.returncode == 1 and "it answered 404" in r.stdout
+    assert "Routes (Published application routes; it used to be called Public Hostname)" in r.stdout
+    assert "nextbox.example.com → HTTP → localhost:8787" in r.stdout
+    _clean(state, log)
+    r = run(token(NB_TUNNEL), CURL_OK="1", CURL_VERSION="2.0.1")  # answers, but it's the other PC's Next Box
+    assert r.returncode == 1 and f"with Next Box 2.0.1, not this PC's {app_version()}" in r.stdout
+    assert "another PC (the old one?) is still on" in r.stdout and "Done" not in r.stdout
+    # A cloudflared started by hand in a terminal (Mike's "cloudflared tunnel run" on Oct 28): close it first.
+    _clean(state, log)
+    (state / "cloudflared.pids").write_text("4242\n")
+    r = run(token(NB_TUNNEL), CURL_OK="1")
+    assert r.returncode == 1 and "running on this PC by hand (process 4242 )" in r.stdout
+    assert "Close that terminal (Ctrl+C there) first" in r.stdout and "service install" not in " ".join(_steps(log))
+    # No user service yet (go-online.sh run before the install finished): says so instead of dying silently.
+    _clean(state, log)
+    (tmp_path / "bin" / "systemctl").write_text(f'#!/usr/bin/env bash\necho "systemctl $*" >> "{log}"\n'
+                                                '[[ "$*" == *--user* ]] && exit 5\n[[ "$*" == *is-active* ]] && exit 3\nexit 1\n')
+    r = run(token(NB_TUNNEL), CURL_OK="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Next Box's service isn't set up on this PC yet: run ~/nb/scripts/install.sh" in r.stdout
+    for out in (r.stdout, r.stderr):
+        assert "SENTINEL" not in out and "eyJ" not in out
 
 
 # ------------------------------------------------------------------ docs
@@ -1524,7 +1745,10 @@ def test_the_docs_explain_the_move():
     # The old bare rm -rf is gone: only the guarded --forget deletes, and the move file goes last.
     assert "rm -rf" not in section.replace("rm -rf ~/nb-src", "")
     after = section.split("### After a week")[1]
-    assert after.index("move-out.sh --forget") < after.index("rm ~/nextbox-move-*.nbmove")
+    assert after.index("move-out.sh --forget") < after.index("delete the move file on the new PC")
+    for words in ("Doing it over several days", "scripts/status.sh", "Keep the new PC awake", "hidden prompt",
+                  "Rotate token", "Add a replica", "Replicas", "the cable's", "restart Home Assistant"):
+        assert words in section, words
     assert "Python 3.10 or newer" not in readme
     spec = (PROJECT_DIR / "SPEC.md").read_text()
     assert "## 33. Move to another PC" in spec and "RestartPreventExitStatus=78" in spec
@@ -1565,7 +1789,8 @@ def test_a_printer_that_doesnt_answer_gets_the_hint_for_where_this_pc_is():
     home = [ipaddress.ip_network("192.168.68.0/22")]
     same = printer_hint("192.168.68.110", home)
     assert same.startswith("this PC is on the printer's network") and "still at 192.168.68.110" in same
-    assert "info (i) button" in same and "Admin → Printers → Edit" in same and "same router" not in same
+    assert "hold the Cutter button for 2 seconds" in same and "info (i) button" in same  # Mike's QL-1110NWB has no info button
+    assert "Admin → Printers → Edit" in same and "same router" not in same
     other = printer_hint("192.168.1.60:9100", home)
     assert other.startswith("this PC isn't on the printer's network (192.168.1.60 isn't in 192.168.68.0/22)")
     assert "same router or Wi-Fi" in other
@@ -1621,3 +1846,466 @@ def test_hint_paths_paste_even_with_a_space_in_a_folder_name(tmp_path):
         assert move.home_path(home / "next-box") == "~/next-box" and move.home_path(home) == "~"
     finally:
         _os.environ["HOME"] = old_home or ""
+
+
+# ------------------------------------------------------------------ nextbox move status (scripts/status.sh)
+def _status_pc(tmp_path: Path, monkeypatch):
+    """A PC for the status report: stand-ins on PATH (states in files), a home folder with the code at
+    ~/next-box and the data folder, the clock on New York time. Returns (home, code, data, state, answers):
+    `answers["public"]` is what the public address answers (the report never reaches the internet here)."""
+    home = tmp_path / "home"
+    data = home / ".local" / "share" / "nextbox"
+    data.mkdir(parents=True)
+    state = _fake_bin(tmp_path / "bin", tmp_path / "log")
+    (tmp_path / "bin" / "cloudflared").write_text("#!/usr/bin/env bash\nexit 0\n")
+    (tmp_path / "bin" / "cloudflared").chmod(0o755)
+    code = _copy_scripts(home / "next-box")
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:{os.environ['PATH']}")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USER", "mike")
+    monkeypatch.setenv("TZ", "America/New_York")
+    for key in ("NEXTBOX_DATA_DIR", "NEXTBOX_PORT", "NEXTBOX_PUBLIC_URL", "PRINTER_IP", "DATABASE_URL"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(movecheck.socket, "gethostname", lambda: "braznarkel-ranchnet")
+    answers = {"public": ("no (URLError)", None)}
+    real = movecheck._version_answer
+    monkeypatch.setattr(movecheck, "_version_answer",
+                        lambda url, timeout: real(url, timeout) if "127.0.0.1" in url else answers["public"])
+    knocked = []
+    monkeypatch.setattr(movecheck, "tcp_answers", lambda host, port, timeout=2.0: knocked.append((host, port)) and False)
+    answers["knocked"] = knocked
+    return home, code, data, state, answers
+
+
+def _version_server(version: str):
+    """A Next Box stand-in that answers /version on 127.0.0.1 (nothing else)."""
+    import http.server
+    import threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = json.dumps({"version": version, "build": "x"}).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _token(tunnel: str, secret: str = "SENTINEL-tunnel-secret") -> str:
+    import base64
+    return base64.b64encode(json.dumps({"a": "account-id-1234", "t": tunnel, "s": secret}).encode()).decode()
+
+
+def _safe(lines: list[str]) -> str:
+    text = "\n".join(lines)
+    assert "SENTINEL" not in text and "eyJ" not in text, text
+    return text
+
+
+def test_move_status_says_where_the_move_stands_on_the_old_pc(tmp_path, monkeypatch):
+    """The desktop after move-out.sh, with a tunnel that move-out.sh couldn't turn off (S4): the marker, the
+    tunnel (its id only, never the token: the older cloudflared keeps it on the ExecStart line), the last
+    problem in its log (masked), Home Assistant's last print, each printer, and what to do."""
+    home, code, data, state, answers = _status_pc(tmp_path, monkeypatch)
+    (data / "MOVED-AWAY").write_text(json.dumps({"moved_at": "2026-10-28T09:49:12", "turned_off": ["service", "tray"],
+                                                 "file": "nextbox-move-2026-10-28.nbmove"}))
+    printers = Printers(data, Settings(data_dir=data))
+    printers.add({"name": "Label printer", "driver": "brother_ql", "address": "192.168.68.110"})
+    printers.add({"name": "Desk USB", "driver": "escpos", "address": "/dev/usb/lp0"})
+    db.forget_engine(sqlite_url(data))
+    with sqlite3.connect(data / "nextbox.db") as conn:
+        conn.execute("INSERT INTO auto_guard (key, day) VALUES ('default:real', '2026-10-27'), ('default:dry', '2026-11-01')")
+    _unit(state, token_arg=_token(NB_TUNNEL))
+    (state / "cloudflared.journal").write_text(f"INF Starting tunnel tunnelID={NB_TUNNEL}\n"
+                                               f"ERR Unauthorized: Invalid tunnel secret token={_token(NB_TUNNEL)}\n")
+    env = {"NEXTBOX_PUBLIC_URL": "https://nextbox.example.com", "PRINTER_IP": "192.168.68.110",
+           "NEXTBOX_KEY": "SENTINEL-key"}
+    answers["public"] = ("no (502: the tunnel is up, but on a PC where Next Box isn't running)", None)
+    lines = movecheck.status_report(code, env)
+    text = _safe(lines)
+    assert lines[0].startswith("Next Box move status on braznarkel-ranchnet, 20") and lines[0].endswith("(America/New_York)")
+    assert lines[1] == f"code: ~/next-box = Next Box {app_version()}, .venv no"
+    assert lines[2] == "data: ~/.local/share/nextbox exists, database yes, secret.key no"
+    assert "marker: MOVED-AWAY on 2026-10-28 (file nextbox-move-2026-10-28.nbmove; turned off: service, tray)" in lines
+    assert "service: no service file, inactive, disabled; linger no" in lines
+    assert "home assistant: last real auto print day 2026-10-27" in lines
+    assert ("public address: set (nextbox.example.com); answers from here: no (502: the tunnel is up, but on a PC "
+            "where Next Box isn't running)") in lines
+    assert "cloudflared: service file yes, active active, enabled enabled" in lines
+    assert f"  tunnel id: {NB_TUNNEL} (from the service file)" in lines
+    assert "  last log problem: ERR Unauthorized: Invalid tunnel secret token=<token>" in lines
+    assert "printer PRINTER_IP 192.168.68.110: does not answer" in lines and "Desk USB" not in text
+    assert answers["knocked"] == [("192.168.68.110", 9100)]  # one knock per address, nothing printed
+    assert "this PC: 192.168.68.159 (enp5s0, cable, default route)" in lines
+    assert "sleep: suspend not masked" in lines[-3]
+    assert lines[-2] == ("looks like: Next Box moved away from here on 2026-10-28, but the internet tunnel is still "
+                         "on here (two PCs on one tunnel split the visitors)")
+    assert lines[-1] == "next: sudo systemctl disable --now cloudflared"
+    # The tunnel off: nothing left to run here.
+    for name in ("cloudflared", "cloudflared.enabled"):
+        (state / name).unlink()
+    lines = movecheck.status_report(code, env)
+    assert lines[-2] == "looks like: Next Box moved away from here on 2026-10-28"
+    assert lines[-1] == "next: nothing here. Use the new PC; after a week: ~/next-box/scripts/move-out.sh --forget"
+    # --undo was run (S5): no marker, the service on.
+    (data / "MOVED-AWAY").unlink()
+    (state / "nextbox").touch()
+    lines = movecheck.status_report(code, env)
+    assert "marker: neither (Next Box was never moved in or out here)" in lines
+    assert lines[-2].startswith("looks like: the service is active, but nothing answers on port 8787")
+
+
+def test_move_status_says_where_the_move_stands_on_the_new_pc(tmp_path, monkeypatch):
+    """The server in each state it may be in tomorrow: moved in but the install never finished (S2), moved in
+    and running (S1) with the tunnel in each of its states, after a reboot with an old token (S6), and a
+    cloudflared started by hand. The newer cloudflared keeps the token in a root-only file: the id then comes
+    from that file when it can be read, else from the service's log."""
+    home, code, data, state, answers = _status_pc(tmp_path, monkeypatch)
+    (data / "MOVED-IN").write_text(json.dumps({"salt": "c2FsdA==", "made_on": "2026-10-28",
+                                               "from_host": "braznarkelai-System-Product-Name",
+                                               "moved_in": "2026-10-28T10:31:05"}))
+    (data / "nextbox.db").write_bytes(b"")  # a database that can't be read: said, never a traceback
+    (data / "secret.key").write_bytes(b"k")
+    server = _version_server(app_version())
+    port = server.server_port
+    env = {"NEXTBOX_PUBLIC_URL": "https://nextbox.example.com", "NEXTBOX_PORT": str(port)}
+    try:
+        # S2: the files are in, no service, a tunnel unit left from the Oct 28 try (not running, token unreadable).
+        (state / "cloudflared.unit").write_text("ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file /nonexistent/token\n")
+        (state / "cloudflared.journal").write_text(f"INF Starting tunnel tunnelID={NB_TUNNEL}\n")
+        lines = movecheck.status_report(code, env)
+        _safe(lines)
+        assert "marker: MOVED-IN on 2026-10-28 (file made 2026-10-28 on braznarkelai-System-Product-Name)" in lines
+        assert "data: ~/.local/share/nextbox exists, database yes, secret.key yes" in lines
+        assert "home assistant: couldn't read auto_guard" in lines
+        assert f"port {port} answers on this PC: yes (Next Box {app_version()})" in lines  # by hand, not the service
+        assert "cloudflared: service file yes, active inactive, enabled disabled" in lines
+        assert f"  tunnel id: {NB_TUNNEL} (from its log)" in lines
+        assert lines[-2] == "looks like: Moved in on 2026-10-28, but the setup never finished (the service isn't installed)"
+        assert lines[-1] == "next: finish it with the same move file: ~/next-box/scripts/move-in.sh <the move file>"
+        # cloudflared running by hand in a terminal (Mike's "cloudflared tunnel run"): only its process id.
+        (state / "cloudflared.pids").write_text("4242\n")
+        lines = movecheck.status_report(code, env)
+        assert "  cloudflared running by hand (not as the service), process 4242: close that terminal (Ctrl+C there)" in lines
+        (state / "cloudflared.pids").unlink()
+        # S1: the service runs; the tunnel isn't on this PC yet.
+        unit = home / ".config" / "systemd" / "user" / "nextbox.service"
+        unit.parent.mkdir(parents=True)
+        unit.write_text("[Unit]\n")
+        (code / ".venv" / "bin").mkdir(parents=True)
+        (code / ".venv" / "bin" / "nextbox").write_text("#!/usr/bin/env bash\n")
+        for name in ("nextbox", "nextbox.enabled"):
+            (state / name).touch()
+        lines = movecheck.status_report(code, env)
+        assert "service: file yes, active, enabled; linger no" in lines
+        assert lines[-2] == "looks like: Next Box runs here (moved in on 2026-10-28), but the internet tunnel isn't on this PC yet"
+        assert lines[-1] == "next: ~/next-box/scripts/go-online.sh"
+        # S6: the tunnel service is on, but with a token rotated away since (its log says Unauthorized).
+        _unit(state, token_file_text=_token(NB_TUNNEL, "SENTINEL-old"))
+        (state / "cloudflared.journal").write_text(f"INF Starting tunnel tunnelID={NB_TUNNEL}\nERR Unauthorized: Invalid tunnel secret\n")
+        answers["public"] = ("no (530: no PC is connected to the tunnel)", None)
+        lines = movecheck.status_report(code, env)
+        _safe(lines)
+        assert f"  tunnel id: {NB_TUNNEL} (from the token file)" in lines
+        assert "  last log problem: ERR Unauthorized: Invalid tunnel secret" in lines
+        assert "public address: set (nextbox.example.com); answers from here: no (530: no PC is connected to the tunnel)" in lines
+        assert lines[-2] == "looks like: Next Box runs here (moved in on 2026-10-28), but https://nextbox.example.com doesn't reach it"
+        assert lines[-1] == "next: ~/next-box/scripts/go-online.sh (then check the tunnel's Replicas table in the dashboard)"
+        # The address answers, but with the other PC's Next Box.
+        answers["public"] = ("yes", "2.0.1")
+        lines = movecheck.status_report(code, env)
+        assert f"public address: set (nextbox.example.com); answers from here: yes (Next Box 2.0.1: NOT this PC, which has {app_version()})" in lines
+        assert "another PC is on the tunnel" in lines[-2] and lines[-1] == "next: on that other PC: sudo systemctl disable --now cloudflared"
+        # All good.
+        answers["public"] = ("yes", app_version())
+        lines = movecheck.status_report(code, env)
+        assert f"public address: set (nextbox.example.com); answers from here: yes (Next Box {app_version()}, same as here)" in lines
+        assert lines[-2] == "looks like: Next Box runs here (moved in on 2026-10-28)"
+        assert lines[-1] == "next: nothing. Check it any time with: ~/next-box/.venv/bin/nextbox doctor"
+        # The token file can't be read and nothing's in the log: it says what it needs, and nothing more.
+        (state / "cloudflared.unit").write_text("ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file /nonexistent/token\n")
+        (state / "cloudflared.journal").unlink()
+        lines = movecheck.status_report(code, env)
+        assert f"  tunnel id: unknown ({movecheck.SUDO_HINT})" in lines
+        assert "sudo journalctl -u cloudflared" in movecheck.SUDO_HINT and "cat /etc" not in movecheck.SUDO_HINT
+    finally:
+        server.shutdown()
+
+
+def test_move_status_runs_without_a_venv_and_through_the_cli(tmp_path, monkeypatch, capsys):
+    """scripts/status.sh on a PC with only the code: the same report from the system's python3 (-I, standard
+    library only); with a .venv: `nextbox move status`, which reads auto_guard from PostgreSQL too. Either way
+    tokens never reach the screen (status.sh masks them once more)."""
+    home, code, data, state, answers = _status_pc(tmp_path, monkeypatch)
+    (code / ".env").write_text("NEXTBOX_KEY=SENTINEL-key\nPRINTER_IP=192.168.1.50\n")
+    env = {**os.environ, "NEXTBOX_ENV_FILE": str(code / ".env")}
+    r = subprocess.run(["python3", "-I", str(code / "nextbox" / "movecheck.py"), "--status", str(code)],
+                       capture_output=True, text=True, env=env, timeout=60)
+    assert r.returncode == 0, r.stderr
+    lines = r.stdout.splitlines()
+    _safe(lines)
+    assert lines[0].startswith("Next Box move status on ") and "printer: none set" in lines  # the example address isn't one
+    assert lines[-2] == "looks like: the code is here, but Next Box hasn't been moved in (or installed) yet"
+    assert lines[-1] == ("next: ~/next-box/scripts/move-in.sh <the move file>   "
+                         "(a fresh Next Box instead: ~/next-box/scripts/install.sh)")
+    r = subprocess.run(["bash", str(code / "scripts" / "status.sh")], capture_output=True, text=True, env=env, timeout=60)
+    assert r.returncode == 0 and r.stdout.splitlines()[-2:] == lines[-2:], r.stdout + r.stderr
+    # With a .venv, status.sh runs `nextbox move status` and masks tokens once more.
+    (code / ".venv" / "bin").mkdir(parents=True)
+    (code / ".venv" / "bin" / "nextbox").write_text(f'#!/usr/bin/env bash\n[[ "$1 $2" == "move status" ]] && '
+                                                    f'{{ echo "fake report {_token(NB_TUNNEL)}"; exit 0; }}\nexit 1\n')
+    (code / ".venv" / "bin" / "nextbox").chmod(0o755)
+    r = subprocess.run(["bash", str(code / "scripts" / "status.sh")], capture_output=True, text=True, env=env, timeout=60)
+    assert r.returncode == 0 and r.stdout == "fake report <token>\n"
+    # The real `nextbox move status`, on this PC's database (PostgreSQL when the suite runs on it).
+    monkeypatch.setenv("NEXTBOX_DATA_DIR", str(data))
+    if PG:
+        monkeypatch.setenv("DATABASE_URL", PG)
+        engine = db.database(PG)
+        with engine.begin() as conn:
+            conn.exec_driver_sql("DELETE FROM auto_guard WHERE key = 'status-test:real'")
+            conn.exec_driver_sql("INSERT INTO auto_guard (key, day) VALUES ('status-test:real', '2026-10-27')")
+    else:
+        Accounts(data).set_password("boss", "boss password", create=True)
+        db.forget_engine(sqlite_url(data))
+        with sqlite3.connect(data / "nextbox.db") as conn:
+            conn.execute("INSERT INTO auto_guard (key, day) VALUES ('default:real', '2026-10-27')")
+    try:
+        assert cli.main(["move", "status"]) == 0
+        out = capsys.readouterr().out
+        lines = _safe(out.splitlines())
+        if PG:
+            assert "database no (DATABASE_URL set: PostgreSQL)" in out and "home assistant: last real auto print day 20" in out
+        else:
+            assert "home assistant: last real auto print day 2026-10-27" in out
+        assert "looks like:" in lines and "next:" in lines
+    finally:
+        if PG:
+            with db.database(PG).begin() as conn:
+                conn.exec_driver_sql("DELETE FROM auto_guard WHERE key = 'status-test:real'")
+
+
+def test_status_helpers_never_give_away_a_token(tmp_path):
+    assert movecheck.tunnel_id_of(_token(NB_TUNNEL)) == NB_TUNNEL
+    assert movecheck.tunnel_id_of(_token("not-a-uuid")) is None and movecheck.tunnel_id_of("garbage") is None
+    assert movecheck.tunnel_id_of("") is None
+    env = tmp_path / ".env"
+    env.write_text("NEXTBOX_KEY=SENTINEL\nexport NEXTBOX_PORT='8788'\nNEXTBOX_PUBLIC_URL=\"https://nb.example.com/\"\n"
+                   "# DATABASE_URL=postgresql://x\nPRINTER_IP=192.168.68.110\n")
+    assert movecheck.read_env_keys(env) == {"NEXTBOX_PORT": "8788", "NEXTBOX_PUBLIC_URL": "https://nb.example.com/",
+                                            "PRINTER_IP": "192.168.68.110"}
+    assert movecheck.read_env_keys(tmp_path / "missing") == {}
+    assert movecheck._mask(f"token {_token(NB_TUNNEL)} end") == "token <token> end"
+    assert movecheck.interface_kind("enp5s0") == "cable" and movecheck.interface_kind("wlp2s0") == "Wi-Fi"
+    assert movecheck.interface_kind("docker0") == ""
+
+
+# ------------------------------------------------------------------ the scripts, after Oct 28
+def test_move_in_sh_finishes_an_update_when_the_code_is_newer_than_the_install(old, tmp_path, monkeypatch):
+    """The README's step-1 line copies new code over a running Next Box without reinstalling its packages
+    (Mike's server: 2.1.0 files under the 2.0.1 service). move-in.sh with the same file then finishes that
+    update (install.sh: packages, checks, restart) instead of saying 'Nothing was changed'."""
+    monkeypatch.setattr(movecheck, "local_zone", lambda: "America/New_York")
+    packed = make_file(old, tmp_path)
+    run, root, home, state = _move_in(tmp_path)
+    data = home / ".local" / "share" / "nextbox"
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    unpack(data, packed.path, tmp_path / "new.env")  # moved in on Oct 28
+    db.forget_engine(sqlite_url(data))
+    (state / "nextbox").touch()  # ...and running
+    log = tmp_path / "steps"
+    (root / "scripts" / "install.sh").write_text(f'#!/usr/bin/env bash\necho "install.sh" >> "{log}"\n')
+    (root / "scripts" / "install.sh").chmod(0o755)
+    (root / ".venv" / "bin").mkdir(parents=True)
+    (root / ".venv" / "bin" / "nextbox").write_text(f'#!/usr/bin/env bash\necho "nextbox $*" >> "{log}"\n')
+    (root / ".venv" / "bin" / "python").write_text('#!/usr/bin/env bash\n[[ "$*" == *importlib.metadata* ]] && '
+                                                   '{ echo "${INSTALLED:-2.0.1}"; exit 0; }\nexit 1\n')
+    for f in ("nextbox", "python"):
+        (root / ".venv" / "bin" / f).chmod(0o755)
+    r = run(str(packed.path))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f"and Next Box runs, but its code was updated\nsince it was set up (2.0.1 → {app_version()})" in r.stdout
+    assert f"Next Box {app_version()} is up to date on this PC. What's left:" in r.stdout
+    steps = log.read_text().splitlines()
+    assert steps[0] == "install.sh" and "nextbox doctor" in steps and "nextbox move next-steps" in steps
+    assert "Nothing was changed." not in r.stdout and not any("unpack" in x for x in steps)
+    # The same version installed: nothing to do, and what's left is repeated (the tunnel, Home Assistant).
+    log.unlink()
+    r = run(str(packed.path), INSTALLED=app_version())
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "and Next Box runs. Nothing was changed." in r.stdout and f"{root}/scripts/update.sh" in r.stdout
+    assert log.read_text().splitlines() == ["nextbox move next-steps"]
+    # The last lines name the move file where it really is (Mike's is on the Desktop, not in ~).
+    (state / "nextbox").unlink()
+    log.unlink()
+    desk = home / "Desktop" / "NextBox"
+    desk.mkdir(parents=True)
+    shutil.copy2(packed.path, desk / packed.path.name)
+    r = run(str(desk / packed.path.name))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "an earlier run stopped before the install." in r.stdout
+    assert f"rm ~/Desktop/NextBox/{packed.path.name}" in r.stdout and "rm ~/nextbox-move-*.nbmove" not in r.stdout
+    assert f"{root}/scripts/status.sh" in r.stdout
+
+
+def test_move_out_sh_undo_refuses_while_next_box_is_online_from_the_new_pc(tmp_path):
+    """--undo on the desktop while the server serves https://nextbox... would make two copies, with Home Assistant
+    and the tunnel split between them: refused, with the way to move back instead."""
+    run, root, home, log, state = _move_out_pc(tmp_path)
+    (home / "marker").touch()
+    (home / "marker.off").write_text("service\n")
+    (root / ".env").write_text("NEXTBOX_KEY=k\nNEXTBOX_PUBLIC_URL=https://nextbox.example.com\n")
+    (tmp_path / "bin" / "curl").write_text('#!/usr/bin/env bash\n[[ -n "${CURL_OK:-}" ]] && { echo \'{"version": "2.1.0"}\'; exit 0; }\nexit 22\n')
+    (tmp_path / "bin" / "curl").chmod(0o755)
+    r = run("--undo", answer="UNDO\n", CURL_OK="1")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "Next Box is online at https://nextbox.example.com right now, so it runs on the new PC" in r.stdout
+    assert "move-in.sh <the file it made> --replace" in r.stdout and "--undo --anyway" in r.stdout
+    assert "enable --now nextbox" not in log.read_text() and (home / "marker").exists()
+    r = run("--undo", "--anyway", answer="UNDO\n", CURL_OK="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "systemctl --user enable --now nextbox.service" in log.read_text().splitlines()
+    (home / "marker").touch()
+    (home / "marker.off").write_text("service\n")
+    log.unlink()
+    r = run("--undo", answer="UNDO\n")  # the address doesn't answer: the old way
+    assert r.returncode == 0 and "systemctl --user enable --now nextbox.service" in log.read_text().splitlines()
+
+
+def test_move_out_sh_says_when_the_tunnel_could_not_be_turned_off(tmp_path):
+    """A missed password prompt left the desktop's tunnel on (the Oct 28 dashboard still showed it): the end of
+    the run says NOT done yet, with the two lines to run, and --forget later still offers to remove cloudflared."""
+    run, root, home, log, state = _move_out_pc(tmp_path)
+    (state / "nextbox").touch()
+    (state / "cloudflared").touch()
+    r = run(SUDO_FAILS="systemctl disable --now cloudflared")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "NOT done yet: the internet tunnel is still on here" in r.stdout
+    assert "Run: sudo systemctl disable --now cloudflared" in r.stdout
+    assert "nextbox move marker set --off cloudflared" in r.stdout
+    assert (state / "cloudflared").exists() and "cloudflared" not in (home / "marker.off").read_text()
+    assert r.stdout.index("NOT done yet") < r.stdout.index("The move file:")
+    # When it works, the service's daily self-check timer goes too, and nothing says NOT done.
+    log.unlink()
+    (home / "marker").unlink()
+    (state / "nextbox").touch()
+    (state / "cloudflared").touch()
+    r = run()
+    assert r.returncode == 0 and "NOT done yet" not in r.stdout
+    steps = log.read_text().splitlines()
+    assert "sudo systemctl disable --now cloudflared" in steps and "sudo systemctl disable --now cloudflared-update.timer" in steps
+    assert "cloudflared" in (home / "marker.off").read_text()
+    # --forget offers to remove the tunnel program even when the marker never recorded it (the failed disable).
+    (home / "marker.off").write_text("service\n")
+    data = home / ".local" / "share" / "nextbox"
+    data.mkdir(parents=True)
+    (data / "MOVED-AWAY").write_text("{}")
+    (tmp_path / "bin" / "cloudflared").write_text(f'#!/usr/bin/env bash\necho "cloudflared $*" >> "{log}"\n')
+    (tmp_path / "bin" / "cloudflared").chmod(0o755)
+    log.unlink()
+    r = run("--forget", answer="oldpc\ny\n")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "sudo cloudflared service uninstall" in log.read_text().splitlines()  # offered (the y), and done
+    assert "wherever you put it" in r.stdout
+    assert 'read -r -p "Also remove the internet tunnel (its service and token) from this PC?' in \
+        (SCRIPTS / "move-out.sh").read_text()
+
+
+def test_doctor_on_a_moved_away_pc_still_flags_a_tunnel_left_on(tmp_path, monkeypatch, capsys):
+    """Everything else is off on purpose there, but a tunnel left on sends visitors to a PC where Next Box is off."""
+    from nextbox import doctor
+    monkeypatch.setenv("NEXTBOX_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("NEXTBOX_KEY", "k")
+    move.set_marker(tmp_path, file="nextbox-move-2026-10-28.nbmove", off=["service"])
+    monkeypatch.setattr(doctor, "_cloudflared_on", lambda: True)
+    assert cli.main(["doctor"]) == 1
+    out = capsys.readouterr().out.splitlines()
+    assert out[1].startswith("• Next Box was moved to another PC on ")
+    assert out[3] == f"✗ {doctor.TUNNEL_STILL_ON}" and out[4] == "    → sudo systemctl disable --now cloudflared"
+    assert out[-1] == "1 thing(s) to fix above."
+    assert cli.main(["doctor", "--json"]) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["problems"] == 1 and report["checks"][2]["mark"] == "bad" and len(report["checks"]) == 3
+    monkeypatch.setattr(doctor, "_cloudflared_on", lambda: False)
+    assert cli.main(["doctor"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "Nothing to fix here: Next Box runs on the new PC now."
+
+
+def test_doctor_reads_the_firewall_without_root_where_it_can(tmp_path, monkeypatch):
+    """`ufw status` needs root (so it never said 'active' before); ufw's config file says whether it's on."""
+    from nextbox import doctor
+
+    class Ran:
+        def __init__(self, out):
+            self.stdout, self.returncode = out, 1
+    conf = tmp_path / "ufw.conf"
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **k: Ran("ERROR: You need to be root to run this script\n"))
+    conf.write_text("# /etc/ufw/ufw.conf\nENABLED=yes\nLOGLEVEL=low\n")
+    assert doctor._firewall(8787, str(conf)) == ("unknown-rules", False)
+    conf.write_text("ENABLED=no\n")
+    assert doctor._firewall(8787, str(conf)) == ("inactive", True)
+    assert doctor._firewall(8787, str(tmp_path / "missing")) == ("inactive", True)
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **k: Ran("Status: active\n8787/tcp ALLOW Anywhere\n"))
+    assert doctor._firewall(8787, str(conf)) == ("active", True)
+    assert doctor._firewall(8788, str(conf)) == ("active", False)
+
+
+def test_next_steps_name_the_cable_address_and_the_old_pcs_tunnel():
+    """Mike's server has a cable and Wi-Fi (two addresses): Home Assistant gets the cable's, with a reservation;
+    the tunnel moves only once the old PC's is off; a YAML reload isn't enough for Home Assistant."""
+    two = ([("192.168.68.159", "enp5s0"), ("192.168.68.146", "wlp2s0")], "enp5s0")
+    lines = move.next_steps(8788, True, True, ip="192.168.68.159", addresses=two)
+    text = "\n".join(lines)
+    assert lines[0] == "On your phone (same Wi-Fi): http://192.168.68.159:8788/app  (sign in as before)"
+    assert lines[1].startswith("This PC has more than one address: 192.168.68.159 (enp5s0, cable, the default route), "
+                               "192.168.68.146 (wlp2s0, Wi-Fi). Give phones and Home Assistant the cable's")
+    assert "DHCP reservation" in lines[1] and "turn Wi-Fi off on this PC" in lines[1]
+    assert "nextbox_print_today_url: http://192.168.68.159:8788/print/today" in text
+    assert "a YAML reload isn't enough to be sure" in text and "the next time the office sensor turns on" in text
+    assert "Make sure the old PC's tunnel is" in text and "sudo systemctl disable --now cloudflared" in text
+    assert "list only this PC under Replicas" in text and "Public Hostname" not in text
+    assert "Routes tab (Published application routes), set the nextbox route's service to: http://localhost:8788" in text
+    one = move.next_steps(8787, False, False, ip="192.168.68.159", addresses=([("192.168.68.159", "enp5s0")], "enp5s0"))
+    assert len(one) == 1  # one address: nothing to choose
+    from nextbox.doctor import addresses_note
+    assert addresses_note(two[0], "wlp2s0").startswith("this PC has more than one address: 192.168.68.159 (enp5s0, cable), "
+                                                       "192.168.68.146 (wlp2s0, Wi-Fi, the default route).")
+
+
+def test_the_docs_and_scripts_name_the_dashboard_as_it_is_now():
+    """Cloudflare's dashboard changed (Oct 2026): a tunnel has Overview / Routes / Live logs, a Replicas table
+    with + Add a replica (the install command per OS), and a Refresh token box with Rotate token. 'Configure'
+    and 'Public Hostname' are gone: the old name appears once, in parentheses, so Mike recognises it."""
+    texts = {name: (PROJECT_DIR / name).read_text() for name in
+             ("README.md", "SPEC.md", "scripts/move-in.sh", "scripts/move-out.sh", "scripts/go-online.sh", "nextbox/move.py")}
+    for name, text in texts.items():
+        assert "→ Configure" not in text and "**Configure**" not in text, name
+        assert "the page with its install command" not in text, name
+        assert "Public Hostname:" not in text and "Public Hostname →" not in text, name
+    for name in ("README.md", "scripts/move-in.sh", "scripts/go-online.sh", "scripts/move-out.sh"):
+        assert "Add a replica" in texts[name], name
+    for name in ("README.md", "scripts/move-in.sh"):
+        assert "Rotate token" in texts[name], name
+    for name in ("README.md", "scripts/go-online.sh", "scripts/move-out.sh", "nextbox/move.py", "SPEC.md"):
+        assert "Routes" in texts[name], name
+    readme = texts["README.md"]
+    assert "Networking → Tunnels" in readme and "used to be called Public Hostname" in readme
+    online = readme.split("## Online at")[1].split("\n## ")[0]
+    assert "paste it into this computer's terminal" not in online
+    for words in ("~/.local/share/nextbox/app/scripts/go-online.sh", "hidden prompt", "Rotate token", "Add a replica",
+                  "Routes", "apt-get install --only-upgrade cloudflared", "/etc/cloudflared"):
+        assert words in online, words
+    for words in ("nextbox move status", "scripts/status.sh", "--token-file", "service uninstall", "--anyway"):
+        assert words in texts["SPEC.md"], words
+    trouble = readme.split("## Troubleshooting")[1]
+    assert "~/.local/share/nextbox/app/.venv/bin/nextbox doctor" in trouble and "scripts/status.sh" in trouble
+    assert "Never paste" in trouble and "systemctl status cloudflared" in trouble
+    ha = readme.split("### 8. Home Assistant")[1].split("\n## ")[0]
+    assert "restart Home Assistant" in ha
