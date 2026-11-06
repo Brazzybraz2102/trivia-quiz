@@ -1173,7 +1173,7 @@ def test_move_out_sh_switches_everything_off_and_undo_puts_it_back(tmp_path):
     assert "nextbox move marker clear" in steps and "systemctl --user enable --now nextbox.service" in steps
     assert "install-tray.sh " in steps and "sudo systemctl enable --now cloudflared" in steps
     assert (state / "nextbox").exists() and (state / "cloudflared").exists() and not (home / "marker").exists()
-    assert f"Check it with: {root}/.venv/bin/nextbox doctor" in r.stdout
+    assert "Check it with: ~/.local/share/nextbox/app/.venv/bin/nextbox doctor" in r.stdout
     r = run("--undo")
     assert r.returncode == 0 and "nothing to undo" in r.stdout
 
@@ -1687,6 +1687,26 @@ def test_go_online_renews_a_running_tunnel_after_the_token_was_rotated(tmp_path)
         assert "SENTINEL" not in out and "eyJ" not in out
 
 
+def test_go_online_takes_a_pasted_block_whose_last_line_holds_the_token(tmp_path):
+    """Cloudflare's block is several lines and the token's line ends without a newline: it arrives only when
+    Mike presses Enter, however long that takes. A time limit that ran out would hand that line to the shell
+    (the token on screen and in the history)."""
+    run, root, state, log, token = _go_online(tmp_path)
+    block = ("# Add cloudflare gpg key\nsudo mkdir -p --mode=0755 /usr/share/keyrings\n"
+             "# install cloudflared\nsudo apt-get update && sudo apt-get install cloudflared\n"
+             f"sudo cloudflared service install {token('tunnel-nextbox')}")
+    r = subprocess.run(["bash", str(root / "scripts" / "go-online.sh"), "https://nextbox.example.com"],
+                       input=block + "\n", text=True, capture_output=True, timeout=60,
+                       env={"PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}", "HOME": str(tmp_path), "USER": "mike",
+                            "CURL_OK": "1"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert any(x.startswith("sudo cloudflared service install ") for x in log.read_text().splitlines())
+    assert "press Enter once more" in r.stdout
+    for out in (r.stdout, r.stderr):
+        assert "eyJ" not in out and "SENTINEL" not in out
+    assert "read -rs -t" not in (SCRIPTS / "go-online.sh").read_text()  # no time limit on the paste
+
+
 def test_go_online_says_what_each_kind_of_miss_means(tmp_path):
     """The public check's answer tells which PC Cloudflare reached: 502 is a PC where Next Box is off (the old
     PC still on the tunnel), 530 no connector at all, 000 no internet here, another version the other PC."""
@@ -1958,7 +1978,7 @@ def test_move_status_says_where_the_move_stands_on_the_old_pc(tmp_path, monkeypa
     (data / "MOVED-AWAY").unlink()
     (state / "nextbox").touch()
     lines = movecheck.status_report(code, env)
-    assert "marker: neither (Next Box was never moved in or out here)" in lines
+    assert "marker: none (no move marker here)" in lines
     assert lines[-2].startswith("looks like: the service is active, but nothing answers on port 8787")
 
 

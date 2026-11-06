@@ -711,7 +711,7 @@ All good.
 • Next Box {version}
 {database}
 ✗ NEXTBOX_KEY is missing
-    → run scripts/install.sh again; it makes one for you
+    → run ~/.local/share/nextbox/app/scripts/install.sh again; it makes one for you
 ✗ ANTHROPIC_API_KEY is missing: Snap (marks and handwriting) and the AI helpers won't work
     → put it in .env (console.anthropic.com → API keys), then: systemctl --user restart nextbox
 • iPhone HEIC photos can't be opened (people are asked to send a JPEG)

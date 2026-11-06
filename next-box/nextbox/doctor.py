@@ -207,7 +207,7 @@ def _checks(settings: Settings, accounts: Accounts | None, say) -> bool:
     if accounts is None:
         accounts = Accounts(settings.data_dir)
     say(OK if settings.server_key else BAD, "NEXTBOX_KEY is set" if settings.server_key else "NEXTBOX_KEY is missing",
-        "" if settings.server_key else "run scripts/install.sh again; it makes one for you")
+        "" if settings.server_key else "run ~/.local/share/nextbox/app/scripts/install.sh again; it makes one for you")
     if settings.anthropic_api_key:
         say(OK, "ANTHROPIC_API_KEY is set")
     else:

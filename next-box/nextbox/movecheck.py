@@ -664,7 +664,7 @@ def verdict(f: dict) -> tuple[str, str]:
         return (f"Moved in on {m['day']}, but Next Box's service isn't running ({f['active']})",
                 f"systemctl --user restart nextbox, then this again; still off? {s}/install.sh")
     if runs:
-        return ("Next Box runs here (it was never moved in or out)",
+        return ("Next Box runs here (no move marker here)",
                 f"nothing. Check it any time with: {home_path(f['code'])}/.venv/bin/nextbox doctor")
     if f["active"] == "active":
         return (f"the service is active, but nothing answers on port {f['port']}",
@@ -687,7 +687,7 @@ def render(f: dict) -> list[str]:
              f"{'yes' if f['db'] else 'no'}{' (DATABASE_URL set: PostgreSQL)' if f['pg'] else ''}, "
              f"secret.key {'yes' if f['key'] else 'no'}"]
     if m is None:
-        lines.append("marker: neither (Next Box was never moved in or out here)")
+        lines.append("marker: none (no move marker here)")
     elif m["kind"] == "away":
         lines.append(f"marker: MOVED-AWAY on {m['day']} (file {m['file']}; turned off: "
                      f"{', '.join(m['off']) or 'nothing recorded'})"

@@ -619,9 +619,10 @@ Paste the line `move-out.sh` printed. It fetches the file from the old PC over t
 the old PC's password, and if it asks "Are you sure you want to continue connecting", type `yes`. (The
 old PC needs SSH for that: there, `sudo apt install -y openssh-server`.)
 
-With a USB stick instead: copy the file onto the new PC (anywhere, for example the Desktop), then:
+With a USB stick instead: copy the file onto the new PC (anywhere, for example a folder on the Desktop),
+then give its path:
 ```bash
-~/next-box/scripts/move-in.sh ~/nextbox-move-2026-10-27.nbmove
+~/next-box/scripts/move-in.sh ~/Desktop/NextBox/nextbox-move-2026-10-28.nbmove
 ```
 It checks the file first (seconds), sets up Next Box's Python packages (a minute or two), asks for the
 passphrase, puts everything in place, asks for this PC's password (so Next Box starts with the PC), runs
@@ -654,8 +655,12 @@ It ends with "looks like: ..." (for example "Next Box runs here (moved in on 202
 internet tunnel is still on here") and "next: ..." with the one command to run. With a `.venv` it runs
 `nextbox move status`; without one, the same report comes from the system's python3. Running step 3's
 line again with the same file is always safe: it finishes what's left, or says "Nothing was changed".
-On a PC whose Next Box is older than 2.1.0 (no `status.sh` there yet), the same report without touching
-its install:
+On a PC whose Next Box is older than 2.1.1 (no `status.sh` there yet), the same report without touching
+its install. On the new PC (the code is in `~/next-box`):
+```bash
+curl -fsSL https://raw.githubusercontent.com/brazzybraz2102/trivia-quiz/claude/ticket-todoist-printer-nldz8a/next-box/nextbox/movecheck.py -o ~/movecheck.py && python3 -I ~/movecheck.py --status ~/next-box
+```
+On the old PC (or any PC where Next Box was installed with `install.sh`):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/brazzybraz2102/trivia-quiz/claude/ticket-todoist-printer-nldz8a/next-box/nextbox/movecheck.py -o ~/movecheck.py && python3 -I ~/movecheck.py --status ~/.local/share/nextbox/app
 ```

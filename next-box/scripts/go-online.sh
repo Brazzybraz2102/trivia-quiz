@@ -89,11 +89,13 @@ ask_token() {
   echo
   echo "Paste the whole command Cloudflare shows under + Add a replica (Debian, 64-bit). It may start with curl"
   echo "or with sudo cloudflared service install; the token is at its end. Then press Enter."
-  echo "Nothing will show while you paste; that's on purpose."
+  echo "Nothing will show while you paste; that's on purpose. If nothing happens, press Enter once more."
   read -rs PASTED || PASTED=""
   TOKEN="$(printf '%s' "$PASTED" | grep -oE 'eyJ[A-Za-z0-9_+/=.-]{40,}' | head -1 || true)"
   local more
-  while [[ -z "$TOKEN" ]] && IFS= read -rs -t 1 more; do  # pasted as several lines: the token is on a later one
+  # Pasted as several lines: the token is on a later one. Read on until it comes or a line is empty, with
+  # no time limit: a limit that ran out would leave the token's line for the shell to run (and to show).
+  while [[ -z "$TOKEN" ]] && IFS= read -rs more && [[ -n "$more" ]]; do
     TOKEN="$(printf '%s' "$more" | grep -oE 'eyJ[A-Za-z0-9_+/=.-]{40,}' | head -1 || true)"
   done
   echo

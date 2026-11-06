@@ -68,12 +68,12 @@ undo() {
         if systemctl --user enable --now nextbox.service; then
           echo "Next Box is on again here."
         else
-          echo "Couldn't start it. Run $HERE/scripts/install.sh, which sets it up again."
+          echo "Couldn't start it. Run $S/install.sh, which sets it up again."
         fi
         ;;
       tray)
         if has_desktop; then
-          scripts/install-tray.sh || echo "Add the status square again: $HERE/scripts/install-tray.sh"
+          scripts/install-tray.sh || echo "Add the status square again: $S/install-tray.sh"
         else
           echo "The status square: run this in a terminal on this PC's own screen:"
           echo "  ~/.local/share/nextbox/app/scripts/install-tray.sh"
@@ -85,7 +85,7 @@ undo() {
         ;;
     esac
   done
-  echo "Done. Check it with: $HERE/.venv/bin/nextbox doctor"
+  echo "Done. Check it with: ${S%/scripts}/.venv/bin/nextbox doctor"
 }
 
 # After a week on the new PC: delete Next Box from this old PC, but only here (the MOVED-AWAY marker says so).
