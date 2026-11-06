@@ -99,8 +99,9 @@ xdg-open "$(.venv/bin/nextbox --dry-run --json today | python3 -c 'import sys,js
 Sign in to the web app as the admin, then **Settings → Add a printer and follow the steps**:
 1. **What kind of printer?** Tap Brother label printer (or another kind).
 2. **Find your printer.** Next Box searches your Wi-Fi by itself and picks it (for example
-   "Brother QL-1110NWB · 192.168.68.110"). Not found? Type its address: hold the printer's info
-   button to print its settings page, or look for a name starting with BRW in your router's list.
+   "Brother QL-1110NWB · 192.168.68.110"). Not found? Type its address: print the printer's settings
+   page (on a QL-1110NWB hold the Cutter button for 2 seconds; other printers have an info button for
+   it), or look for a name starting with BRW in your router's list.
 3. **Which labels are in it?** A Brother says which roll is loaded ("Your printer says: 102 × 152 mm
    labels (4 × 6 in). Use this?"). Tap Yes, or pick the roll from the list.
 4. **Name it.** "Label printer" is filled in for you. Tap **Save printer**.
@@ -180,6 +181,8 @@ scripts/hotkey.sh '<Super><Shift>t'             # then for real
    `configuration.yaml` has `homeassistant: { packages: !include_dir_named packages }`.
 2. Add `nextbox_print_today_url: http://<desktop-ip>:8787/print/today` and `nextbox_key: ...` to `secrets.yaml`.
    (Moved Next Box to another PC? Only this address changes: see [Move Next Box to another PC](#move-next-box-to-another-pc).)
+   After any change to `secrets.yaml`, restart Home Assistant (Settings → System → Restart): a YAML
+   reload isn't enough to be sure the new address is used.
 3. Replace `binary_sensor.CHANGEME_office_presence` and `input_button.CHANGEME_nextbox_button`
    with your entity IDs, then reload YAML.
 4. Test that the guard works. The first call prints, the second returns `skipped`:
@@ -284,29 +287,54 @@ this computer; nothing on your router changes. The shared `NEXTBOX_KEY` (Home As
 on the home network, the API explorer is off (`NEXTBOX_API_DOCS=1` turns it on), and sign-in limits
 use each visitor's real address.
 
-1. dash.cloudflare.com → **Zero Trust** → **Networks → Tunnels** → **Create a tunnel** →
-   Cloudflared → name it `home-pc`.
-2. Choose Debian, copy the **install and run** command it shows, and paste it into this computer's
-   terminal. It installs `cloudflared` as a service that starts at boot. (The long token in that
-   command is a secret: don't share it.)
-3. **Public hostname**: subdomain `nextbox`, domain `braznarkel.com`, type `HTTP`, URL
-   `localhost:8787` → Save.
-4. In `.env` in your Next Box folder (`nano ~/.local/share/nextbox/app/.env`) add these two lines,
-   then run `systemctl --user restart nextbox`:
+Cloudflare renames things now and then. These are the names in late 2026, with the old ones in
+parentheses once: the tunnels are under **Zero Trust → Networks → Tunnels** (newer dashboards:
+**Networking → Tunnels**); a tunnel's page has the tabs **Overview**, **Routes** and **Live logs**;
+the install command is under **Replicas → + Add a replica**; the addresses are on the **Routes** tab
+(**Published application routes**; it used to be called Public Hostname, on a page called Configure);
+and the **Refresh token** box has the **Rotate token** button.
+
+1. dash.cloudflare.com → **Zero Trust → Networks → Tunnels** → **Create a tunnel** → Cloudflared →
+   name it after this PC (yours is called `Braznarkel`).
+2. On the tunnel's page, under **Replicas**, click **+ Add a replica** and choose **Debian**, 64-bit.
+   It shows an install command with a long token (`eyJ...`) at its end. Leave that page open. Don't
+   run that command, and don't paste it anywhere else: the token is a secret, and a command pasted
+   into a terminal stays in its history. It only ever goes into `go-online.sh`'s hidden prompt (step 4).
+3. **Routes → Add route → Published application**: subdomain `nextbox`, domain `braznarkel.com`, type
+   `HTTP`, URL `localhost:8787` → Save.
+4. In a terminal on this PC:
+   ```bash
+   ~/.local/share/nextbox/app/scripts/go-online.sh
+   ```
+   It installs `cloudflared` (from pkg.cloudflare.com), asks you to paste the command from step 2
+   (nothing shows while you paste; that's on purpose), installs the tunnel as a service that starts
+   at boot, adds these two lines to `.env` and restarts Next Box:
    ```
    NEXTBOX_PUBLIC_URL=https://nextbox.braznarkel.com
    NEXTBOX_HOSTING=Cloudflare
    ```
-   `NEXTBOX_HOSTING` names Cloudflare on the Privacy and About pages, since it now carries everyone's
-   traffic.
-5. Open `https://nextbox.braznarkel.com/app/` on your phone with Wi-Fi off.
+   (`NEXTBOX_HOSTING` names Cloudflare on the Privacy and About pages, since it now carries everyone's
+   traffic.) Then it checks from the internet that `https://nextbox.braznarkel.com` really reaches
+   Next Box on this PC, and if not, says what the answer means (another PC still on the tunnel, no PC
+   connected, a wrong route, no internet here) and what to do. A tunnel service already on this PC is
+   handled: Next Box's own (also one left from an earlier try, or one whose token was rotated since)
+   is replaced with the pasted command; a tunnel for something else is asked about, and Next Box's
+   address then goes onto that one.
+5. Open `https://nextbox.braznarkel.com/app/` on your phone with Wi-Fi off. In the dashboard, the
+   tunnel's **Replicas** table must list only this PC.
 
-Steps 2 and 4 in one go, after steps 1 and 3: `scripts/go-online.sh` installs `cloudflared`, asks
-you to paste the command from step 2 (it's never shown), and adds both lines to `.env`. Then it checks
-from the internet that `https://nextbox.braznarkel.com` really reaches Next Box, and if not, says what to
-fix in the dashboard (also when this PC already runs another tunnel for something else).
+Where the token lives: `cloudflared` keeps it in `/etc/cloudflared` (readable by root only), and
+sudo's own log line holds the install command; fine on a single-user PC. Pasted the token somewhere
+else by mistake (a chat, a note, a terminal)? On the tunnel's page click **Rotate token**: the old
+token stops working for new connections (a tunnel that's already running keeps going until it
+restarts, so turn that one off by hand: `sudo systemctl disable --now cloudflared` there). Then
+**+ Add a replica** again and run `go-online.sh` again with the new command. A token that went into a
+terminal is in that PC's shell history: `sed -i '/eyJ/d' ~/.bash_history; history -c` there.
 
-Later projects: add another public hostname to the same tunnel (e.g. `next` → `localhost:9000`).
+`cloudflared` from apt doesn't update itself. Now and then:
+`sudo apt-get update && sudo apt-get install --only-upgrade cloudflared && sudo systemctl restart cloudflared`
+
+Later projects: add another route to the same tunnel (e.g. `next` → `localhost:9000`).
 
 ## Which apps and calendars work
 | App | How people connect | Works today? |
@@ -537,13 +565,19 @@ you now have (`nextbox --version` says it too).
 ## Move Next Box to another PC
 For example from your desktop to the EMNet Server PC. Everything comes along in one locked file:
 accounts, lists, journals, printers, settings (`.env`) and `secret.key`. Nothing is deleted on the old
-PC until you say so, and you can undo it. About 20 minutes.
+PC until you say so, and you can undo it. About an hour all told, and it's fine to spread it over
+days (see "Doing it over several days?").
 
 The new PC needs Linux with Python 3.11 or newer (Ubuntu 24.04 or Debian 12 is easiest), the same
 network as your printer and Home Assistant, the same time zone as the old PC, and you logged in as
 yourself (on its screen, or with ssh). Step 1 checks all of this before anything changes, except the
 printer. Test that on the new PC with your printer's address:
 `timeout 3 bash -c '</dev/tcp/192.168.68.110/9100' && echo printer OK || echo "printer NOT reachable"`.
+It must say `printer OK` before step 5 (Home Assistant), or the morning print goes nowhere (it's never
+retried, on purpose). `NOT reachable`: the printer is off or asleep (press its power button), it has a
+new address (print its settings page: on a QL-1110NWB hold the Cutter button for 2 seconds; then Admin →
+Printers → Edit in the web app finds it again, and give it a DHCP reservation in your router), or the new
+PC's cable is on another network than the printer; `~/next-box/.venv/bin/nextbox doctor` says which.
 
 ### 1. On the new PC: get the code and check the PC
 Paste this one line (on Fedora, use `sudo dnf install -y git python3` for the first part):
@@ -557,7 +591,10 @@ It also works when there's a `~/next-box` already (its `.env` and `.venv` are ke
   Otherwise "today" and Home Assistant's once-a-day print would change day at the wrong hour.
 - Port 8787 is used by another program: don't stop a program you don't know. Add `--port 8788` in step 3.
 
-Nothing is changed by `--check`.
+Nothing is changed by `--check`. Already ran `move-in.sh` on this PC (it said "Next Box has moved to
+this PC")? Don't paste this line again: to get a newer Next Box there, run
+`~/next-box/scripts/update.sh`, which also reinstalls the packages. (Pasted it anyway? Step 3's line
+with the same file notices the newer code and finishes that update.)
 
 ### 2. On the old PC: move out
 ```bash
@@ -570,8 +607,9 @@ It gets the newest Next Box first, then says what will happen and asks you to ty
 - It makes one locked file in your home folder, like `~/nextbox-move-2026-10-27.nbmove`.
 - It removes the status square and turns off the internet tunnel here (it may ask for your password).
   First it asks whether that tunnel also carries other websites from this PC. Most don't: press Enter. If
-  it does, the tunnel stays on, and it tells you to delete only Next Box's address from it in the
-  dashboard and give the new PC a tunnel of its own.
+  it does, the tunnel stays on, and it tells you to delete only Next Box's route from it in the
+  dashboard and give the new PC a tunnel of its own. If the password prompt was missed, it ends with
+  "NOT done yet" and the two lines to run: the tunnel must be off here before the new PC's goes on.
 - It ends with **one line to paste on the new PC**.
 
 Ran it twice by mistake? The second time it says Next Box already moved, and asks before making another file.
@@ -581,33 +619,66 @@ Paste the line `move-out.sh` printed. It fetches the file from the old PC over t
 the old PC's password, and if it asks "Are you sure you want to continue connecting", type `yes`. (The
 old PC needs SSH for that: there, `sudo apt install -y openssh-server`.)
 
-With a USB stick instead: copy the file into the new PC's home folder, then:
+With a USB stick instead: copy the file onto the new PC (anywhere, for example the Desktop), then:
 ```bash
 ~/next-box/scripts/move-in.sh ~/nextbox-move-2026-10-27.nbmove
 ```
 It checks the file first (seconds), sets up Next Box's Python packages (a minute or two), asks for the
 passphrase, puts everything in place, asks for this PC's password (so Next Box starts with the PC), runs
 the checks (about 5-10 minutes) and ends with a question about the internet address and what's left to
-do. Stay nearby until that last question. Nothing is changed until the
-file is unlocked and checked.
+do. Stay nearby until that last question. It may ask for this PC's password twice: once if something
+else holds port 8787 (to see what it is), once so Next Box starts with the PC. Nothing is changed until
+the file is unlocked and checked.
 - Run it again with the same file? It says "already in place" and changes nothing. If the first run
-  stopped before the install finished, it finishes the setup instead.
+  stopped before the install finished, it finishes the setup instead; if the code was updated since
+  (step 1's line pasted again), it finishes that update.
 - Already tried Next Box on the new PC? If it has no accounts, it's set aside by itself (also while it
   runs). If it has accounts, add `--replace`, but only if that was a test copy: what's there goes to
   `~/.local/share/nextbox/backups/before-move-...`. A Next Box that was used after the move file was
   made is never replaced, unless you add `--replace-newer`.
 - Another port: add `--port 8788`. It goes into `.env`, and Home Assistant, phones and the Cloudflare
-  public hostname use 8788 instead of 8787 (`move-in.sh` prints each one).
+  route use 8788 instead of 8787 (`move-in.sh` prints each one).
 - Forgot the passphrase? Run `move-out.sh` on the old PC again: it makes a new file with a new passphrase.
+- Everyone sees the Privacy and Terms notice once at their next sign-in after an update that changed
+  it (2.1.0 added Friends): tap "I agree"; it's not a problem.
+
+### Doing it over several days?
+Nothing minds a pause, a reboot or a closed terminal. To see where things stand on either PC (safe to
+send to Claude: it shows no keys, no tokens and no `.env` values):
+```bash
+~/next-box/scripts/status.sh                      # the new PC
+~/.local/share/nextbox/app/scripts/status.sh      # the old PC (or any PC where Next Box is installed)
+```
+It ends with "looks like: ..." (for example "Next Box runs here (moved in on 2026-10-28)", "Moved in on
+2026-10-28, but the setup never finished" or "Next Box moved away from here on 2026-10-28, but the
+internet tunnel is still on here") and "next: ..." with the one command to run. With a `.venv` it runs
+`nextbox move status`; without one, the same report comes from the system's python3. Running step 3's
+line again with the same file is always safe: it finishes what's left, or says "Nothing was changed".
+On a PC whose Next Box is older than 2.1.0 (no `status.sh` there yet), the same report without touching
+its install:
+```bash
+curl -fsSL https://raw.githubusercontent.com/brazzybraz2102/trivia-quiz/claude/ticket-todoist-printer-nldz8a/next-box/nextbox/movecheck.py -o ~/movecheck.py && python3 -I ~/movecheck.py --status ~/.local/share/nextbox/app
+```
 
 ### 4. The internet address (nextbox.braznarkel.com)
-`move-in.sh` offers to do this. Open dash.cloudflare.com → **Zero Trust** → **Networks → Tunnels** →
-your tunnel → **Configure**, and keep the page with its install command (Debian) open. Then on the new
-PC run `scripts/go-online.sh` and paste the command when it asks (nothing shows; that's on purpose).
-It ends by checking that `https://nextbox.braznarkel.com` reaches Next Box on the new PC. If the new PC
-already runs another tunnel (for something else), it says how to add Next Box's address to that one.
-The public hostname (`localhost:8787`) stays as it is. Only one PC may run the tunnel: with two,
-Cloudflare splits visitors between them. That's why `move-out.sh` turned it off on the old PC.
+`move-in.sh` offers to do this at its end; later: `~/next-box/scripts/go-online.sh`. Only one PC may run
+the tunnel: with two, Cloudflare splits visitors between them, and the old PC answers with an error page.
+1. Make sure the old PC's tunnel is really off: there, `systemctl is-active cloudflared` must say
+   `inactive` (if not: `sudo systemctl disable --now cloudflared`). `move-out.sh` turned it off, unless its
+   password prompt was missed. In the dashboard (dash.cloudflare.com → **Zero Trust → Networks → Tunnels**,
+   on newer dashboards **Networking → Tunnels** → your tunnel, `Braznarkel` → **Overview**) the
+   **Replicas** table should then show nothing connected.
+2. Was the token ever pasted anywhere but `go-online.sh`'s hidden prompt (a chat, a note, a terminal)?
+   Click **Rotate token** (in the **Refresh token** box): the old tokens stop working for new connections.
+3. Under **Replicas** click **+ Add a replica**, choose **Debian**, 64-bit, and leave that page open. Don't
+   run or copy its command anywhere else.
+4. On the new PC run `~/next-box/scripts/go-online.sh` and paste the command when it asks (nothing shows;
+   that's on purpose). A tunnel service left on the new PC from an earlier try is replaced. It ends by
+   checking that `https://nextbox.braznarkel.com` reaches Next Box on the new PC, and says what to do if
+   not. If the new PC already runs another tunnel (for something else), it says how to add Next Box's
+   address to that one (**Routes → Add route → Published application**).
+5. Check that **Replicas** lists only the new PC. The route (`nextbox.braznarkel.com → HTTP →
+   localhost:8787`, on the **Routes** tab) stays as it is.
 
 ### 5. Home Assistant
 The key stays the same; only the address changes. `move-in.sh` prints the exact line for Home
@@ -615,24 +686,39 @@ Assistant's `secrets.yaml`, with the new PC's address:
 ```yaml
 nextbox_print_today_url: http://<new PC's IP>:8787/print/today
 ```
-Then restart Home Assistant. Today's once-a-day print moved too, and both PCs use the same time zone,
-so it never prints twice in one day. Tip: give the new PC a fixed address (a DHCP reservation in your
-router).
+A PC with both a cable and Wi-Fi has two addresses: use the cable's (`move-in.sh`, `nextbox doctor` and
+`status.sh` name it), give it a DHCP reservation in your router first, and turn Wi-Fi off on that PC, or
+the address can change. Then restart Home Assistant (Settings → System → Restart: a YAML reload isn't
+enough to be sure). The once-a-day print happens the next time the office sensor turns on, not at the
+restart. Today's once-a-day print moved too, and both PCs use the same time zone, so it never prints
+twice in one day. Before this step, the printer must answer from the new PC (the line at the top of this
+section).
 
 ### 6. Phones and the status square
 - Phones on Wi-Fi: open `http://<new PC's IP>:8787/app` and sign in as before (add it to the home
   screen again). Through `https://nextbox.braznarkel.com` nothing changes.
-- The status square: on the new PC's desktop run `scripts/install-tray.sh`.
+- The status square: in a terminal on the new PC's own screen (not over ssh) run
+  `~/next-box/scripts/install-tray.sh`. No square after the next login? Turn on **Ubuntu AppIndicators**
+  in the Extensions app, then log out and in.
+- Keep the new PC awake: a desktop PC may suspend when idle, and then nothing answers. On the new PC:
+  `sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target`; in GNOME,
+  Settings → Power → Automatic Suspend off, and the same for the login screen:
+  `sudo -u gdm dbus-run-session gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'`.
+  `status.sh` says whether suspend is masked. Proof: leave it alone for half an hour, then open the app
+  on your phone. And after a reboot without logging in, the app must answer too (that's "linger", which
+  `install.sh` turned on; `status.sh` shows it).
 - Not in the move file: the label-image cache (the web app shows each ticket's picture from the
   database), `backups/`, the practice database (`nextbox db backup`, `nextbox db demo` make new ones)
   and the hotkey (`scripts/hotkey.sh`). A USB printer stays with the old PC: set it up on the new one.
-- PostgreSQL on the old PC? The new PC starts on SQLite; `scripts/setup-postgres.sh` moves it over.
+- PostgreSQL on the old PC? The new PC starts on SQLite; `~/next-box/scripts/setup-postgres.sh` moves it over.
 
 ### Undo, or move back
 - **Changed your mind before using the new PC:** if `move-in.sh` ran there, first switch it off there for
   good with `~/next-box/scripts/move-out.sh` (delete the file it makes). Then on the old PC:
   `~/.local/share/nextbox/app/scripts/move-out.sh --undo`. It turns back on exactly what
-  `move-out.sh` turned off, with the lists from moving day.
+  `move-out.sh` turned off, with the lists from moving day. While Next Box answers at its internet
+  address (so it runs on the new PC), `--undo` refuses: two copies would split Home Assistant and the
+  tunnel between them. Move back instead.
 - **Used the new PC already:** move back the same way, the other way round. On the new PC:
   `~/next-box/scripts/move-out.sh`. Then on the old PC:
   `~/.local/share/nextbox/app/scripts/move-in.sh <that file> --replace`. Next Box comes back on there,
@@ -655,17 +741,28 @@ When everything works on the new PC, run this on the **old** PC:
 ```
 It only works on the PC Next Box moved away from: on any other PC it refuses and deletes nothing. It
 asks you to type the PC's name, then deletes Next Box there for good: the old lists, the code, the
-service, the status square, the hotkey and the move file. It offers to remove the tunnel program and,
-if you used PostgreSQL there, Next Box's PostgreSQL databases. Last, delete the move file on the new PC
-(`rm ~/nextbox-move-*.nbmove`) and on the USB stick.
+service, the status square, the hotkey and the move file. It offers to remove the tunnel program (its
+service and token) and, if you used PostgreSQL there, Next Box's PostgreSQL databases.
+Last, delete the move file on the new PC, wherever you put it (for example
+`rm ~/Desktop/NextBox/nextbox-move-2026-10-28.nbmove`), and on the USB stick.
 
 ## Troubleshooting
-- **Start here:** `.venv/bin/nextbox doctor` says the version and checks the database, `NEXTBOX_KEY`,
-  `ANTHROPIC_API_KEY`, accounts, service, web page, firewall, sign-in apps and printers (including a
-  `PRINTER_IP` that's still the example address), and says what to fix.
+- **Start here:** `~/.local/share/nextbox/app/.venv/bin/nextbox doctor` (works on any PC where Next Box
+  is installed) says the version and checks the database, `NEXTBOX_KEY`, `ANTHROPIC_API_KEY`, accounts,
+  service, web page, firewall, sign-in apps and printers (including a `PRINTER_IP` that's still the
+  example address), and says what to fix. On a PC Next Box moved away from it only checks that the
+  internet tunnel is off there.
+- **Where does the move stand?** `~/.local/share/nextbox/app/scripts/status.sh` (or
+  `~/next-box/scripts/status.sh` on a PC with only the code): one short report of this PC, ending with
+  what it looks like and the one command to run next.
+- **Sending Claude output:** `doctor`, `status.sh`, `nextbox status` and the `move` commands are safe to
+  paste. Never paste `.env`, `systemctl status cloudflared`, `systemctl cat cloudflared`, `ps` output,
+  your shell history, or anything with a long code starting `eyJ` (that's a tunnel token).
 - Snap or Break it down says it needs an AI key: put `ANTHROPIC_API_KEY` in `.env`, then
   `systemctl --user restart nextbox`.
-- `printer_reachable: false`: check that the printer is on the same Wi-Fi and give it a DHCP reservation so its IP stays fixed.
+- `printer_reachable: false`: check that the printer is on and awake and on the same network as this
+  PC, and give it a DHCP reservation so its IP stays fixed (its settings page shows the address: on a
+  QL-1110NWB hold the Cutter button for 2 seconds).
 - Service logs: `journalctl --user -u nextbox -f`
 - Service won't start, with status 218 or "namespace" errors: your system doesn't allow the
   service's sandboxing. Delete the `ProtectSystem=`, `ReadWritePaths=` and `PrivateTmp=` lines in
@@ -675,4 +772,4 @@ if you used PostgreSQL there, Next Box's PostgreSQL databases. Last, delete the 
 - After changing code or `.env`: `systemctl --user restart nextbox`
 - "Next Box was moved to another PC": this PC's copy stays off on purpose after `scripts/move-out.sh`
   (so Home Assistant and phones never get old lists). Use the new PC, or bring it back here with
-  `scripts/move-out.sh --undo`.
+  `~/.local/share/nextbox/app/scripts/move-out.sh --undo` (refused while Next Box is online from the new PC).

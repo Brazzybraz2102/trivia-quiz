@@ -14,7 +14,7 @@ from pathlib import Path
 from . import coach as coaching
 from . import jobs, printer, scan
 from .auth import Accounts, AuthError, default_prefs
-from .config import app_version, load_settings
+from .config import PROJECT_DIR, app_version, load_settings
 from .connections import Connections
 from .jobs import Context
 from .mylist import LocalTasks, Tags, parse_dump
@@ -224,6 +224,23 @@ def _move(settings, args) -> int:
         if args.move_cmd == "address":  # scripts: this PC's address on the home network, and Next Box's port
             print(f"{move.lan_ip()} {settings.port}")
             return 0
+        if args.move_cmd == "status":  # where the move stands on this PC: one plain report, safe to paste
+            from . import movecheck as mc
+            query = None
+            if os.environ.get("DATABASE_URL"):  # PostgreSQL here: read with an engine of its own (no tables made)
+                def query(sql: str) -> list:
+                    from sqlalchemy import create_engine, text
+
+                    from . import db
+                    engine = create_engine(db._engine_url(settings.data_dir))
+                    try:
+                        with engine.connect() as conn:
+                            return conn.execute(text(sql)).fetchall()
+                    finally:
+                        engine.dispose()
+            for line in mc.status_report(PROJECT_DIR, query=query):
+                print(line)
+            return 0
         if args.move_cmd == "next-steps":
             ha, public = move.facts_here(settings)
             here = os.environ.get("NEXTBOX_PUBLIC_URL", "").strip() if args.tunnel_here else None
@@ -363,6 +380,7 @@ def main(argv: list[str] | None = None) -> int:
     ns = mvs.add_parser("next-steps", help="after a move: the phone address, Home Assistant's new address, the tunnel")
     ns.add_argument("--tunnel-here", action="store_true", help=argparse.SUPPRESS)  # move-in.sh turned it on again
     mvs.add_parser("address", help=argparse.SUPPRESS)  # scripts: "<this PC's IP> <port>"
+    mvs.add_parser("status", help="where the move stands on this PC: one short report, safe to paste (no secrets)")
     mk = mvs.add_parser("marker", help="the MOVED-AWAY marker that keeps Next Box off here (scripts/move-out.sh)")
     mk.add_argument("marker_cmd", choices=["set", "show", "clear"])
     mk.add_argument("--file", help="set: the move file's name")

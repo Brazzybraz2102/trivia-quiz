@@ -142,7 +142,9 @@ if ! systemctl --user is-active --quiet nextbox.service; then
 fi
 echo "On this computer: http://localhost:$PORT/app"
 echo "On your phone (same Wi-Fi): http://$IP:$PORT/app"
-if command -v ufw >/dev/null && sudo -n ufw status 2>/dev/null | grep -q "Status: active"; then
+# ufw's status needs root; its config file (readable by everyone) says whether it's on at all.
+if command -v ufw >/dev/null && { sudo -n ufw status 2>/dev/null | grep -q "Status: active" \
+    || grep -qs '^ENABLED=yes' /etc/ufw/ufw.conf; }; then
   echo "Your firewall is on. To let phones in: sudo ufw allow from 192.168.0.0/16 to any port $PORT proto tcp"
 fi
 echo "Check everything any time with: ${S%/scripts}/.venv/bin/nextbox doctor"

@@ -9,7 +9,8 @@
 #   --port N         run Next Box on port N here (when another program needs 8787)
 # Moving back to a PC Next Box moved away from works the same way, with --replace.
 # It checks this PC and the file first, then sets everything up (scripts/install.sh) and says what's left.
-# Never prints .env values.
+# Run again with the same file (days later, after a reboot): it finishes what's left, or says nothing was changed.
+# Where things stand on this PC, any time: scripts/status.sh. Never prints .env values.
 set -euo pipefail
 START="$PWD"  # a move file given as a path from the folder Mike is in
 HERE="$(cd "$(dirname "$0")/.." && pwd -P)"
@@ -219,18 +220,44 @@ fi
 
 # Before anything is installed (seconds, with the system's own Python): the file, the time zone, what's here.
 set +e
-"$PY" -I nextbox/movecheck.py "$FILE" "$DATA" $REPLACE $NEWER
+CHECKED="$("$PY" -I nextbox/movecheck.py "$FILE" "$DATA" $REPLACE $NEWER 2>&1)"
 CODE=$?
 set -e
-# Already in place from an earlier run: done if Next Box runs; otherwise that run stopped before the install.
+[[ $CODE == 6 || -z "$CHECKED" ]] || echo "$CHECKED"
+SINCE="$(grep -oE 'since [0-9-]+' <<<"$CHECKED" | head -1 || true)"
+# Already in place from an earlier run. Next Box runs: nothing to do, unless the code was updated since it was set
+# up (the README's step-1 line copies new code over a running Next Box without its packages: finish that update).
+# Not running: that run stopped before the install, so the install is all that's left.
 DONE=""
+UPDATE=""
+HERE_VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml | head -1 || true)"
+installed_version() {  # the version pip installed into .venv (older than the code after a copy over it)
+  [[ -x .venv/bin/python ]] || return 1
+  .venv/bin/python -c 'from importlib.metadata import version; print(version("nextbox"))' 2>/dev/null
+}
 already_here() {
+  local installed
   if systemctl --user is-active --quiet nextbox.service 2>/dev/null; then
-    echo "Nothing was changed."
+    installed="$(installed_version || true)"
+    if [[ -n "$installed" && -n "$HERE_VERSION" && "$installed" != "$HERE_VERSION" ]]; then
+      echo "This move file is already in place here${SINCE:+ ($SINCE)} and Next Box runs, but its code was updated"
+      echo "since it was set up ($installed → $HERE_VERSION). Finishing that update: the packages, the checks"
+      echo "(5-10 minutes) and a restart. It may ask for this PC's password."
+      DONE=yes
+      UPDATE=yes
+      return 0
+    fi
+    echo "This move file is already in place here${SINCE:+ ($SINCE)} and Next Box runs. Nothing was changed."
+    echo "(A newer Next Box later: $S/update.sh. Where things stand on this PC: $S/status.sh)"
+    if [[ -x .venv/bin/nextbox ]]; then
+      echo "What's left, if anything:"
+      .venv/bin/nextbox move next-steps 2>/dev/null | sed 's/^/  /' || true
+    fi
     exit 0
   fi
   DONE=yes
-  echo "The move file is already in place here. Finishing the setup..."
+  echo "The move file is already in place here${SINCE:+ ($SINCE)}, but an earlier run stopped before the install."
+  echo "Finishing the setup..."
 }
 case $CODE in
   0) ;;
@@ -297,6 +324,9 @@ fi
 # --- 4. Install: the service, starting at boot (keeps the moved .env) ------------------------------------------
 echo
 if ! scripts/install.sh; then
+  if [[ -n "$UPDATE" ]]; then
+    stop "The update didn't finish; Next Box keeps running as it was." "Do what it says above, then run this again."
+  fi
   stop "Your lists and accounts are in place, but the install didn't finish." \
        "Do what it says above."
 fi
@@ -309,7 +339,11 @@ echo
 
 # --- 5. What's left ---------------------------------------------------------------------------------------------
 echo
-echo "Next Box has moved to this PC. What's left:"
+if [[ -n "$UPDATE" ]]; then
+  echo "Next Box ${HERE_VERSION:+$HERE_VERSION }is up to date on this PC. What's left:"
+else
+  echo "Next Box has moved to this PC. What's left:"
+fi
 TUNNEL_HERE=()
 [[ " $TURNED_OFF " == *" cloudflared "* ]] && TUNNEL_HERE=(--tunnel-here)
 .venv/bin/nextbox move next-steps ${TUNNEL_HERE[@]+"${TUNNEL_HERE[@]}"} | sed 's/^/  /'
@@ -319,8 +353,12 @@ if [[ -n "$PROBLEMS" ]]; then
 fi
 if [[ " $TURNED_OFF " != *" cloudflared "* ]] && grep -q '^NEXTBOX_PUBLIC_URL=.' .env 2>/dev/null; then
   echo
-  echo "The internet address: in your browser open dash.cloudflare.com → Zero Trust → Networks → Tunnels,"
-  echo "click your tunnel → Configure, and keep the page with its install command (Debian) open."
+  echo "The internet address: in your browser open dash.cloudflare.com → Zero Trust → Networks → Tunnels (on newer"
+  echo "dashboards: Networking → Tunnels) → your tunnel → Overview. First make sure the old PC's tunnel is off"
+  echo "(there: sudo systemctl disable --now cloudflared); its Replicas table should then show nothing connected."
+  echo "Was the token ever pasted anywhere but go-online.sh's hidden prompt (a chat, a note)? Then click"
+  echo "Rotate token (in the Refresh token box) first. Then under Replicas click + Add a replica → Debian,"
+  echo "64-bit, and keep that page open: go-online.sh asks for the command it shows (the token is never displayed)."
   read -r -p "Move the tunnel to this PC now? [y/N] " ANSWER || ANSWER=""
   if [[ "$ANSWER" == [yY]* ]]; then
     scripts/go-online.sh || echo "When that's done, check it again with: $S/go-online.sh"
@@ -333,6 +371,8 @@ if [[ -n "${XDG_CURRENT_DESKTOP:-}${DISPLAY:-}${WAYLAND_DISPLAY:-}" && ! -f "$HO
   echo "The status square in the top bar: $S/install-tray.sh"
 fi
 echo
-echo "Keep the move file ($FILE) and the old PC as they are for a week. Then, when everything works here:"
+if [[ "$FILE" == "$HOME"/* ]]; then printf -v SHOWFILE '~/%q' "${FILE#"$HOME"/}"; else printf -v SHOWFILE '%q' "$FILE"; fi
+echo "Keep the move file ($SHOWFILE) and the old PC as they are for a week. Then, when everything works here:"
 echo "  1. on the old PC: ~/.local/share/nextbox/app/scripts/move-out.sh --forget"
-echo "  2. here, and on the USB stick if you used one: rm ~/nextbox-move-*.nbmove"
+echo "  2. here (and on the USB stick, if you used one): rm $SHOWFILE"
+echo "Where things stand on this PC, any time: $S/status.sh"

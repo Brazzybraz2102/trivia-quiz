@@ -2,6 +2,8 @@
 # Move Next Box to another PC, step 1 of 2. Run this on the OLD PC, from its Next Box folder:
 #   ~/.local/share/nextbox/app/scripts/move-out.sh           make one locked move file; Next Box goes off here
 #   ~/.local/share/nextbox/app/scripts/move-out.sh --undo    changed your mind before using the new PC: on again here
+#                                                            (refused while Next Box answers at its internet address,
+#                                                            i.e. runs on the new PC: then move back instead)
 #   ~/.local/share/nextbox/app/scripts/move-out.sh --forget  after a week: delete Next Box from this old PC for good
 # Step 2 is scripts/move-in.sh on the new PC (README "Move Next Box to another PC").
 # Moving back later is the same two steps the other way round. Never prints .env values.
@@ -30,10 +32,21 @@ has_desktop() {
 }
 
 undo() {
-  local day off answer what
+  local day off answer what public
   if ! day="$("$NB" move marker show --date 2>/dev/null)"; then
     echo "Next Box wasn't moved away from this PC, so there's nothing to undo."
     return 0
+  fi
+  # Next Box answers at its internet address, so it runs on the new PC: --undo here would make two copies with
+  # different lists, and Home Assistant and the tunnel would be split between them. Move back instead.
+  public="$(sed -n 's|^NEXTBOX_PUBLIC_URL=\([^ ]*\).*|\1|p' .env 2>/dev/null | tail -1 || true)"
+  if [[ -n "$public" && "${1:-}" != --anyway ]] \
+      && curl -fsS --max-time 8 "${public%/}/version" 2>/dev/null | grep -q '"version"'; then
+    echo "Next Box is online at $public right now, so it runs on the new PC. Turning it back on here would"
+    echo "make two copies with different lists. To move back: on the new PC run ~/next-box/scripts/move-out.sh,"
+    echo "then here: ~/.local/share/nextbox/app/scripts/move-in.sh <the file it made> --replace"
+    echo "(Only if you're sure Next Box on the new PC was never used: $S/move-out.sh --undo --anyway)"
+    return 1
   fi
   off="$("$NB" move marker show --turned-off)"
   echo "This turns Next Box back on here, with the lists it had when it moved${day:+ ($day)}."
@@ -112,10 +125,10 @@ forget() {
     return 1
   fi
 
-  # The extras first, while the code and its .venv are still here.
-  if [[ " $("$NB" move marker show --turned-off 2>/dev/null || true) " == *" cloudflared "* ]] \
-      && command -v cloudflared >/dev/null; then
-    read -r -p "Also remove the internet tunnel from this PC (it's on the new PC now)? [y/N] " answer || answer=""
+  # The extras first, while the code and its .venv are still here. The tunnel program: whenever it's here and
+  # not shared with other websites (move-out.sh may not have managed to turn it off, so the marker can't tell).
+  if command -v cloudflared >/dev/null && ! grep -q '^NEXTBOX_TUNNEL=shared$' .env 2>/dev/null; then
+    read -r -p "Also remove the internet tunnel (its service and token) from this PC? It's on the new PC now. [y/N] " answer || answer=""
     if [[ "$answer" == [yY]* ]]; then
       sudo cloudflared service uninstall || echo "Couldn't. Later: sudo cloudflared service uninstall"
     fi
@@ -167,12 +180,13 @@ PY
   cd "$HOME"
   [[ -f "$HERE/scripts/move-out.sh" && -d "$HERE/nextbox" && "$HERE" != "$HOME" ]] && rm -rf "$HERE"
   echo "Done: Next Box is gone from this PC."
-  echo "Last step: delete the move file on the new PC (rm ~/nextbox-move-*.nbmove there) and on the USB stick."
+  echo "Last step: delete the move file on the new PC, wherever you put it (for example"
+  echo "rm ~/nextbox-move-*.nbmove or rm ~/Desktop/NextBox/nextbox-move-*.nbmove there), and on the USB stick."
 }
 
 case "${1:-}" in
   "") ;;
-  --undo) undo; exit $? ;;
+  --undo) undo "${2:-}"; exit $? ;;
   --forget) forget; exit $? ;;
   *) echo "Usage: $S/move-out.sh [--undo | --forget]"; exit 2 ;;
 esac
@@ -252,8 +266,9 @@ fi
 # Unless it also carries other websites from this PC: then only Next Box's address leaves it (in the dashboard).
 PUBLIC_HOST="$(sed -n 's|^NEXTBOX_PUBLIC_URL=[a-z]*://\([^/]*\).*|\1|p' .env 2>/dev/null | tail -1 || true)"
 PUBLIC_HOST="${PUBLIC_HOST:-nextbox.braznarkel.com}"
+SHARED=""
+TUNNEL_LEFT=""
 if systemctl is-active --quiet cloudflared 2>/dev/null || systemctl is-enabled --quiet cloudflared 2>/dev/null; then
-  SHARED=""
   if grep -q '^NEXTBOX_TUNNEL=shared$' .env 2>/dev/null; then
     SHARED=yes  # go-online.sh put Next Box on a tunnel that was already here for something else
   else
@@ -265,20 +280,29 @@ if systemctl is-active --quiet cloudflared 2>/dev/null || systemctl is-enabled -
   fi
   if [[ -n "$SHARED" ]]; then
     echo "The tunnel stays on here, for your other websites. Two things instead:"
-    echo "  1. Now, in dash.cloudflare.com → Zero Trust → Networks → Tunnels → this PC's tunnel → Public Hostname:"
-    echo "     delete only $PUBLIC_HOST (leave the others)."
+    echo "  1. Now, in dash.cloudflare.com → Zero Trust → Networks → Tunnels (on newer dashboards: Networking →"
+    echo "     Tunnels) → this PC's tunnel → Routes (Published application routes; it used to be called Public"
+    echo "     Hostname): delete only $PUBLIC_HOST's route (leave the others)."
     echo "  2. On the new PC, Next Box gets its own tunnel: in the same place, Create a tunnel (name it after the"
-    echo "     new PC), add $PUBLIC_HOST → HTTP → localhost:8787 to it, and paste its install command"
-    echo "     into ~/next-box/scripts/go-online.sh there."
+    echo "     new PC), Routes → Add route → Published application: $PUBLIC_HOST → HTTP → localhost:8787, then"
+    echo "     Replicas → + Add a replica → Debian, and paste that command into ~/next-box/scripts/go-online.sh there."
   else
     echo "(It may ask for this PC's password.)"
     if sudo systemctl disable --now cloudflared; then
+      sudo systemctl disable --now cloudflared-update.timer 2>/dev/null || true  # the service's daily self-check
       "$NB" move marker set --off cloudflared
       echo "The tunnel is off here."
     else
-      echo "Couldn't turn it off. Please run: sudo systemctl disable --now cloudflared"
+      TUNNEL_LEFT=yes
+      echo "Couldn't turn it off. Please run these two lines, in this order:"
+      echo "  sudo systemctl disable --now cloudflared"
+      echo "  ~/.local/share/nextbox/app/.venv/bin/nextbox move marker set --off cloudflared"
     fi
   fi
+fi
+if [[ -z "$SHARED" ]] && { systemctl is-active --quiet cloudflared 2>/dev/null \
+    || systemctl is-enabled --quiet cloudflared 2>/dev/null; }; then
+  TUNNEL_LEFT=yes
 fi
 
 # This PC's address on the home network (the route's own: not a Docker or VPN address).
@@ -297,6 +321,11 @@ if [[ -n "$DATA" && -f "$DATA/MOVED-IN" ]]; then
 fi
 echo
 echo "Done. Next Box is off on this PC."
+if [[ -n "$TUNNEL_LEFT" ]]; then
+  echo "NOT done yet: the internet tunnel is still on here (Cloudflare would send some visitors to this PC)."
+  echo "Run: sudo systemctl disable --now cloudflared"
+  echo "then: ~/.local/share/nextbox/app/.venv/bin/nextbox move marker set --off cloudflared"
+fi
 echo "The move file: $FILE"
 if [[ -n "$REPLACE" ]]; then
   echo "(The lines below end with --replace: on the PC Next Box came from, that puts its old lists aside.)"
@@ -315,3 +344,4 @@ fi
 echo "  $GET && ~/next-box/scripts/move-in.sh ~/$(basename "$FILE")$REPLACE"
 echo "(The new PC needs git for it: sudo apt install -y git, or on Fedora: sudo dnf install -y git)"
 echo "Changed your mind? $S/move-out.sh --undo turns Next Box back on here."
+echo "Where things stand on this PC, any time: $S/status.sh"
