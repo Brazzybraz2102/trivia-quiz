@@ -57,7 +57,7 @@ except Exception:
 PY
 }
 unit_exists() {  # a cloudflared service file on this PC (running or not; also one left from an earlier try)
-  systemctl cat cloudflared >/dev/null 2>&1 || [[ -f /etc/systemd/system/cloudflared.service ]]
+  systemctl cat cloudflared >/dev/null 2>&1  # systemd's own answer (a plain file check would bypass the tests' stand-in)
 }
 # The tunnel the service here was installed for: THERE gets its id (or "" when it can't be told) and UNIT_TOKEN
 # its token, if readable (never printed). cloudflared before 2026.7 put the token on the service's ExecStart line;

@@ -1887,10 +1887,13 @@ def _status_pc(tmp_path: Path, monkeypatch):
     for key in ("NEXTBOX_DATA_DIR", "NEXTBOX_PORT", "NEXTBOX_PUBLIC_URL", "PRINTER_IP", "DATABASE_URL"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(movecheck.socket, "gethostname", lambda: "braznarkel-ranchnet")
-    answers = {"public": ("no (URLError)", None)}
+    # Neither address is really asked: a Next Box running on the PC that runs the tests (Mike's server runs
+    # them on every update) would answer on 127.0.0.1. A test with a stand-in server sets answers["port"] = None.
+    answers = {"public": ("no (URLError)", None), "port": ("no (URLError)", None)}
     real = movecheck._version_answer
     monkeypatch.setattr(movecheck, "_version_answer",
-                        lambda url, timeout: real(url, timeout) if "127.0.0.1" in url else answers["public"])
+                        lambda url, timeout: ((real(url, timeout) if answers["port"] is None else answers["port"])
+                                              if "127.0.0.1" in url else answers["public"]))
     knocked = []
     monkeypatch.setattr(movecheck, "tcp_answers", lambda host, port, timeout=2.0: knocked.append((host, port)) and False)
     answers["knocked"] = knocked
@@ -1995,6 +1998,7 @@ def test_move_status_says_where_the_move_stands_on_the_new_pc(tmp_path, monkeypa
     (data / "secret.key").write_bytes(b"k")
     server = _version_server(app_version())
     port = server.server_port
+    answers["port"] = None  # this test's own stand-in answers on 127.0.0.1
     env = {"NEXTBOX_PUBLIC_URL": "https://nextbox.example.com", "NEXTBOX_PORT": str(port)}
     try:
         # S2: the files are in, no service, a tunnel unit left from the Oct 28 try (not running, token unreadable).

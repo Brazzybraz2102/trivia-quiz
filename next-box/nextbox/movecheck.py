@@ -354,7 +354,6 @@ UUID = re.compile(r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}")
 TOKEN_RE = re.compile(r"eyJ[A-Za-z0-9_+/=.-]{20,}")
 STATUS_KEYS = ("NEXTBOX_DATA_DIR", "NEXTBOX_PORT", "NEXTBOX_PUBLIC_URL", "PRINTER_IP", "DATABASE_URL")
 EXAMPLE_PRINTER = "192.168.1.50"
-CF_UNIT = "/etc/systemd/system/cloudflared.service"
 DEFAULT_PORT = 8787
 # The tunnel id when the token file can't be read here: the one sudo command that shows only the id.
 SUDO_HINT = ("unknown: the token file needs sudo; to see it: sudo journalctl -u cloudflared -n 300 --no-pager -o cat "
@@ -523,8 +522,8 @@ def cloudflared_facts(sudo: bool = True) -> dict:
     a cloudflared started by hand, and the last problem in its log (tokens masked)."""
     f: dict = {"program": bool(shutil.which("cloudflared")), "unit": False, "active": "unknown", "enabled": "unknown",
                "tunnel": None, "how": "unknown", "problem": None, "by_hand": []}
-    rc, unit = _run("systemctl", "cat", "cloudflared")
-    f["unit"] = rc == 0 or Path(CF_UNIT).exists()
+    rc, unit = _run("systemctl", "cat", "cloudflared")  # systemd's own answer, so a test's stand-in decides
+    f["unit"] = rc == 0
     if f["unit"]:
         f["active"] = _run("systemctl", "is-active", "cloudflared")[1].split("\n")[0] or "unknown"
         f["enabled"] = _run("systemctl", "is-enabled", "cloudflared")[1].split("\n")[0] or "unknown"
