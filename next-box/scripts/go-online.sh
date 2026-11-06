@@ -10,6 +10,8 @@
 # is replaced with the pasted command; a tunnel for something else is asked about.
 # It ends by checking that the public address really reaches this Next Box, and what to do if not.
 set -euo pipefail
+OLD_STTY=""  # the terminal's settings while a paste is read (put back on any exit)
+trap '[[ -n "${OLD_STTY:-}" ]] && stty "$OLD_STTY" 2>/dev/null; exit 130' INT TERM
 HERE="$(cd "$(dirname "$0")/.." && pwd -P)"
 cd "$HERE"
 # How hints name this folder's scripts, typed from the home folder (quoted, so a space in a folder name pastes).
@@ -87,19 +89,34 @@ unit_tunnel() {
 
 ask_token() {
   echo
-  echo "Paste the whole command Cloudflare shows under + Add a replica (Debian, 64-bit). It may start with curl"
-  echo "or with sudo cloudflared service install; the token is at its end. Then press Enter."
-  echo "Nothing will show while you paste; that's on purpose. If nothing happens, press Enter once more."
-  read -rs PASTED || PASTED=""
-  TOKEN="$(printf '%s' "$PASTED" | grep -oE 'eyJ[A-Za-z0-9_+/=.-]{40,}' | head -1 || true)"
-  local more
-  # Pasted as several lines: the token is on a later one. Read on until it comes or a line is empty, with
-  # no time limit: a limit that ran out would leave the token's line for the shell to run (and to show).
-  while [[ -z "$TOKEN" ]] && IFS= read -rs more && [[ -n "$more" ]]; do
-    TOKEN="$(printf '%s' "$more" | grep -oE 'eyJ[A-Za-z0-9_+/=.-]{40,}' | head -1 || true)"
-  done
+  echo "In the dashboard, under + Add a replica (Debian, 64-bit), copy the command that ends with the long"
+  echo "token: it starts with sudo cloudflared service install. Paste it here. Nothing shows while you paste;"
+  echo "that's on purpose. The script reads the paste by itself, so you don't need to press Enter."
+  # The paste is read byte by byte, until it stops coming (a second of quiet). A paste is one block however
+  # many lines and blank lines it has, and nothing of it is left for the shell: a line-by-line read stopped at
+  # a blank line, and a time limit on a line handed the token's line to the shell (on screen, in the history).
+  local all="" c line
+  TOKEN=""
+  if [[ -t 0 ]]; then
+    OLD_STTY="$(stty -g 2>/dev/null || true)"
+    stty -icanon -echo min 1 time 0 2>/dev/null || true
+    IFS= read -rs -N 1 c || c=""
+    all="$c"
+    while [[ -n "$c" ]] && IFS= read -rs -t 1 -N 1 c; do
+      all+="$c"
+    done
+    stty "$OLD_STTY" 2>/dev/null || true
+    OLD_STTY=""
+    TOKEN="$(printf '%s' "$all" | grep -oE 'eyJ[A-Za-z0-9_+/=.-]{40,}' | head -1 || true)"
+  else  # not a terminal (a script feeds it): line by line until the token, so later answers stay unread
+    local eof=""
+    while [[ -z "$TOKEN" && -z "$eof" ]]; do
+      IFS= read -rs line || eof=yes  # at the end, a last line without a newline still arrives in $line
+      TOKEN="$(printf '%s' "$line" | grep -oE 'eyJ[A-Za-z0-9_+/=.-]{40,}' | head -1 || true)"
+    done
+  fi
   echo
-  unset PASTED more
+  unset all c line
 }
 
 remove_unit() {  # the tunnel service on this PC goes (cloudflared's own uninstall: unit, timer and token file)
@@ -183,8 +200,9 @@ if systemctl is-active --quiet cloudflared 2>/dev/null; then
 else
   ask_token
   if [[ -z "$TOKEN" ]]; then
-    echo "That didn't contain a tunnel token. Copy the whole command again ($DASH → + Add a replica → Debian)"
-    echo "and run this again."
+    echo "That didn't contain a tunnel token. In the dashboard ($DASH → + Add a replica → Debian) the page"
+    echo "shows two commands: the one that installs the program (apt), and below it the one that starts with"
+    echo "sudo cloudflared service install and ends with the long token. Copy that one, and run this again."
     exit 1
   fi
   if unit_exists; then  # left from an earlier try (Mike's server), or a tunnel for something else that's off
@@ -254,7 +272,7 @@ systemctl --user restart nextbox.service 2>/dev/null \
 # Does the public address reach this Next Box? (asks its /version; a minute at most for the tunnel to connect)
 echo "Checking $PUBLIC from the internet (up to a minute)..."
 BODY="$(mktemp)"
-trap 'rm -f "$BODY"' EXIT
+trap 'rm -f "$BODY"; [[ -n "${OLD_STTY:-}" ]] && stty "$OLD_STTY" 2>/dev/null; true' EXIT
 OK=""
 CODE=000
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do

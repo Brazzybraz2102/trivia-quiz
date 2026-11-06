@@ -1579,8 +1579,9 @@ def test_go_online_installs_the_tunnel_and_checks_the_address_really_reaches_nex
         assert "SENTINEL" not in out and "eyJ" not in out
     script = (SCRIPTS / "go-online.sh").read_text()
     # No apt (Fedora): it says what to install and stops before asking for the token.
-    assert script.index("command -v apt-get") < script.index("https://pkg.cloudflare.com (Fedora") \
-        < script.index("exit 1") < script.index("Paste the whole command")
+    fedora = script.index("https://pkg.cloudflare.com (Fedora")
+    assert script.index("command -v apt-get") < fedora < script.index("exit 1\n", fedora) \
+        < script.index("copy the command that ends with the long")
     assert "~/%q/scripts" in script  # hints that run from the home folder
 
 
@@ -1687,24 +1688,54 @@ def test_go_online_renews_a_running_tunnel_after_the_token_was_rotated(tmp_path)
         assert "SENTINEL" not in out and "eyJ" not in out
 
 
-def test_go_online_takes_a_pasted_block_whose_last_line_holds_the_token(tmp_path):
-    """Cloudflare's block is several lines and the token's line ends without a newline: it arrives only when
-    Mike presses Enter, however long that takes. A time limit that ran out would hand that line to the shell
-    (the token on screen and in the history)."""
+CF_BLOCK = ("# Add cloudflare gpg key\nsudo mkdir -p --mode=0755 /usr/share/keyrings\n"
+            "curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null\n"
+            "\n# Add this repo to your apt repositories\n"
+            "echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list\n"
+            "\n# install cloudflared\nsudo apt-get update && sudo apt-get install cloudflared\n"
+            "\nsudo cloudflared service install {token}")  # Cloudflare's block: blank lines, the token last, no newline
+
+
+def test_go_online_takes_the_whole_pasted_block_blank_lines_and_all(tmp_path):
+    """Cloudflare's block has blank lines between its parts and the token on its last line, which ends without
+    a newline. The reader takes the whole paste as it arrives (a line-by-line read stopped at the first blank
+    line: that's what happened on Mike's server), and leaves nothing of it for the shell."""
     run, root, state, log, token = _go_online(tmp_path)
-    block = ("# Add cloudflare gpg key\nsudo mkdir -p --mode=0755 /usr/share/keyrings\n"
-             "# install cloudflared\nsudo apt-get update && sudo apt-get install cloudflared\n"
-             f"sudo cloudflared service install {token('tunnel-nextbox')}")
-    r = subprocess.run(["bash", str(root / "scripts" / "go-online.sh"), "https://nextbox.example.com"],
-                       input=block + "\n", text=True, capture_output=True, timeout=60,
-                       env={"PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}", "HOME": str(tmp_path), "USER": "mike",
-                            "CURL_OK": "1"})
-    assert r.returncode == 0, r.stdout + r.stderr
+    block = CF_BLOCK.format(token=token("tunnel-nextbox"))
+    env = {"PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}", "HOME": str(tmp_path), "USER": "mike", "CURL_OK": "1"}
+    # Through a pipe (no terminal): the block, with and without the newline Mike might add.
+    for tail in ("", "\n"):
+        r = subprocess.run(["bash", str(root / "scripts" / "go-online.sh"), "https://nextbox.example.com"],
+                           input=block + tail, text=True, capture_output=True, timeout=60, env=env)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert any(x.startswith("sudo cloudflared service install ") for x in log.read_text().splitlines())
+        assert "don't need to press Enter" in r.stdout
+        for out in (r.stdout, r.stderr):
+            assert "eyJ" not in out and "SENTINEL" not in out
+        for name in ("cloudflared.unit", "cloudflared.token", "cloudflared", "cloudflared.enabled"):
+            (state / name).unlink(missing_ok=True)
+        log.unlink()
+    # On a real terminal: pasted in one go, no Enter at all, and the terminal is put back as it was.
+    import pty
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(["bash", str(root / "scripts" / "go-online.sh"), "https://nextbox.example.com"],
+                            stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    os.close(slave)
+    time.sleep(1.5)  # the prompt is up and the paste reader is waiting
+    os.write(master, block.encode())  # the whole block at once, as a paste arrives: no Enter after it
+    out, _ = proc.communicate(timeout=60)
+    os.close(master)
+    assert proc.returncode == 0, out
+    assert "Done: https://nextbox.example.com reaches Next Box" in out and "eyJ" not in out and "SENTINEL" not in out
     assert any(x.startswith("sudo cloudflared service install ") for x in log.read_text().splitlines())
-    assert "press Enter once more" in r.stdout
-    for out in (r.stdout, r.stderr):
-        assert "eyJ" not in out and "SENTINEL" not in out
-    assert "read -rs -t" not in (SCRIPTS / "go-online.sh").read_text()  # no time limit on the paste
+    script = (SCRIPTS / "go-online.sh").read_text()
+    assert "read -rs -t 1 -N 1" in script and "stty" in script and 'trap' in script  # byte by byte, terminal put back
+    # Nothing pasted, just Enter: a plain answer, no hang.
+    for name in ("cloudflared.unit", "cloudflared.token", "cloudflared", "cloudflared.enabled"):
+        (state / name).unlink(missing_ok=True)
+    r = subprocess.run(["bash", str(root / "scripts" / "go-online.sh"), "https://nextbox.example.com"],
+                       input="\n", text=True, capture_output=True, timeout=60, env=env)
+    assert r.returncode == 1 and "didn't contain a tunnel token" in r.stdout and "two commands" in r.stdout
 
 
 def test_go_online_says_what_each_kind_of_miss_means(tmp_path):
