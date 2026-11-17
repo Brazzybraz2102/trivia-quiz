@@ -1,8 +1,10 @@
 # braznarkel.com
 
-The homepage. One static page, hosted free on Cloudflare Pages (it stays up when the PC is off).
+The homepage. One static page, hosted free on Netlify (project `braznarkel`,
+https://app.netlify.com/projects/braznarkel), so it stays up whatever the PCs do.
 
-Publish or update: dash.cloudflare.com → **Workers & Pages** → **Create** → **Pages** →
-**Upload assets** → project name `braznarkel` → drag in this folder's `index.html` → Deploy.
-Then in the project → **Custom domains** → add `braznarkel.com` (and `www.braznarkel.com`).
-To update later: same project → **Create deployment** → upload the new `index.html`.
+Publish or update: zip `index.html` and `netlify.toml` (or just use the folder), open the project's
+**Deploys** page and drag the zip into the drop box. `netlify.toml` tells Netlify to serve this folder as it
+is (no build). The domain: **Domain management** in the project, and in Cloudflare's DNS an `A` record
+`@ → 75.2.60.5` plus a `CNAME` record `www → braznarkel.netlify.app`, both "DNS only" (grey cloud).
+The `nextbox` record stays: that's the Next Box tunnel.
