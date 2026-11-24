@@ -189,19 +189,21 @@ def test_start_sh_maps_port_and_starts_the_server_when_everything_is_set(tmp_pat
     r, log = _start(tmp_path, NEXTBOX_HOSTED="1", PORT="10000", NEXTBOX_PORT="8787", DATABASE_URL="x",
                     NEXTBOX_KEY="k", NEXTBOX_SECRET_KEY="s" * 32)
     assert r.returncode == 0 and "NEXTBOX_PORT=8787" in log
-    # No PORT at all: Next Box's default applies (nothing exported).
-    r, log = _start(tmp_path, NEXTBOX_HOSTED="1", DATABASE_URL="x", NEXTBOX_KEY="k", NEXTBOX_SECRET_KEY="s" * 32)
+    # No PORT at all: Next Box's default applies (nothing exported). No NEXTBOX_KEY either: a hosted Next Box
+    # refuses the shared key anyway (SPEC §35), so the server starts without it.
+    r, log = _start(tmp_path, NEXTBOX_HOSTED="1", DATABASE_URL="x", NEXTBOX_SECRET_KEY="s" * 32)
     assert r.returncode == 0 and "NEXTBOX_PORT=unset" in log
 
 
-def test_start_sh_refuses_in_hosted_mode_without_the_three_settings_and_never_prints_a_value(tmp_path):
+def test_start_sh_refuses_in_hosted_mode_without_the_two_settings_and_never_prints_a_value(tmp_path):
     r, log = _start(tmp_path, NEXTBOX_HOSTED="1")
     assert r.returncode == 1 and log == ""  # python was never run
     lines = [line for line in r.stderr.splitlines() if line.strip()]
-    assert [line.split(" ")[0] for line in lines[:3]] == ["DATABASE_URL", "NEXTBOX_KEY", "NEXTBOX_SECRET_KEY"]
+    assert [line.split(" ")[0] for line in lines[:2]] == ["DATABASE_URL", "NEXTBOX_SECRET_KEY"]
+    assert "NEXTBOX_KEY" not in r.stderr  # optional when hosted: the shared key is refused there anyway
     assert all(line.endswith(".") for line in lines) and "Render" in lines[-1]
     assert r.stdout == ""
-    # One missing: one line for it, and the values of the other two never appear.
+    # One missing: one line for it, and the values of the others never appear.
     r, log = _start(tmp_path, NEXTBOX_HOSTED="true", DATABASE_URL="postgresql://nextbox:supersecretpw@h/db",
                     NEXTBOX_KEY="keyvalue123")
     assert r.returncode == 1 and log == ""

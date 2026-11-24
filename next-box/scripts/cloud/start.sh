@@ -12,7 +12,9 @@ if [[ -z "${NEXTBOX_PORT:-}" && -n "${PORT:-}" ]]; then
 fi
 
 # Hosted mode (NEXTBOX_HOSTED=1, the Dockerfile's default): no database here, no lasting disk, so these
-# three have to come from the host's environment. Refuse plainly instead of starting and failing later.
+# two have to come from the host's environment. Refuse plainly instead of starting and failing later.
+# NEXTBOX_KEY isn't one of them: a hosted Next Box refuses the shared key anyway (SPEC §35), so the server
+# starts without it.
 hosted() {
   local v="${NEXTBOX_HOSTED:-}"
   [[ "${v,,}" == 1 || "${v,,}" == true || "${v,,}" == yes || "${v,,}" == on ]]
@@ -21,10 +23,6 @@ if hosted; then
   missing=0
   if [[ -z "${DATABASE_URL:-}" ]]; then
     echo "DATABASE_URL is not set: Next Box needs the PostgreSQL database's connection string (the Blueprint fills it in from the database)." >&2
-    missing=1
-  fi
-  if [[ -z "${NEXTBOX_KEY:-}" ]]; then
-    echo "NEXTBOX_KEY is not set: the shared key the web app and scripts send (the Blueprint generates one)." >&2
     missing=1
   fi
   if [[ -z "${NEXTBOX_SECRET_KEY:-}" ]]; then

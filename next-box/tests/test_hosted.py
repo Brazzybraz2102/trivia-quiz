@@ -360,6 +360,9 @@ def test_the_app_says_the_same_words_and_offers_no_printer_to_add():
     assert '$("#prSameNet").hidden = !printerAway() || hosted();' in js
     html = (WEB / "index.html").read_text()
     assert '<div class="row" id="prAddRow"><button type="button" class="go" id="prAdd"' in html
+    # .row is display:flex, which beats the browser's own [hidden] rule: the row needs a rule of its own, or the
+    # Add a printer button stays on screen at a hosted Next Box with hidden=true (seen in a real browser).
+    assert "#prAddRow[hidden] { display:none; }" in html
     # The owner's no-key hint, in the server's words for a host.
     assert js_const(js, "NO_KEY_STEPS_HOSTED") == server.NO_KEY_OWNER_HOSTED.split("This needs an AI key. ")[1]
     assert "`This needs an AI key. ${NO_KEY_STEPS_HOSTED}`" in js and "? keySteps() :" in js

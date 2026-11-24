@@ -14,10 +14,10 @@ secrets go only into Render's own settings forms and the two hidden prompts name
 Dashboard names are from Render's and Cloudflare's pages as of November 2026 (each step says its source; what
 couldn't be checked is marked **unverified**). If a button has moved, look for the same word nearby.
 
-Words used below: the **service** is the Next Box web app on Render; the **database** is the PostgreSQL Render
-makes next to it; the **Blueprint** is the file `next-box/render.yaml` in the code, which tells Render what to
-build. Settings a step names (`NEXTBOX_HOSTED`, `DATABASE_URL`, ...) are **environment variables**: name = value
-pairs on the service's **Environment** page.
+Words used below: the **service** is the Next Box web app on Render (the Blueprint names it `nextbox`); the
+**database** is the PostgreSQL Render makes next to it (named `nextbox-db`); the **Blueprint** is the file
+`next-box/render.yaml` in the code, which tells Render what to build. Settings a step names (`NEXTBOX_HOSTED`,
+`DATABASE_URL`, ...) are **environment variables**: name = value pairs on the service's **Environment** page.
 
 ## 1. A Render account (10 minutes)
 **NEEDS MIKE:** your GitHub login.
@@ -28,8 +28,9 @@ pairs on the service's **Environment** page.
 2. Render asks which repositories it may see. Allow **brazzybraz2102/trivia-quiz** (or all repositories). If the
    repository is private, Render installs its GitHub App for it; the same page handles that.
    (source: https://render.com/docs/github)
-3. You land on the Dashboard. No card is needed for the free plan (step 6 says what the free plan does and what
-   the paid one costs; you can decide then).
+3. You land on the Dashboard. The Blueprint picks the smallest paid plans (about $13 a month for both; step 6
+   says why and how to go Free instead), so have a card ready: Render asks for one before it makes anything paid
+   (where exactly in the flow is **unverified**; signing up itself needs none).
 
 Check: the Dashboard shows an empty workspace and your GitHub name at the top right.
 
@@ -45,9 +46,12 @@ Render's form.
    February 2026: https://render.com/changelog/blueprints-now-support-custom-filenames-and-paths). Where the
    field sits on the form is **unverified**; it may also be on the Blueprint's **Settings** page afterwards.
 3. Render reads the file and lists what it will make: one **Web Service** (Docker, root directory `next-box`,
-   health check `/health`) and one **PostgreSQL** database. It asks for the values the file marks as yours to
-   fill in (`sync: false`), in a form, before anything is built (source: https://render.com/docs/blueprint-spec):
+   health check `/health`) and one **PostgreSQL** database. It asks for the three values the file marks as
+   yours to fill in (`sync: false`), in a form, before anything is built
+   (source: https://render.com/docs/blueprint-spec):
    - `ANTHROPIC_API_KEY`: paste the key (Snap and the AI helpers; without it they're off and the app says so).
+   - `NEXTBOX_CONTACT`: how people reach you with questions (an email address, say), shown on the Privacy and About
+     pages. Left empty, the pages say "ask the person who invited you"; you can add it later on the Environment page.
    - `NEXTBOX_FIRST_ADMIN`: **leave it empty.** You're bringing your accounts over in step 3, and this setting
      would create a new superadmin on the empty database, which then isn't empty any more. (It's for someone
      starting from nothing: `username:password` makes that superadmin at the first start, and does nothing once
@@ -55,16 +59,17 @@ Render's form.
      `none` (no colon, so it isn't a `username:password` pair).
    The file sets the rest for you: `NEXTBOX_HOSTED=1` (a Next Box at a hosting company: every visitor comes from
    the internet, there's no printer and no home network here), `DATABASE_URL` from the database it makes,
-   `NEXTBOX_PUBLIC_URL=https://nextbox.braznarkel.com`, `NEXTBOX_HOSTING=Render` (named on the Privacy and
-   About pages), `NEXTBOX_FORWARDED_ALLOW_IPS=*` (so sign-in limits see each visitor's real address through
-   Render's front door), a random `NEXTBOX_SECRET_KEY` (replaced in step 3), and nothing for `NEXTBOX_PORT`:
+   `NEXTBOX_PUBLIC_URL=https://nextbox.braznarkel.com`, `NEXTBOX_HOSTING=Render` and `NEXTBOX_OPERATOR=Braznarkel`
+   (named on the Privacy and About pages), `TZ=America/New_York` (so "today" turns over at your midnight, not
+   UTC's), `NEXTBOX_FORWARDED_ALLOW_IPS=*` (so sign-in limits see each visitor's real address through Render's
+   front door), a random `NEXTBOX_SECRET_KEY` (replaced in step 3), a random `NEXTBOX_KEY` (the shared key Home
+   Assistant uses at home; a hosted Next Box refuses it, so nothing uses it here), and nothing for `NEXTBOX_PORT`:
    Render tells the app its port with `PORT`, and Next Box listens there when `NEXTBOX_PORT` isn't set
-   (source: https://render.com/docs/web-services). `NEXTBOX_OPERATOR` and `NEXTBOX_CONTACT` (the name and the
-   contact on the Privacy page) you can add later on the Environment page if you want them.
+   (source: https://render.com/docs/web-services).
 4. Click **Deploy Blueprint** (the button may say **Apply**). Render builds the Docker image and starts it. The
    first build takes a few minutes, and the service may restart once or twice while the database is still being
    made; that's normal, don't redeploy. (source: https://render.com/tutorials/firstdeploy/create-a-blueprint)
-5. Open the service (Dashboard → its name). Wait until the status says **Live**. Render only switches a new
+5. Open the service (Dashboard → `nextbox`). Wait until the status says **Live**. Render only switches a new
    version on once `/health` answers; if it doesn't within 15 minutes, the deploy is cancelled and the **Logs**
    page says why (source: https://render.com/docs/health-checks).
 
@@ -80,7 +85,7 @@ Leave the `.onrender.com` address open; you'll use it in step 3.
    ~/.local/share/nextbox/app/scripts/update.sh
    ```
    (It keeps `.env`, the accounts and the data; it runs the tests, 5-10 minutes.)
-2. In Render, open the **database** (Dashboard → the PostgreSQL one). On its page, find **Connect** (top right;
+2. In Render, open the **database** (Dashboard → `nextbox-db`). On its page, find **Connect** (top right;
    on some pages the same lives under **Info** → Connections) and copy the **External Database URL**. It starts
    with `postgresql://`, holds the database's password, and is only for connections from outside Render, like
    this one: Render only accepts them encrypted, and the script adds `sslmode=require` if the address doesn't
@@ -124,8 +129,8 @@ Linked app says it can't unlock the connection, the key in step 4 isn't exactly 
    (source: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/dns/)
 3. Cloudflare → **DNS → Records** → **Add record**: type **CNAME**, name `nextbox`, target the
    `<something>.onrender.com` from Render, **Proxy status: DNS only** (the grey cloud, not the orange one) →
-   **Save**. Also check **SSL/TLS → Overview**: the encryption mode should be **Full**.
-   (source: https://render.com/docs/configure-cloudflare-dns)
+   **Save**. (With the grey cloud, Cloudflare's **SSL/TLS** mode doesn't come into it: Render's own certificate
+   does the encrypting.) (source: https://render.com/docs/configure-cloudflare-dns)
    - Why grey: Render has to see the name point at itself to verify it and make its certificate; with the orange
      cloud, Cloudflare answers instead and the check fails. Render's docs say DNS only; its staff say switching
      to proxied afterwards works too (**unverified**, from a Render community thread). Recommendation: leave it
@@ -146,33 +151,40 @@ household** for a tester who isn't family (own list, own printers; they can't se
 works once. They open it on their phone, choose a username and password, read and accept the data notice, and
 land on the Get started checklist and the Quick start page (Settings → Help has it too). From the home server,
 if you prefer: `~/.local/share/nextbox/app/.venv/bin/nextbox invite --beta --own-household --note "Sam"`
-(**unverified** that `--own-household` is a flag of this version; `nextbox invite --help` says).
+(`nextbox invite --help` lists every flag).
 
 What they see when they print: a preview, then **Print on paper** (a PDF their phone prints on any printer) and
-**Save label image** (a PNG for a label printer's own app). The app says there's no Next Box printer at the
-hosting company, in plain words. Your Brother at home prints again once the print helper exists; until then you
-print the same way as everyone else. **Admin → Printers** still lists the Brother; leave it. "Find printers" is
-off on a hosted Next Box (it would scan the hosting company's network, not yours).
+**Save label image** (a PNG for a label printer's own app). The app says so in plain words: "This Next Box runs
+online, so labels can't go straight to a printer. Tap Print on paper, or Save label image and open it in your label
+printer's app (like Brother iPrint&Label)." Your Brother at home prints again once the print helper exists; until
+then you print the same way as everyone else. **Admin → Printers** still lists the Brother; leave it. "Find
+printers" is off on a hosted Next Box (it would scan the hosting company's network, not yours).
 
 Check: one tester signs in, adds a task, taps Print, gets the preview and the two buttons, and sends feedback.
 You see the post on the Feedback board and their name under Admin → Users.
 
 ## 6. Cost, the free plan, updates, logs, stopping (read once)
-Two real choices. **The database:** a **Free** database expires 30 days after it's made (14 days' grace, then
-Render deletes it and the data), has 1 GB and no backups (source: https://render.com/docs/free,
-https://render.com/changelog/free-postgresql-instances-now-expire-after-30-days-previously-90).
-Recommendation: a paid database from day one. The Blueprint's review list (step 2.3) shows the plan
-`render.yaml` chose for each thing; if the database says Free, change it on the database's **Settings** page
-after the first deploy (the smallest paid plan's price is on https://render.com/pricing; **unverified** tonight,
-about $6-7 a month). If you do start Free, put "upgrade the database" in your calendar for day 20.
+The Blueprint picks the smallest paid plan for each thing: **Starter** for the service ($7 a month: 0.5 CPU,
+512 MB, always awake; source: https://render.com/docs/compute-plans) and **Basic-256mb** for the database ($6 a
+month plus $0.30 per GB of storage; source: https://render.com/pricing, https://render.com/docs/postgresql-refresh),
+about $13 a month together. The review list (step 2.3) shows both before anything is made. Prices are what the
+search engine quoted from Render's pages on 2026-11-24; the pages themselves weren't opened, so check
+https://render.com/pricing once.
 
-**The service:** a **Free** web service **spins down** after 15 minutes without a visitor and takes about a
-minute to wake on the next one (the first tap of the day feels broken, then works); a workspace gets 750 free
-hours a month, enough for one service. **Starter** ($7 a month on https://render.com/pricing; **unverified**
-tonight) stays awake. (source: https://render.com/docs/free) Recommendation: Free for the first days, Starter
-as soon as a tester mentions the wait: service → **Settings** → **Instance Type**.
+One real choice, with the Free plans:
+- **Keep both paid** (recommended). Testers start tomorrow, and the first impression is the app answering at once.
+- **Free service, paid database.** Saves $7. A **Free** web service **spins down** after 15 minutes without a
+  visitor and takes about a minute to wake on the next one (the first tap of the day feels broken, then works); a
+  workspace gets 750 free hours a month, enough for one service (source: https://render.com/docs/free). After the
+  first deploy: service → **Settings** → **Instance Type** → Free. Go back to Starter the same way, as soon as a
+  tester mentions the wait.
+- **Everything Free.** Only to look, never for testers: a **Free** database expires 30 days after it's made (14
+  days' grace, then Render deletes it and the data), has 1 GB and no backups (source: https://render.com/docs/free,
+  https://render.com/changelog/free-postgresql-instances-now-expire-after-30-days-previously-90). If you ever
+  do, put "upgrade the database" in your calendar for day 20.
 
-Custom domains are included on the free workspace (two, by Render's article; **unverified** count). Updates:
+Custom domains are included on free web services too (source: https://render.com/docs/free); each domain beyond the
+workspace's included number costs $0.25 a month (**unverified** how many are included; you need one). Updates:
 when new code is pushed to the branch, Render builds and deploys it by itself (auto-deploy, on by default; it
 can be turned off under the service's **Settings**), with no downtime: the old version serves until the new one
 answers `/health` (source: https://render.com/docs/deploys, https://render.com/docs/health-checks). Logs:
