@@ -16,6 +16,8 @@ tests
 docs
 tray
 ha
+# scripts/* and not scripts: the folder itself is never excluded, only what is in it, so the exception below
+# brings one child back whichever builder reads this. The last matching line decides.
 scripts/*
 !scripts/cloud
 README.md

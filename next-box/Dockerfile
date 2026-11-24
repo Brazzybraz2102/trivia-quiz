@@ -23,6 +23,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # legend's; Noto core adds Devanagari and the symbol fonts (NotoSansSymbols2) that scripts/install.sh asks
 # for on the desktop. fonts-noto-cjk (Chinese, Japanese, Korean; ~100 MB) is left out on purpose: text in
 # those scripts falls back to DejaVu's boxes. tzdata: so TZ=America/New_York (render.yaml) means something.
+# python:3.12-slim is Debian 13 "trixie" on Docker Hub (checked 2026-11-24); all three packages exist there.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends fonts-dejavu-core fonts-noto-core tzdata \
  && rm -rf /var/lib/apt/lists/*

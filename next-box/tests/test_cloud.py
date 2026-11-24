@@ -73,6 +73,16 @@ def test_hosted_data_dir_stays_in_home_when_it_is_writable(clean_env, monkeypatc
     assert load_settings(NO_ENV_FILE).data_dir == tmp_path / ".local" / "share" / "nextbox"
 
 
+def test_data_dir_without_any_home_folder_goes_under_the_temp_dir(clean_env, monkeypatch):
+    """A container running as a bare user id has no home: Path.home() raises instead of answering."""
+    def no_home(*_):
+        raise RuntimeError("Could not determine home directory.")
+    monkeypatch.setattr(config.Path, "home", classmethod(no_home))
+    assert load_settings(NO_ENV_FILE).data_dir == Path(tempfile.gettempdir()) / "nextbox"
+    monkeypatch.setenv("NEXTBOX_HOSTED", "1")
+    assert load_settings(NO_ENV_FILE).data_dir == Path(tempfile.gettempdir()) / "nextbox"
+
+
 # --- the secret key as an environment secret ----------------------------------------------------------
 
 def test_a_fernet_key_is_used_as_it_is_and_other_text_is_derived_the_same_way_every_time():
@@ -203,8 +213,8 @@ def test_start_sh_refuses_in_hosted_mode_without_the_three_settings_and_never_pr
 def test_start_sh_leaves_the_checks_to_next_box_when_not_hosted(tmp_path):
     r, log = _start(tmp_path)  # a plain container at home: the server's own NEXTBOX_KEY check applies
     assert r.returncode == 0 and "argv: -m nextbox serve" in log
-    r, log = _start(tmp_path, NEXTBOX_HOSTED="0")
-    assert r.returncode == 0 and "argv: -m nextbox serve" in log
+    r, log = _start(tmp_path, NEXTBOX_HOSTED="0", PORT="10000")  # the host's port counts there too
+    assert r.returncode == 0 and "argv: -m nextbox serve" in log and "NEXTBOX_PORT=10000" in log
 
 
 # --- render.yaml ---------------------------------------------------------------------------------------
@@ -231,9 +241,11 @@ def test_render_yaml_parses_and_names_every_setting_the_hosted_server_needs():
     assert env["NEXTBOX_HOSTED"]["value"] == "1" and env["NEXTBOX_FORWARDED_ALLOW_IPS"]["value"] == "*"
     assert env["NEXTBOX_HOSTING"]["value"] == "Render"
     assert env["NEXTBOX_PUBLIC_URL"]["value"] == "https://nextbox.braznarkel.com"
-    assert env["NEXTBOX_OPERATOR"]["value"] and env["NEXTBOX_CONTACT"]["value"]
+    assert env["NEXTBOX_OPERATOR"]["value"] == "Braznarkel"  # what server.py falls back to anyway
     assert env["TZ"]["value"] == "America/New_York"
-    for secret in ("ANTHROPIC_API_KEY", "NEXTBOX_FIRST_ADMIN"):  # asked for in the Dashboard, never in the file
+    # Asked for in the Dashboard, never in the file: the two secrets, and Mike's contact address (no made-up
+    # address in a public repository; the pages say "ask the person who invited you" while it is empty).
+    for secret in ("ANTHROPIC_API_KEY", "NEXTBOX_FIRST_ADMIN", "NEXTBOX_CONTACT"):
         assert env[secret] == {"key": secret, "sync": False}
     assert database["plan"] == "basic-256mb" and database["databaseName"] == "nextbox" and database["user"] == "nextbox"
     # Every value in the file is a string (YAML would otherwise turn "1" into a number).
@@ -243,6 +255,8 @@ def test_render_yaml_parses_and_names_every_setting_the_hosted_server_needs():
     text = (PROJECT_DIR / "render.yaml").read_text()
     assert "https://render.com/docs/blueprint-spec" in text  # the spec it was checked against
     assert "sleeps" in text or "spins down" in text  # the free plan's limits are named
+    assert "Blueprint Path" in text and "next-box/render.yaml" in text  # the file is not at the repository root
+    assert "@" not in "".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
 
 
 # --- Dockerfile and .dockerignore ------------------------------------------------------------------------
