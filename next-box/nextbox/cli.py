@@ -130,10 +130,53 @@ def _connect(conns: Connections, username: str, provider: str) -> int:
     return 0
 
 
+def _copy_to(data_dir, args) -> int:
+    """`nextbox db copy-to [--check] URL|-`: everything into an empty database, PostgreSQL at home
+    (scripts/setup-postgres.sh) or at a hosting company (scripts/cloud-migrate.sh, DEPLOY.md). The address holds its
+    password, so it's read from stdin with "-" and never printed, not even inside an error."""
+    from . import db, dbtools
+    raw = sys.stdin.read() if args.url == "-" else args.url  # "-": read it from stdin
+    try:
+        target = dbtools.cloud_url(raw)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    source = args.source or db.url_for(data_dir)  # the database Next Box uses here: DATABASE_URL, else its file
+    if args.check:
+        report = dbtools.check_target(target)
+        for line in dbtools.describe_check(report):
+            print(line)
+        return 0 if report["reachable"] and report["empty"] else 1
+    try:
+        counts = dbtools.copy_database(source, target)
+    except RuntimeError as exc:  # not empty, or the copy didn't check out: plain words, already safe
+        print(f"error: {dbtools.mask_secret(exc, target)}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print("error: couldn't copy into that database. It said: " + dbtools.mask_secret(exc, target),
+              file=sys.stderr)
+        print("Nothing was copied (a copy is all or nothing). Run it again; if it says the same, send Claude "
+              "these lines: they never hold the address.", file=sys.stderr)
+        return 1
+    print("Copied, table by table:")
+    for name, n in counts.items():
+        if n:
+            print(f"  {name:<20} {n:>7}")
+    if empty := [name for name, n in counts.items() if not n]:
+        print("  (nothing in: " + ", ".join(empty) + ")")
+    print(f"  {'total':<20} {sum(counts.values()):>7}")
+    print("Checked: the new database has the same rows as this one, table by table.")
+    if dbtools.is_postgres(target) and "sslmode" not in target:  # a PostgreSQL on this computer
+        print("Now set DATABASE_URL in .env to the new database and restart Next Box.")
+    return 0
+
+
 def _db(data_dir, args) -> int:
     from . import dbtools
     practice = getattr(args, "practice", False)
     try:
+        if args.db_cmd == "copy-to":
+            return _copy_to(data_dir, args)
         if args.db_cmd == "where":
             loc = dbtools.describe_location(data_dir)
             practice_loc = dbtools.describe_location(dbtools.practice_url(data_dir))
@@ -144,13 +187,6 @@ def _db(data_dir, args) -> int:
             else:
                 print("\nThis is PostgreSQL. Open it with:  psql -h 127.0.0.1 -U nextbox nextbox")
                 print("  (password: the one in DATABASE_URL in .env), or the free apps pgAdmin or DBeaver.")
-            return 0
-        if args.db_cmd == "copy-to":
-            src = f"sqlite:///{Path(data_dir) / 'nextbox.db'}" if not args.source else args.source
-            target = sys.stdin.read().strip() if args.url == "-" else args.url  # "-": read it from stdin
-            counts = dbtools.copy_database(src, target)
-            print("Copied: " + ", ".join(f"{k} {v}" for k, v in counts.items() if v))
-            print("Now set DATABASE_URL in .env to the new database and restart Next Box.")
             return 0
         if practice and not dbtools.practice_exists(data_dir):
             print("No practice database yet. Build it with: nextbox db demo", file=sys.stderr)
@@ -350,9 +386,13 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--write", action="store_true", help="allow INSERT/UPDATE/DELETE (practice database only)")
     dbs.add_parser("demo", help="(re)build the practice database with realistic fake data")
     dbs.add_parser("backup", help="save a copy of the real database in the data folder's backups/")
-    cp = dbs.add_parser("copy-to", help="copy everything into another (empty) database, e.g. PostgreSQL")
-    cp.add_argument("url", help="postgresql://user:password@127.0.0.1/nextbox, or - to read it from stdin")
-    cp.add_argument("--source", help="copy from this URL instead of the SQLite file in the data folder")
+    cp = dbs.add_parser("copy-to", help="copy everything into another, empty database: PostgreSQL at home or at a "
+                                        "hosting company (scripts/cloud-migrate.sh, DEPLOY.md)")
+    cp.add_argument("url", help="postgresql://user:password@host/nextbox, or - to read it from stdin (it holds "
+                                "the password; sslmode=require is added for a server on another computer)")
+    cp.add_argument("--source", help="copy from this URL instead of the database Next Box uses here")
+    cp.add_argument("--check", action="store_true",
+                    help="only connect and report (reachable? encrypted? empty?); copy nothing")
     iv = sub.add_parser("invite", help="make a one-time code so someone can create their own account")
     iv.add_argument("--days", type=int, default=7, help="how long the code works (1-90 days)")
     iv.add_argument("--own-household", action="store_true", help="they get their own household and printers")
