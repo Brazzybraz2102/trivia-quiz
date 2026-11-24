@@ -181,17 +181,8 @@ def json_report(settings: Settings, checks: list[tuple[str, str, str]]) -> dict:
             "problems": sum(mark == BAD for mark, _, _ in checks)}
 
 
-def _checks(settings: Settings, accounts: Accounts | None, say) -> bool:
-    """Every check, in order, through `say(mark, text, fix)`. False when it had to stop early."""
-    say(NOTE, f"Next Box {app_version()}")
-    from .move import UNDO_HINT, moved_on, read_marker
-    marker = read_marker(settings.data_dir)
-    if marker is not None:  # scripts/move-out.sh: everything else is off here on purpose, so that's all to say
-        say(NOTE, f"{MOVED_AWAY} PC{moved_on(marker)}, so it stays off on this one",
-            f"use Next Box on the new PC. {UNDO_HINT}")
-        if _cloudflared_on():  # ...except a tunnel move-out.sh couldn't turn off (two PCs on it split the visitors)
-            say(BAD, TUNNEL_STILL_ON, "sudo systemctl disable --now cloudflared")
-        return True
+def _database_check(settings: Settings, say) -> bool:
+    """Can the database be opened? Says which kind and where; False (with the fix) when it can't."""
     from . import db as _db
     from .dbtools import describe_location, is_postgres
     url = _db.url_for(settings.data_dir)
@@ -200,9 +191,78 @@ def _checks(settings: Settings, accounts: Accounts | None, say) -> bool:
         with _db.database(settings.data_dir).connect() as conn:
             conn.exec_driver_sql("SELECT 1")
         say(OK, f"database: {kind} at {describe_location(settings.data_dir)}")
+        return True
     except Exception as exc:
-        say(BAD, f"can't open the {kind} database: {str(getattr(exc, 'orig', exc)).splitlines()[0][:160]}",
-            "sudo systemctl start postgresql" if kind == "PostgreSQL" else "check the data folder's permissions")
+        fix = "sudo systemctl start postgresql" if kind == "PostgreSQL" else "check the data folder's permissions"
+        if settings.hosted:
+            fix = "check DATABASE_URL in the host's environment settings, and that its database is running"
+        say(BAD, f"can't open the {kind} database: {str(getattr(exc, 'orig', exc)).splitlines()[0][:160]}", fix)
+        return False
+
+
+HOSTED_SKIPPED = ("hosted on {host}: visitors come from the internet, and there's no printer, home network or "
+                  "background service here, so those checks are skipped")
+HOSTED_SETTINGS = "the host's environment settings"  # where .env lines live on a hosted Next Box
+
+
+def _hosted_checks(settings: Settings, accounts: Accounts | None, say) -> bool:
+    """`nextbox doctor` on a hosted Next Box (SPEC §35): the database, accounts and keys, and nothing that only
+    a home PC has (systemd, the firewall, a LAN address, printers). Never knocks on a network."""
+    host = os.environ.get("NEXTBOX_HOSTING", "").strip() or "a hosting company"
+    say(NOTE, HOSTED_SKIPPED.format(host=host))
+    if not _database_check(settings, say):
+        return False
+    if accounts is None:
+        accounts = Accounts(settings.data_dir)
+    users = accounts.list_users() if accounts.has_users() else []
+    say(OK if users else BAD, f"{len(users)} sign-in account(s)" if users else "no sign-in accounts yet",
+        "" if users else f"set NEXTBOX_FIRST_ADMIN=username:password once in {HOSTED_SETTINGS}, redeploy, sign in, "
+                         "then delete it")
+    say(NOTE, "the shared Next Box key is off here: Home Assistant and scripts can't reach a hosted Next Box")
+    if settings.anthropic_api_key:
+        say(OK, "ANTHROPIC_API_KEY is set")
+    else:
+        say(BAD, "ANTHROPIC_API_KEY is missing: Snap (marks and handwriting) and the AI helpers won't work",
+            f"add it in {HOSTED_SETTINGS} (console.anthropic.com → API keys), then redeploy")
+    from .scan import heic_supported
+    if not heic_supported():
+        say(NOTE, "iPhone HEIC photos can't be opened (people are asked to send a JPEG)",
+            "to open them, install the heic extra in the Dockerfile (pip install -c constraints.txt -e '.[heic]')")
+    from .movecheck import UTC_NAMES, local_zone
+    if local_zone() in UTC_NAMES:  # a server's usual setting: "today" would turn over at the wrong hour
+        say(NOTE, "this server's clock is set to UTC, so \"today\" and due dates change day at midnight UTC",
+            f"set TZ=America/New_York (your own zone) in {HOSTED_SETTINGS}, then redeploy")
+    if not os.environ.get("NEXTBOX_HOSTING", "").strip():
+        say(NOTE, "NEXTBOX_HOSTING isn't set, so the Privacy and About pages can't name the hosting company",
+            f"add NEXTBOX_HOSTING=Render (or your host's name) in {HOSTED_SETTINGS}, then redeploy")
+    from .providers import oauth
+    if not oauth.public_url():
+        say(NOTE, "NEXTBOX_PUBLIC_URL isn't set, so friend links use whatever address each visitor typed",
+            f"add NEXTBOX_PUBLIC_URL=https://your.address in {HOSTED_SETTINGS}, then redeploy")
+    for app, st in oauth.setup_status().items():
+        name = oauth.APPS[app]["name"]
+        if st["ready"]:
+            say(OK, f"Sign in with {name} is on (sign-in comes back to {st['redirect_uri']})")
+        else:
+            say(NOTE, f"Sign in with {name} is off (needs {', '.join(st['missing'])} in {HOSTED_SETTINGS})")
+    say(NOTE, "no printer here: everyone prints from their own device (Print on paper, or Save label image)")
+    return True
+
+
+def _checks(settings: Settings, accounts: Accounts | None, say) -> bool:
+    """Every check, in order, through `say(mark, text, fix)`. False when it had to stop early."""
+    say(NOTE, f"Next Box {app_version()}")
+    if settings.hosted:
+        return _hosted_checks(settings, accounts, say)
+    from .move import UNDO_HINT, moved_on, read_marker
+    marker = read_marker(settings.data_dir)
+    if marker is not None:  # scripts/move-out.sh: everything else is off here on purpose, so that's all to say
+        say(NOTE, f"{MOVED_AWAY} PC{moved_on(marker)}, so it stays off on this one",
+            f"use Next Box on the new PC. {UNDO_HINT}")
+        if _cloudflared_on():  # ...except a tunnel move-out.sh couldn't turn off (two PCs on it split the visitors)
+            say(BAD, TUNNEL_STILL_ON, "sudo systemctl disable --now cloudflared")
+        return True
+    if not _database_check(settings, say):
         return False
     if accounts is None:
         accounts = Accounts(settings.data_dir)

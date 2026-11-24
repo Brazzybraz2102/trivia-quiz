@@ -354,6 +354,12 @@ TERMS_VERSION = 6  # bump when terms.html or privacy.html change in a way people
 #      (only the two of you), 30 days unless kept, and that a note prints only when you tap Print.
 DB_NAMES = {"sqlite": "SQLite", "postgresql": "PostgreSQL"}  # for the About page
 
+# Hosted mode (Settings.hosted, SPEC §35): the shared key has no home network to work on, and the owner adds the
+# AI key where the host keeps its settings, not in a .env file (coach.NO_KEY_OWNER says .env and systemctl).
+KEY_HOSTED = "The shared Next Box key doesn't work on a hosted Next Box: sign in with an account instead."
+NO_KEY_OWNER_HOSTED = ("This needs an AI key. Add ANTHROPIC_API_KEY in your host's environment settings "
+                       "(console.anthropic.com → API keys), then redeploy.")
+
 
 class InviteBody(BaseModel):
     days: int = 7
@@ -398,7 +404,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             # Always check for a newer copy, so an update shows up right away on phones and through
             # Cloudflare (which otherwise keeps .js files for hours).
             response.headers["Cache-Control"] = "no-cache"
-        if request.url.scheme == "https":  # reached through the Cloudflare address: https only from now on
+        # Reached through the Cloudflare address, or hosted (always behind the host's https): https only from now on.
+        if request.url.scheme == "https" or ctx.settings.hosted:
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault("Content-Security-Policy",
@@ -417,6 +424,11 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     build = _build_id()
     _migrate_feedback(events, feedback_store, accounts)
     upkeep.run_startup_fixes(accounts.db, ctx.store)
+    # NEXTBOX_FIRST_ADMIN="username:password": the first superadmin of an empty database (a hosted Next Box
+    # has nobody to run `nextbox user add` before the first sign-in). Nothing of the value is logged.
+    first = upkeep.first_admin(accounts, os.environ.get("NEXTBOX_FIRST_ADMIN"))
+    if first:
+        events.log(first, "first_admin", kind="audit", detail={"role": "superadmin"})
     # In memory, per person: photo read-backs cost money; calendar and app checks reach other servers.
     scan_window, calendar_window, connect_window = _Window(30, 3600), _Window(20, 3600), _Window(20, 3600)
     # Downloading the whole journal builds a big file: 10 an hour. One day's page to print: 60.
@@ -446,6 +458,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     def auth(request: Request, x_nextbox_key: str | None = Header(default=None)) -> Caller:
         if x_nextbox_key:
+            if ctx.settings.hosted:  # there is no home network: the key works nowhere
+                raise HTTPException(403, KEY_HOSTED)
             if from_internet(request):
                 # Home Assistant and scripts are on the home network. The shared key never works
                 # through the public address, so it can't be guessed from outside.
@@ -471,8 +485,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                       household=user["household_id"])
 
     def from_internet(request: Request) -> bool:
-        """Came in through Cloudflare (it adds these headers; a home-network request never has them)."""
-        return any(h in request.headers for h in ("cf-connecting-ip", "cf-ray", "cdn-loop"))
+        """Came in through Cloudflare (it adds these headers; a home-network request never has them), or this
+        Next Box is hosted (SPEC §35): then every request is from the internet."""
+        return ctx.settings.hosted or any(h in request.headers for h in ("cf-connecting-ip", "cf-ray", "cdn-loop"))
 
     def require(min_role: str):
         def dep(caller: Caller = Depends(auth)) -> Caller:
@@ -525,8 +540,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     def prints_here(household: str) -> bool:
         """Labels go straight to a label printer: Home, or a household with a printer of its own. Anyone
-        else prints from their own device for now (jobs.PRINT_AWAY), and the app words things to match."""
-        return jobs.prints_here(household, registry.all(household))
+        else prints from their own device for now (jobs.PRINT_AWAY), and the app words things to match.
+        Nobody on a hosted Next Box (jobs.PRINT_AWAY_HOSTED)."""
+        return jobs.prints_here(household, registry.all(household), ctx.settings.hosted)
 
     def rctx(caller: Caller) -> Context:
         s = server_settings.get()
@@ -712,8 +728,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def _set_cookie(response: Response, request: Request, token: str) -> None:
         # Lax (not Strict) so coming back from "Sign in with Google" keeps you signed in. Cross-site
         # writes are still refused: browsers don't send Lax cookies on them, and auth() checks Origin.
+        # Secure through the public address (the proxy's X-Forwarded-Proto, trusted by `nextbox serve`), and
+        # always when hosted: a hosted Next Box is only ever reached over the host's https.
         response.set_cookie(COOKIE, token, max_age=30 * 86400, httponly=True, samesite="lax",
-                            secure=request.url.scheme == "https", path="/")
+                            secure=ctx.settings.hosted or request.url.scheme == "https", path="/")
 
     @app.post("/auth/logout")
     def logout(request: Request, response: Response):
@@ -738,7 +756,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return {"username": name, "role": user["role"], "beta": user["beta"], "debug": user["debug"],
                 "household_id": user["household_id"], "email": user.get("email"), "version": _version(),
                 "household": (accounts.household(user["household_id"]) or {}).get("name", ""),
-                "prints_here": jobs.prints_here(user["household_id"], printers),
+                "prints_here": jobs.prints_here(user["household_id"], printers, ctx.settings.hosted),
+                "hosted": ctx.settings.hosted,  # runs at a hosting company: no printer here, nothing to add
                 # The same printing flags as GET /status, so the app's Preview only box is right as soon as
                 # this answers, before /status (which waits up to 2 s on whether the printer is online).
                 "printers": len(printers),
@@ -793,14 +812,18 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def about(request: Request):
         """Public facts for the About, Privacy and Terms pages (no sign-in needed)."""
         # Through the public address, Cloudflare carries the traffic even if NEXTBOX_HOSTING was never set.
-        hosting = os.environ.get("NEXTBOX_HOSTING", "").strip()[:80] or ("Cloudflare" if from_internet(request) else "")
+        # Hosted (SPEC §35): NEXTBOX_HOSTING names the company that runs the server and keeps the database.
+        hosted = ctx.settings.hosted
+        hosting = os.environ.get("NEXTBOX_HOSTING", "").strip()[:80] or (
+            "the hosting company" if hosted else "Cloudflare" if from_internet(request) else "")
         return {"name": "Next Box", "version": _version(), "build": build,
                 "operator": os.environ.get("NEXTBOX_OPERATOR", "").strip() or "Braznarkel",
                 "contact": os.environ.get("NEXTBOX_CONTACT", "").strip(),
                 "retention_days": ctx.settings.retention_days, "terms_version": TERMS_VERSION,
                 # What this copy really runs on, so the pages never name a database or host it doesn't use.
                 "database": DB_NAMES.get(accounts.db.dialect.name, accounts.db.dialect.name),
-                "hosting": hosting}
+                "hosting": hosting,
+                "hosted": hosted}  # privacy.html adds "also runs the server and keeps its database"
 
     @app.get("/version")
     def version():
@@ -980,9 +1003,13 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
         def as_tuple(v):
             return tuple(int(x) for x in re.findall(r"\d+", v or "0")[:3])
+        if ctx.settings.hosted:  # the host builds the branch it watches: nothing to run by hand
+            how = f"{os.environ.get('NEXTBOX_HOSTING', '').strip() or 'The host'} redeploys when the branch is pushed."
+        else:
+            how = "On the Next Box computer: ~/.local/share/nextbox/app/scripts/update.sh"
         return {"current": current, "latest": latest,
                 "update_available": bool(latest) and as_tuple(latest) > as_tuple(current),
-                "how": "On the Next Box computer: ~/.local/share/nextbox/app/scripts/update.sh"}
+                "how": how}
 
     @app.get("/auth/sessions")
     def my_sessions(caller: Caller = Depends(person)):
@@ -1112,9 +1139,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             "printing_paused": s["printing_paused"],
             "prints_here": prints_here(household_of(caller)),
             # How many printers this household has (0: "No printer added"), and whether this person can
-            # add one in Admin → Printers. Who may add printers is unchanged: admins and staff.
+            # add one in Admin → Printers. Who may add printers is unchanged: admins and staff, never when hosted.
             "printers": len(everyone),
-            "can_add_printer": rank(caller.role) >= rank("admin"),
+            "can_add_printer": rank(caller.role) >= rank("admin") and not ctx.settings.hosted,
+            "hosted": ctx.settings.hosted,  # the app's hosted wording, and no "Add a printer" anywhere
         }
 
     @app.get("/tasks")
@@ -1126,6 +1154,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def p_today(body: TodayBody, caller: Caller = Depends(auth)):
         if body.source not in {"manual", "auto"}:
             raise HTTPException(400, "source must be manual or auto")
+        if body.source == "auto" and ctx.settings.hosted:  # Home Assistant's walk-in print: nothing here to print to
+            raise HTTPException(403, jobs.AUTO_PRINT_HOSTED)
         return run(caller, f"print_today_{body.source}", jobs.print_today, rctx(caller),
                    source=body.source, dry_run=body.dry_run)
 
@@ -1255,7 +1285,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         steps = [{"key": k, "done": bool(done.get(k)) or k in dismissed, "skipped": k in dismissed and not done.get(k)}
                  for k in SETUP_STEPS]
         return {"steps": steps, "hidden": bool(caller.prefs.get("setup_hidden")),
-                "can_add_printer": rank(caller.role) >= rank("admin"),
+                "can_add_printer": rank(caller.role) >= rank("admin") and not ctx.settings.hosted,
                 "printers": len(registry.all(caller.household)),  # 0: the printer step says "No printer added."
                 "all_done": all(s["done"] for s in steps)}
 
@@ -1939,8 +1969,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return vision is not None or bool(ctx.settings.anthropic_api_key)
 
     def no_key(caller: Caller) -> str:
-        """No AI key: the owner is told how to add one, everyone else who to ask."""
-        return coaching.NO_KEY_OWNER if caller.role == "superadmin" else coaching.NO_KEY
+        """No AI key: the owner is told how to add one (where, depends on where Next Box runs), everyone else who to ask."""
+        if caller.role != "superadmin":
+            return coaching.NO_KEY
+        return NO_KEY_OWNER_HOSTED if ctx.settings.hosted else coaching.NO_KEY_OWNER
 
     def helper(caller: Caller) -> coaching.Coach:
         if not caller.prefs.get("ai_helpers", True):
@@ -2637,8 +2669,15 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     # Both only listen or read, never print. Only staff, or an admin of Home: the Next Box computer's network is
     # Home's, so a friend's household can't find (or read) their own printers from here (jobs.PRINT_AWAY).
     def _may_look(caller: Caller) -> None:
+        if ctx.settings.hosted:  # the host has no home network to look at (SPEC §35): off for everyone
+            raise HTTPException(403, jobs.NO_NETWORK_HOSTED)
         if _restricted(caller):
             raise HTTPException(403, jobs.PRINT_AWAY)
+
+    def _no_printers_here() -> None:
+        """Hosted: nothing prints at the host, so there's no printer to add or change there."""
+        if ctx.settings.hosted:
+            raise HTTPException(403, jobs.NO_PRINTER_HERE_HOSTED)
 
     @app.post("/admin/printers/discover")
     def discover_printers(caller: Caller = Depends(admin_only)):
@@ -2663,6 +2702,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.post("/admin/printers")
     def add_printer(body: PrinterBody, caller: Caller = Depends(admin_only)):
+        _no_printers_here()
         try:
             cfg = registry.add(body.model_dump(exclude_none=True), caller.household, restricted=_restricted(caller))
         except PrinterError as exc:
@@ -2672,6 +2712,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.patch("/admin/printers/{pid}")
     def edit_printer(pid: str, body: PrinterBody, caller: Caller = Depends(admin_only)):
+        _no_printers_here()
         changes = body.model_dump(exclude_none=True)
         try:
             cfg = registry.update(pid, changes, caller.household, restricted=_restricted(caller))
@@ -2759,7 +2800,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         response = RedirectResponse(url, status_code=303)
         # Only this browser can finish it: a consent link sent to someone else fails at the callback.
         response.set_cookie(OAUTH_COOKIE, nonce, max_age=600, httponly=True, samesite="lax",
-                            secure=request.url.scheme == "https", path="/connect/")
+                            secure=ctx.settings.hosted or request.url.scheme == "https", path="/connect/")
         return response
 
     @app.get("/connect/{app_name}/callback")
@@ -3652,7 +3693,7 @@ def build_default_app() -> FastAPI:
     if marker is not None:  # moved to another PC (scripts/move-out.sh): this copy's data is old
         print(moved_away_message(marker), file=sys.stderr)
         raise SystemExit(MOVED_EXIT)
-    if not settings.server_key:
+    if not settings.server_key and not settings.hosted:  # hosted: the shared key works nowhere, so it's optional
         raise SystemExit("NEXTBOX_KEY is not set in .env; refusing to start an unauthenticated server")
     store = Store(settings.data_dir)
     store.prune(settings.retention_days)

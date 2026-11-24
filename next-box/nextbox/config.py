@@ -38,7 +38,9 @@ class Settings:
     port: int = 8787
     retention_days: int = 90  # tickets and scans older than this are deleted at startup
     credit: str = "Created by Mike"  # the small mark at the bottom of every page
-    hosted: bool = False  # NEXTBOX_HOSTED: at a hosting company (no printer, no home network, internet only)
+    # NEXTBOX_HOSTED=1: this Next Box runs at a hosting company. Every request comes from the internet, and
+    # there's no printer, home network or systemd there (SPEC §35).
+    hosted: bool = False
     forwarded_allow_ips: str = DEFAULT_FORWARDED_ALLOW_IPS  # NEXTBOX_FORWARDED_ALLOW_IPS ("*" at a host)
 
     def redacted(self) -> dict:

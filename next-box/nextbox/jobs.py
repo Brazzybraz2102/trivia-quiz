@@ -160,17 +160,33 @@ NO_PRINTER_ADMIN = "No printer added. Add one in Admin → Printers, or tap Prin
 PRINT_AWAY = ("In this test version, labels print straight to a printer only at the Next Box computer's home. "
               "To print yours, tap Print on paper, or Save label image and open it in your label printer's app "
               "(like Brother iPrint&Label).")
+# Hosted mode (Settings.hosted, NEXTBOX_HOSTED=1, SPEC §35): Next Box runs at a hosting company, so there is no
+# printer at all, for any household, and everyone prints from their own device. The web app shows the same words
+# (app.js PRINT_AWAY_HOSTED); change both together.
+PRINT_AWAY_HOSTED = ("This Next Box runs online, so labels can't go straight to a printer. Tap Print on paper, or "
+                     "Save label image and open it in your label printer's app (like Brother iPrint&Label).")
+# The other things a hosted Next Box can't do, one sentence each (server.py answers 403 with them).
+NO_NETWORK_HOSTED = ("This Next Box runs online, so it can't see your home network to find a printer or ask one "
+                     "which labels it has.")
+NO_PRINTER_HERE_HOSTED = ("This Next Box runs online, so it has no printer of its own: everyone prints from their "
+                          "own device (Print on paper, or Save label image).")
+AUTO_PRINT_HOSTED = "This Next Box runs online, so there's no printer for Home Assistant's automatic print to go to."
 
 
-def prints_here(household: str, printers: list) -> bool:
+def prints_here(household: str, printers: list, hosted: bool = False) -> bool:
     """Can this household's labels go straight to a label printer? Home always can (its messages stay
-    as they are); another household only once it has a printer of its own (one living at that house)."""
+    as they are); another household only once it has a printer of its own (one living at that house).
+    Never on a hosted Next Box: there's no printer where it runs."""
     from .auth import DEFAULT_HOUSEHOLD
+    if hosted:
+        return False
     return household == DEFAULT_HOUSEHOLD or bool(printers)
 
 
 def _no_printer_note(ctx: Context) -> str:
     """What a ticket says when no printer could take it (so the household has none at all)."""
+    if ctx.settings.hosted:
+        return PRINT_AWAY_HOSTED
     if not prints_here(ctx.household, []):
         return PRINT_AWAY
     return NO_PRINTER_ADMIN if ctx.can_add_printer else NO_PRINTER
@@ -184,6 +200,8 @@ ALWAYS_PREVIEW_NOTE = "Always preview only is on in Settings, so this is a previ
 def _available(ctx: Context) -> list[PrinterConfig]:
     """This household's printers. The .env printer only ever serves the original Home household,
     so someone in another household can never print on it by accident."""
+    if ctx.settings.hosted:  # nothing at the host prints, whatever .env or the printers table says
+        return []
     if ctx.printers is None:
         fallback = _fallback(ctx)
         return [fallback] if fallback else []
@@ -192,9 +210,11 @@ def _available(ctx: Context) -> list[PrinterConfig]:
 
 def _fallback(ctx: Context) -> PrinterConfig | None:
     """The .env printer, only for callers with no printer registry (the registry already holds it,
-    so a printer an admin removed stays removed), only for Home, and only if it has an address."""
+    so a printer an admin removed stays removed), only for Home, and only if it has an address.
+    Never on a hosted Next Box: a PRINTER_IP there is ignored."""
     from .auth import DEFAULT_HOUSEHOLD
-    if ctx.printers is not None or not ctx.settings.printer_ip or ctx.household != DEFAULT_HOUSEHOLD:
+    if (ctx.settings.hosted or ctx.printers is not None or not ctx.settings.printer_ip
+            or ctx.household != DEFAULT_HOUSEHOLD):
         return None
     return legacy_config(ctx.settings)
 
@@ -551,6 +571,8 @@ def print_today(ctx: Context, source: str = "manual", dry_run: bool | None = Non
     the second auto call on the same day returns skipped, whatever happened to the first."""
     today = ctx.today()
     dry = ctx.is_dry(dry_run)
+    if source == "auto" and ctx.settings.hosted:  # nothing to print to, so the day's print is never claimed
+        return {"status": "skipped", "reason": AUTO_PRINT_HOSTED}
     if source == "auto" and not ctx.auto_print_enabled:
         return {"status": "skipped", "reason": "auto print is turned off in server settings"}
     target = _target(ctx, "today")[0] if source == "auto" and not dry else None
