@@ -1,0 +1,27 @@
+# What never goes into the cloud container (Dockerfile). Secrets and local-only files first.
+.env
+.env.*
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+*.egg-info
+.coverage
+out
+*.nbmove
+.git
+.gitignore
+# Not needed to serve: tests, desktop-only scripts and pieces, pictures, and the long documents.
+tests
+docs
+tray
+ha
+scripts/*
+!scripts/cloud
+README.md
+SPEC.md
+DATABASE.md
+DEPLOY.md
+CLAUDE.md
+netlify.toml
+render.yaml
