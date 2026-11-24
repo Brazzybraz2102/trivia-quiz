@@ -32,6 +32,12 @@ const png = (id) => `/printed/${encodeURIComponent(id)}/png`;  // a ticket never
 const PRINT_AWAY = "In this test version, labels print straight to a printer only at the Next Box computer's home. "
   + "To print yours, tap Print on paper, or Save label image and open it in your label printer's app (like Brother iPrint&Label).";
 const printsHere = () => me?.prints_here !== false;  // Home, or a household with a printer: the messages as they always were
+// A hosted Next Box (server: hosted true, NEXTBOX_HOSTED=1, SPEC §35) runs at a hosting company: no printer at
+// all, for anyone, so nothing offers "Add a printer" and every printing message says this instead. The same
+// words as jobs.PRINT_AWAY_HOSTED.
+const PRINT_AWAY_HOSTED = "This Next Box runs online, so labels can't go straight to a printer. "
+  + "Tap Print on paper, or Save label image and open it in your label printer's app (like Brother iPrint&Label).";
+const hosted = () => me?.hosted === true;  // from /auth/me (and /status says the same)
 const when = (ts) => ts ? new Date(ts * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : "never";
 
 // A short message at the bottom. It stays long enough to read (4 s or more for longer ones), and it's
@@ -327,7 +333,7 @@ async function loadLabels() {
   $("#noPrinter").hidden = !none;
   $("#friendsLabelHas").hidden = none; $("#friendsLabelNone").hidden = !none;  // Settings → Friends: the rule is shown with a printer
   // Outside Home, the next step is PRINT_AWAY (shown here only, not again below).
-  $("#noPrinterNext").textContent = !printsHere() ? PRINT_AWAY : noPrinterNext();
+  $("#noPrinterNext").textContent = !printsHere() ? (hosted() ? PRINT_AWAY_HOSTED : PRINT_AWAY) : noPrinterNext();
   $("#noPrinterGo").hidden = !none || !printsHere() || !canAddPrinter();
   $("#labelAddRow").hidden = none || !printsHere() || !canAddPrinter();  // another one: Set up a printer, as above
   $("#printersLoaded").hidden = none && !printsHere();
@@ -382,11 +388,14 @@ async function loadPrinters(check = true) {
     <div class="row">${sw(p.stock_color)}<select class="small" data-p="color" aria-label="Label color for ${esc(p.name)}">${printOpts.colors.map((c) => `<option ${c === p.stock_color ? "selected" : ""}>${c}</option>`).join("")}</select>
       <button class="plain small" data-p="edit">Edit</button>
       <button class="plain small" data-p="preview">Test (preview)</button><button class="plain small" data-p="print">Test print</button>
-      <button class="plain small" data-p="remove">Remove</button></div></div>`).join("") || (printerAway() ? "No printers yet." : "No printers yet. Add one below.");
+      <button class="plain small" data-p="remove">Remove</button></div></div>`).join("") || (printerAway() || hosted() ? "No printers yet." : "No printers yet. Add one below.");
   // A household admin outside Home: printers at their own home can't be reached from the Next Box computer.
-  $("#prAway").textContent = PRINT_AWAY;
-  $("#prAway").hidden = !printerAway() || ps.length > 0;
-  $("#prSameNet").hidden = !printerAway();
+  // Hosted: there's no printer at all, and nothing to add (the server answers 403 anyway), so the add row and
+  // the Advanced form are put away; printing is from each person's own device.
+  $("#prAway").textContent = hosted() ? PRINT_AWAY_HOSTED : PRINT_AWAY;
+  $("#prAway").hidden = !(printerAway() || hosted()) || ps.length > 0;
+  $("#prSameNet").hidden = !printerAway() || hosted();
+  $("#prAddRow").hidden = $("#npForm").hidden = hosted();
   showPrinterStatus();
   if (!$("#npDriver").options.length) {
     const bq = printOpts.drivers.brother_ql;
@@ -544,6 +553,7 @@ function pwSizeOf(p) {
 }
 
 async function openPrinterSetup({ from = "", printer: p = null } = {}) {
+  if (hosted()) return toast(PRINT_AWAY_HOSTED, 6000);  // no printer can be added at a hosted Next Box
   if (!canAddPrinter()) return toast(noPrinterNext());
   try { printOpts = await api("/printing-options"); } catch (e) { return toast(errText(e)); }
   pwiz = { from, step: "kind", back: [], kind: "", driver: "", found: null, searching: false, why: "", pick: "", typed: "",
@@ -1290,7 +1300,8 @@ async function refreshStatus() {
   applyDry();
 }
 // Who can add a printer: admins and staff, who also see Admin → Printers (the server decides, as always).
-const canAddPrinter = () => !!me && RANK[me.role] >= RANK.admin;
+// Nobody on a hosted Next Box: there's no printer where it runs.
+const canAddPrinter = () => !hosted() && !!me && RANK[me.role] >= RANK.admin;
 // Home (or a household that prints here) with no printer: "No printer added", then the next step for them.
 const NO_PRINTER = "No printer added.";
 const noPrinterNext = () => (canAddPrinter() ? "Add one in Admin → Printers." : "Ask your Next Box admin to add one.");
@@ -1305,7 +1316,7 @@ const printNow = () => statusNow || me || {};
 function applyDry() {
   const st = printNow();
   const why = st.printing_paused ? "Printing is paused by an admin."
-    : !printsHere() ? PRINT_AWAY
+    : !printsHere() ? (hosted() ? PRINT_AWAY_HOSTED : PRINT_AWAY)
     : me?.prefs?.always_dry_run ? "Always preview only is on in Settings."
     : st.dry_run_forced ? (me?.role !== "superadmin" ? "This Next Box makes previews only for now."
       // The owner can change it: say how.
@@ -1626,13 +1637,17 @@ $("#scanRetake").onclick = () => { choosePhoto(null); $("#snapCam").focus(); };
 // No AI key (Snap, Break it down, Look back): the owner (a superadmin) is told how to add one, everyone
 // else who to ask, as the server says (coach.NO_KEY_OWNER / coach.NO_KEY).
 const NO_KEY_STEPS = "Add ANTHROPIC_API_KEY to .env (console.anthropic.com → API keys), then run: systemctl --user restart nextbox";
-const noKeyText = () => (me?.role === "superadmin" ? `This needs an AI key. ${NO_KEY_STEPS}` : "Ask your Next Box owner to add an AI key.");
+// Hosted: there's no .env or systemctl; the key goes where the host keeps its settings (server.NO_KEY_OWNER_HOSTED).
+const NO_KEY_STEPS_HOSTED = "Add ANTHROPIC_API_KEY in your host's environment settings (console.anthropic.com → API keys), then redeploy.";
+const keySteps = () => (hosted() ? NO_KEY_STEPS_HOSTED : NO_KEY_STEPS);
+const noKeyText = () => (me?.role !== "superadmin" ? "Ask your Next Box owner to add an AI key."
+  : hosted() ? `This needs an AI key. ${NO_KEY_STEPS_HOSTED}` : `This needs an AI key. ${NO_KEY_STEPS}`);
 // Snap reads photos with Claude. Without an AI key, say so here instead of offering a photo that can't be read.
 function applySnapReady() {
   const ready = me?.scan_ready !== false;
   $("#snapCam").disabled = $("#snapLib").disabled = !ready;
   $("#snapNoKey").hidden = ready;
-  $("#snapNoKey").textContent = `Snap needs an AI key to read photos. ${me?.role === "superadmin" ? NO_KEY_STEPS : "Ask your Next Box owner to add one."}`;
+  $("#snapNoKey").textContent = `Snap needs an AI key to read photos. ${me?.role === "superadmin" ? keySteps() : "Ask your Next Box owner to add one."}`;
 }
 
 $("#scanGo").onclick = async () => {
@@ -4434,7 +4449,7 @@ function quizSummary(c) {
     // Printing is the default, and a real print always asks "Send this to the printer?" first.
     const none = c.print_with === "label" && printsHere() && printNow().printers === 0;  // a label printer, none added yet
     out.push([none ? `Label printer: ${NO_PRINTER.toLowerCase()} ${noPrinterNext()}`
-      : { label: printsHere() ? "Printing on your label printer. Next Box asks “Send this to the printer?” before each print." : PRINT_AWAY,
+      : { label: printsHere() ? "Printing on your label printer. Next Box asks “Send this to the printer?” before each print." : hosted() ? PRINT_AWAY_HOSTED : PRINT_AWAY,
           paper: "Printing on paper: under each ticket, tap Print on paper.",
           none: "No printer yet: tickets show on screen, and Next Box asks before anything goes to a printer." }[c.print_with],
     none ? "Settings → Printers & label colors" : "Settings → Printing"]);
@@ -4509,7 +4524,7 @@ const STEPS = {
   calendar: { title: "Add your calendar (optional)", text: "Today's events show here and print at the top of your daily label. Google, Outlook and iCloud all work.",
               go: ["Add a calendar", () => goto("settings", "#calCard")], skip: true },
   printer: { title: () => !printsHere() ? "Printing your labels" : guide?.can_add_printer ? "Add your label printer" : "Your printer",
-             text: () => !printsHere() ? PRINT_AWAY
+             text: () => !printsHere() ? (hosted() ? PRINT_AWAY_HOSTED : PRINT_AWAY)
                : guide?.printers === 0 ? `${NO_PRINTER} ${noPrinterNext()} Until then, every ticket has Print on paper, which works with any printer.`
                : guide?.can_add_printer ? "Set up a printer walks you through it: Next Box finds it and reads which labels are in it. No label printer? Every ticket has Print on paper, which works with any printer."
                                         : "No label printer? Every ticket has Print on paper, which works with any printer. A household admin can add a label printer later.",

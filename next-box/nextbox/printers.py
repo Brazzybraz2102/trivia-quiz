@@ -42,6 +42,10 @@ class PrinterError(ValueError):
 # preview only), so it's never added as a printer.
 EXAMPLE_PRINTER_IP = "192.168.1.50"
 
+# Hosted mode (Settings.hosted, SPEC §35): no printer can be added or changed. The server answers 403 with
+# jobs.NO_PRINTER_HERE_HOSTED before it gets here, so this only guards direct callers.
+HOSTED_NO_PRINTERS = "a hosted Next Box has no printers: everyone prints from their own device"
+
 
 PRINTER_PORTS = (9100, 515, 631)  # raw printing, LPD, IPP: all a household outside Home may use
 _HOSTNAME = re.compile(r"(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*")
@@ -178,6 +182,11 @@ class Printers:
         self.settings = settings
 
     def all(self, household: str = "home") -> list[PrinterConfig]:
+        if self.settings.hosted:
+            # A hosted Next Box has no printer. Rows copied from a home install stay in the table for the day a
+            # home print helper reads them, but nothing lists, knocks on or prints to them from the host, and
+            # the .env printer is never seeded.
+            return []
         with self.db.connect() as conn:
             rows = [r[0] for r in conn.execute(select(db.printers.c.config).where(
                 db.printers.c.household_id == household).order_by(db.printers.c.position, db.printers.c.id))]
@@ -218,12 +227,16 @@ class Printers:
         return next((p for p in self.all(household) if p.id == pid), None)
 
     def add(self, data: dict, household: str = "home", restricted: bool = False) -> PrinterConfig:
+        if self.settings.hosted:
+            raise PrinterError(HOSTED_NO_PRINTERS)
         self.all(household)  # make sure a legacy .env printer is saved first
         cfg = validate({**data, "id": None}, restricted=restricted)
         self._insert(cfg, household)
         return cfg
 
     def update(self, pid: str, data: dict, household: str = "home", restricted: bool = False) -> PrinterConfig:
+        if self.settings.hosted:
+            raise PrinterError(HOSTED_NO_PRINTERS)
         current = self.get(pid, household)
         if current is None:
             raise KeyError(pid)

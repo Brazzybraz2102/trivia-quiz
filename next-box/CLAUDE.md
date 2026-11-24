@@ -11,8 +11,15 @@ Read SPEC.md first. Its §1 rules override everything:
 - Never add an automatic print, cron or retry. The only automatic print is HA's `source="auto"`, guarded by `Store.claim_auto`.
 - Deleting a task always needs the person's explicit confirmation.
 - Never print, echo or log `.env` values. `Settings.redacted()` is the only thing that's safe to show.
-- LAN only for now. People sign in with local accounts (`nextbox/auth.py`). New accounts need an invite code; never add
+- Two deployments, nothing in between (SPEC §35): a home PC behind a Cloudflare Tunnel (`from_internet` = the cf-*
+  headers; the shared `NEXTBOX_KEY` works on the home network only), or hosted with `NEXTBOX_HOSTED=1`
+  (`Settings.hosted`), where every request is from the internet, the shared key never works and nothing prints
+  at the host. People sign in with local accounts (`nextbox/auth.py`). New accounts need an invite code; never add
   open sign-up or a cloud login. The protected admin (`Accounts.protected()`) must always stay an active superadmin.
+  - Hosted: `jobs.prints_here` is false for everyone and every print is a dry run with `jobs.PRINT_AWAY_HOSTED`;
+    discovery, media and adding printers answer 403; doctor skips systemd, firewall and printer checks; nothing
+    there prints, scans a network or calls AI on its own. `NEXTBOX_FIRST_ADMIN` makes the first superadmin only
+    on an empty database (`upkeep.first_admin`), and never logs the password.
 - The .env printer belongs to the Home household only (`jobs._fallback`). Other households preview until they add one.
 - Thermal printers print black: a tag's color picks the roll (printer) and its print pattern (`render.PATTERNS`).
 - Roles are enforced server-side in `server.py` (`require`, `can_manage`). Don't add "log in as user".
