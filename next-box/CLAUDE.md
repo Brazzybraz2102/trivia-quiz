@@ -20,6 +20,11 @@ Read SPEC.md first. Its §1 rules override everything:
     discovery, media and adding printers answer 403; doctor skips systemd, firewall and printer checks; nothing
     there prints, scans a network or calls AI on its own. `NEXTBOX_FIRST_ADMIN` makes the first superadmin only
     on an empty database (`upkeep.first_admin`), and never logs the password.
+  - Hosted is the "LAN only" rule's other half: every address a person types must be public
+    (`NEXTBOX_ALLOW_PRIVATE_URLS` is ignored), and `NEXTBOX_FORWARDED_ALLOW_IPS` is never `*` (the visitor writes
+    the leftmost X-Forwarded-For; trust the host's private ranges, `config.HOSTED_FORWARDED_ALLOW_IPS`).
+  - One 512 MB process: never block the event loop (decode photos and call AI in a worker thread) and keep
+    picture decodes inside `picture_slots`; secrets go only into the host's settings form, never into render.yaml.
 - The .env printer belongs to the Home household only (`jobs._fallback`). Other households preview until they add one.
 - Thermal printers print black: a tag's color picks the roll (printer) and its print pattern (`render.PATTERNS`).
 - Roles are enforced server-side in `server.py` (`require`, `can_manage`). Don't add "log in as user".

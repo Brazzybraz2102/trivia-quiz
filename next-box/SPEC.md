@@ -1,6 +1,6 @@
 # Next Box: spec
 
-Each person's to-do app ↔ Brother QL-1110NWB label printer, running on Mike's desktop and reachable only on the home LAN.
+Each person's to-do app ↔ Brother QL-1110NWB label printer, running on Mike's desktop (home network, or his tunnel) or hosted at a hosting company (§35).
 
 ## 1. Rules (these override everything else)
 1. **Each task lives in exactly one list, and that list is its source of truth.** Everyone has a
@@ -21,7 +21,12 @@ Each person's to-do app ↔ Brother QL-1110NWB label printer, running on Mike's 
 5. **Server secrets live only in `.env`** (chmod 600). Each person's to-do app token or password is
    encrypted with `secret.key` (data dir, 600) in `users.connection`. Neither is ever shown, logged
    or put in a debug bundle. The data dir is 700.
-6. **LAN only**: no cloud relay and no remote access. The server binds to 0.0.0.0:8787.
+6. **Home network or hosted, nothing in between** (§35): at home the server binds to 0.0.0.0:8787 and is reached
+   on the home network or through the owner's own Cloudflare Tunnel, with no other cloud relay. Hosted
+   (`NEXTBOX_HOSTED=1`, Render) every request counts as from the internet: the shared key works nowhere, sign-in is
+   by local accounts only, nothing at the host prints, scans a network or reaches a private address, and the host's
+   database holds the data. Server secrets there live only in the host's environment settings (never in the
+   repository or render.yaml); `NEXTBOX_SECRET_KEY` takes the place of `secret.key`.
 7. **Sign-in**: people sign in to the web app with local accounts that live only on the desktop.
    New accounts need a one-time invite code (`/auth/signup`); there's no open sign-up and no
    cloud identity provider. One account can be the **protected admin** (`nextbox user protect`):
@@ -1279,7 +1284,11 @@ journal, friends and database (PostgreSQL through `DATABASE_URL`, copied from th
 - **Every request is from the internet.** `from_internet(request)` is true without looking at the cf-* headers, so
   the shared `X-NextBox-Key` is refused everywhere (403, `server.KEY_HOSTED`: Home Assistant can't reach a hosted
   Next Box), the lockouts count the forwarded address (`nextbox serve` trusts the proxy's headers per
-  `NEXTBOX_FORWARDED_ALLOW_IPS`), `Strict-Transport-Security` is on every answer, and the sign-in and OAuth cookies
+  `NEXTBOX_FORWARDED_ALLOW_IPS`; hosted, unset means `config.HOSTED_FORWARDED_ALLOW_IPS`, the private ranges
+  10/8, 172.16/12, 192.168/16 and loopback, which render.yaml also sets. Never `*`: uvicorn then takes the leftmost
+  X-Forwarded-For entry, which the visitor writes, and anyone could dodge the per-address limits; with the ranges
+  it walks from the right and takes the first address outside them, the one the host's front door added; doctor
+  flags `*`), `Strict-Transport-Security` is on every answer, and the sign-in and OAuth cookies
   are always `Secure` (the host only ever serves https). `NEXTBOX_KEY` may be left out: `build_default_app` starts
   without it when hosted.
 - **Nothing prints at the host.** `jobs.prints_here(household, printers, hosted)` is false for every household,
@@ -1307,20 +1316,34 @@ journal, friends and database (PostgreSQL through `DATABASE_URL`, copied from th
 - **Who runs it.** `GET /about` has `hosting` (`NEXTBOX_HOSTING`, or "the hosting company" when hosted and unset)
   and `hosted`, so privacy.html says "<hosting> carries traffic between your phone and Next Box" as with a tunnel,
   and when hosted adds "<hosting> also runs the server this Next Box lives on and keeps its database".
-  `NEXTBOX_OPERATOR` and `NEXTBOX_CONTACT` work as before. The data notice is unchanged: nothing more is visible
-  to the admin.
+  `NEXTBOX_OPERATOR` and `NEXTBOX_CONTACT` work as before. The Privacy Policy's short version says "a server run by
+  <operator>" (and "at <hosting>, a hosting company" when hosted), so `TERMS_VERSION` is 7 and everyone agrees again,
+  with a hosted "what's new" line (app.js, from `/auth/me` `hosting`). The data notice shows the admin nothing
+  more; its "kept on this Next Box computer" became "kept by this Next Box" (`DATA_NOTICE_VERSION` 4).
 - **First sign-in.** `NEXTBOX_FIRST_ADMIN="username:password"` (`upkeep.first_admin`, run by `create_app` at
   startup) makes that account the first superadmin only when the database has no accounts at all, with a one-time
   password (the first sign-in asks for a new one, since the host's settings page showed it); with any account there
   it does nothing, however long it stays set, and nothing of its value is ever logged or printed (a bad value gets
-  one fixed sentence on stderr, `upkeep.FIRST_ADMIN_BAD`). The audit event is `first_admin {role}`. The deploy guide
-  says to delete the variable once signed in.
+  one fixed sentence on stderr, `upkeep.FIRST_ADMIN_BAD`). The audit event is `first_admin {role}`. render.yaml does
+  not ask for it (the move copies the home accounts, and an account made first would block the copy); DEPLOY.md's
+  "Starting from nothing" adds it by hand and deletes it once signed in. With no accounts, `/auth/me`'s 401 names it
+  (`server.NO_ACCOUNTS_HOSTED`); the protected admin's refusal names the host's shell (`server.PROTECTED_HOSTED`).
 - **Doctor.** `nextbox doctor` says "hosted on <NEXTBOX_HOSTING>: ... those checks are skipped" (`doctor.HOSTED_SKIPPED`)
   and checks only the database, accounts, the AI key, HEIC, the UTC clock (fix: `TZ` in the host's settings),
   `NEXTBOX_HOSTING`, `NEXTBOX_PUBLIC_URL` and the sign-in providers; never systemd, the firewall, a LAN address or a
   printer, and it knocks on nothing. Its fixes name "the host's environment settings" instead of `.env` and
   `systemctl`.
+- **Small machine, one process.** The host gives 512 MB and one uvicorn process (the sign-in limits are counted in
+  memory). Snap's photo is decoded and read back in a worker thread, never on the event loop (`/health` keeps
+  answering during a minute-long read-back), its decode takes a picture slot (one in all when hosted, two at home), and
+  `scan.prepare_photo` decodes a JPEG small (draft) and shrinks before turning upright, so no full-size copy is
+  made; PNG, HEIC and other photos that decode whole are capped at `scan.HOSTED_MAX_PIXELS` (25 MP) when hosted,
+  for Snap and friends' photos (`scan.TOO_MANY_PIXELS`). `nextbox serve` passes `timeout_keep_alive=65` and
+  `limit_concurrency=50` when hosted. `NEXTBOX_ALLOW_PRIVATE_URLS` is ignored when hosted
+  (`providers.http.allow_private`; doctor says so): the private network there is the host's.
 - **Rules that hold when hosted.** Nothing prints, scans a network or calls AI on its own; a real print still goes
   through `printer._send_raster` only (there's simply none at the host); invite-only, the protected admin, private
-  journals and friends' notes, anonymous feedback and the data notice are exactly as at home. Tests:
+  journals and friends' notes, anonymous feedback and what the data notice lets the admin see are exactly as at
+  home. The home rule "the shared key works on the home network only" becomes, hosted: the shared key works nowhere,
+  every address a person types must be public, and nothing at the host reaches a home network. Tests:
   `tests/test_hosted.py`.

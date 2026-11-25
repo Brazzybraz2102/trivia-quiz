@@ -70,13 +70,17 @@ services:
       - key: NEXTBOX_KEY                # the shared X-NextBox-Key (Home Assistant, scripts). A hosted Next Box
         generateValue: true             # refuses it (SPEC §35), so nothing here uses it; it may be left out. Kept
                                         # so the same image also starts at home, where the server insists on one.
-      - key: NEXTBOX_SECRET_KEY         # locks people's saved to-do app connections. Any text of 32+
-        generateValue: true             # characters works; before copying the home data, replace it with
-                                        # the content of the home PC's secret.key (DEPLOY.md), never shown.
+      - key: NEXTBOX_SECRET_KEY         # locks people's saved to-do app connections: the one line of the home
+        sync: false                     # PC's secret.key, pasted into the Blueprint form (DEPLOY.md step 2; the
+                                        # migration script puts it on the clipboard, never on screen). Starting
+                                        # from nothing: any 32+ random characters. Asked for once, so a later
+                                        # Blueprint sync never puts a different value over it.
       - key: NEXTBOX_HOSTED
         value: "1"                      # at a hosting company: no printer here, every request is from the internet
-      - key: NEXTBOX_FORWARDED_ALLOW_IPS
-        value: "*"                      # Render's proxy fronts every request: trust its X-Forwarded-* headers
+      - key: NEXTBOX_FORWARDED_ALLOW_IPS  # whose X-Forwarded-For to believe: Render's proxies, which reach the
+        value: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1,::1"  # service from private addresses
+                                        # (unverified which). Never "*": the visitor writes the leftmost entry
+                                        # and could dodge the per-address sign-in limits. DEPLOY.md step 4 checks it.
       - key: NEXTBOX_HOSTING
         value: Render                   # named on the Privacy and About pages
       - key: NEXTBOX_PUBLIC_URL
@@ -90,8 +94,6 @@ services:
         value: America/New_York         # "today" and due dates turn over at Mike's midnight, not UTC's
       - key: ANTHROPIC_API_KEY          # Snap and the AI helpers. Asked for on the first sync; leave it
         sync: false                     # empty if you don't have one yet (Snap and the helpers say so).
-      - key: NEXTBOX_FIRST_ADMIN        # "username:password": makes that superadmin at the first start,
-        sync: false                     # only while the database has no accounts. Delete it afterwards.
 
 databases:
   - name: nextbox-db
@@ -99,4 +101,6 @@ databases:
     databaseName: nextbox
     user: nextbox
     # ipAllowList is left at Render's default (every address, with the database's password and TLS) so the
-    # one-time copy from the home PC works (DEPLOY.md). Afterwards: Dashboard → nextbox-db → Access Control.
+    # one-time copy from the home PC works (DEPLOY.md step 3). Afterwards DEPLOY.md step 3 closes it:
+    # Dashboard → nextbox-db → Access Control. (Starting from nothing instead of copying? NEXTBOX_FIRST_ADMIN,
+    # DEPLOY.md "Starting from nothing", made by hand on the Environment page, not here.)

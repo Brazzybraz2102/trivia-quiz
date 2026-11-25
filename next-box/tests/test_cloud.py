@@ -50,11 +50,29 @@ def test_hosted_comes_from_nextbox_hosted_and_shows_in_redacted(clean_env, monke
 
 
 def test_forwarded_allow_ips_default_and_override(clean_env, monkeypatch):
+    from nextbox.config import HOSTED_FORWARDED_ALLOW_IPS
     assert load_settings(NO_ENV_FILE).forwarded_allow_ips == "127.0.0.1,::1"
     monkeypatch.setenv("NEXTBOX_FORWARDED_ALLOW_IPS", " * ")
     assert load_settings(NO_ENV_FILE).forwarded_allow_ips == "*"
     monkeypatch.setenv("NEXTBOX_FORWARDED_ALLOW_IPS", "")
     assert load_settings(NO_ENV_FILE).forwarded_allow_ips == "127.0.0.1,::1"
+    # Hosted and unset: the host's private ranges, never "*" (the visitor writes the leftmost entry).
+    monkeypatch.setenv("NEXTBOX_HOSTED", "1")
+    assert load_settings(NO_ENV_FILE).forwarded_allow_ips == HOSTED_FORWARDED_ALLOW_IPS
+    assert "*" not in HOSTED_FORWARDED_ALLOW_IPS and "10.0.0.0/8" in HOSTED_FORWARDED_ALLOW_IPS
+
+
+def test_hosted_trust_list_takes_the_address_renders_proxy_added_not_one_the_visitor_wrote():
+    """uvicorn with the hosted list walks X-Forwarded-For from the right: a made-up leftmost entry never counts.
+    With "*" it would take the leftmost (what the visitor wrote): the reason render.yaml no longer says "*"."""
+    from uvicorn.middleware.proxy_headers import _TrustedHosts
+
+    from nextbox.config import HOSTED_FORWARDED_ALLOW_IPS
+    trusted = _TrustedHosts(HOSTED_FORWARDED_ALLOW_IPS)
+    assert "10.1.2.3" in trusted and "198.51.100.7" not in trusted
+    # The visitor sent "X-Forwarded-For: 203.0.113.9"; Render's edge added the real 198.51.100.7, then an inner hop.
+    assert trusted.get_trusted_client_address("203.0.113.9, 198.51.100.7, 10.20.0.4")[0] == "198.51.100.7"
+    assert _TrustedHosts("*").get_trusted_client_address("203.0.113.9, 198.51.100.7")[0] == "203.0.113.9"
 
 
 def test_hosted_data_dir_falls_back_to_the_temp_dir_when_home_is_not_writable(clean_env, monkeypatch, tmp_path):
@@ -142,11 +160,19 @@ def test_serve_passes_the_forwarded_ips_and_the_hosts_port_to_uvicorn(clean_env,
     assert cli.main(["serve"]) == 0
     assert runs[-1]["app"] == "the app" and runs[-1]["port"] == 10000 and runs[-1]["host"] == "0.0.0.0"
     assert runs[-1]["proxy_headers"] is True and runs[-1]["forwarded_allow_ips"] == "127.0.0.1,::1"
-    assert runs[-1]["access_log"] is False
-    monkeypatch.setenv("NEXTBOX_FORWARDED_ALLOW_IPS", "*")
+    assert runs[-1]["access_log"] is False and "limit_concurrency" not in runs[-1]  # at home: uvicorn's defaults
+    monkeypatch.setenv("NEXTBOX_FORWARDED_ALLOW_IPS", "10.0.0.0/8")
     monkeypatch.setenv("NEXTBOX_PORT", "8787")
     assert cli.main(["serve"]) == 0
-    assert runs[-1]["forwarded_allow_ips"] == "*" and runs[-1]["port"] == 8787
+    assert runs[-1]["forwarded_allow_ips"] == "10.0.0.0/8" and runs[-1]["port"] == 8787
+    # Hosted: one process behind the host's proxy keeps idle connections longer than it, and caps a burst.
+    monkeypatch.delenv("NEXTBOX_FORWARDED_ALLOW_IPS")
+    monkeypatch.setenv("NEXTBOX_HOSTED", "1")
+    assert cli.main(["serve"]) == 0
+    from nextbox.config import HOSTED_FORWARDED_ALLOW_IPS
+    assert runs[-1]["forwarded_allow_ips"] == HOSTED_FORWARDED_ALLOW_IPS
+    assert runs[-1]["timeout_keep_alive"] == 65 and runs[-1]["limit_concurrency"] == 50
+    assert "workers" not in runs[-1]  # one process: the sign-in limits are counted in memory
 
 
 # --- scripts/cloud/start.sh ----------------------------------------------------------------------------
@@ -235,19 +261,22 @@ def test_render_yaml_parses_and_names_every_setting_the_hosted_server_needs():
     env = {e["key"]: e for e in service["envVars"]}
     assert set(env) == {"DATABASE_URL", "NEXTBOX_KEY", "NEXTBOX_SECRET_KEY", "NEXTBOX_HOSTED",
                         "NEXTBOX_FORWARDED_ALLOW_IPS", "NEXTBOX_HOSTING", "NEXTBOX_PUBLIC_URL", "NEXTBOX_OPERATOR",
-                        "NEXTBOX_CONTACT", "TZ", "ANTHROPIC_API_KEY", "NEXTBOX_FIRST_ADMIN"}
+                        "NEXTBOX_CONTACT", "TZ", "ANTHROPIC_API_KEY"}
+    # No NEXTBOX_FIRST_ADMIN: Mike's path copies the home accounts, and an account made first blocks the copy.
     [database] = blueprint["databases"]
     assert env["DATABASE_URL"]["fromDatabase"] == {"name": database["name"], "property": "connectionString"}
     assert env["NEXTBOX_KEY"] == {"key": "NEXTBOX_KEY", "generateValue": True}
-    assert env["NEXTBOX_SECRET_KEY"] == {"key": "NEXTBOX_SECRET_KEY", "generateValue": True}
-    assert env["NEXTBOX_HOSTED"]["value"] == "1" and env["NEXTBOX_FORWARDED_ALLOW_IPS"]["value"] == "*"
+    from nextbox.config import HOSTED_FORWARDED_ALLOW_IPS
+    assert env["NEXTBOX_HOSTED"]["value"] == "1"
+    assert env["NEXTBOX_FORWARDED_ALLOW_IPS"]["value"] == HOSTED_FORWARDED_ALLOW_IPS  # never "*"
     assert env["NEXTBOX_HOSTING"]["value"] == "Render"
     assert env["NEXTBOX_PUBLIC_URL"]["value"] == "https://nextbox.braznarkel.com"
     assert env["NEXTBOX_OPERATOR"]["value"] == "Braznarkel"  # what server.py falls back to anyway
     assert env["TZ"]["value"] == "America/New_York"
     # Asked for in the Dashboard, never in the file: the two secrets, and Mike's contact address (no made-up
     # address in a public repository; the pages say "ask the person who invited you" while it is empty).
-    for secret in ("ANTHROPIC_API_KEY", "NEXTBOX_FIRST_ADMIN", "NEXTBOX_CONTACT"):
+    # NEXTBOX_SECRET_KEY too: secret.key's line, pasted in the form once (a later sync keeps it).
+    for secret in ("NEXTBOX_SECRET_KEY", "ANTHROPIC_API_KEY", "NEXTBOX_CONTACT"):
         assert env[secret] == {"key": secret, "sync": False}
     assert database["plan"] == "basic-256mb" and database["databaseName"] == "nextbox" and database["user"] == "nextbox"
     # Every value in the file is a string (YAML would otherwise turn "1" into a number).

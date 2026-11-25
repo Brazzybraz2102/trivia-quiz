@@ -15,9 +15,18 @@ from .base import ProviderError
 RETRY_STATUS = {429, 500, 502, 503, 504}
 
 
+def hosted_env() -> bool:
+    """NEXTBOX_HOSTED, read like config.Settings.hosted (load_settings puts .env into the environment)."""
+    return os.environ.get("NEXTBOX_HOSTED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def allow_private() -> bool:
     """Off by default: people (testers too) type server addresses into Next Box, so it must not
-    fetch from the home network. Set NEXTBOX_ALLOW_PRIVATE_URLS=1 for a CalDAV server on your LAN."""
+    fetch from the home network. Set NEXTBOX_ALLOW_PRIVATE_URLS=1 for a CalDAV server on your LAN.
+    Never on a hosted Next Box (NEXTBOX_HOSTED, SPEC §35): there the private network is the hosting
+    company's, and no tester's address may reach it (doctor says the setting is ignored)."""
+    if hosted_env():
+        return False
     return os.environ.get("NEXTBOX_ALLOW_PRIVATE_URLS", "").strip().lower() in ("1", "true", "yes")
 
 

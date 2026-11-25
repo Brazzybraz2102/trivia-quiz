@@ -205,6 +205,11 @@ def build_prompt(marks: list[dict] | None, manifest: list[dict]) -> str:
 NOTE_CHARS = 40          # a row's note names the kind of mark, never a transcription (admins see it)
 MAX_EDGE = 2048          # plenty for handwriting; keeps uploads small and cost down
 MAX_PIXELS = 50_000_000  # refuse decompression bombs
+# A hosted Next Box (512 MB in all) takes PNG, HEIC and other non-JPEG photos up to this: they decode
+# whole (a JPEG doesn't). 25 MP covers a 24 MP iPhone photo; 48 MP "HEIF Max" ones are refused there.
+HOSTED_MAX_PIXELS = 25_000_000
+TOO_MANY_PIXELS = ("That photo is too big for Next Box to read. Share it as a JPEG, or on an iPhone open the Settings "
+                   "app → Camera → Formats and pick 24 MP instead of 48 MP.")
 HEIC_TYPES = {"image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"}
 HEIC_HELP = ("That's a HEIC photo, which this Next Box can't open yet. On an iPhone, open the Settings app → "
              "Camera → Formats → Most Compatible, or share the photo as a JPEG.")
@@ -229,8 +234,13 @@ def heic_supported() -> bool:
     return True
 
 
-def prepare_photo(data: bytes) -> tuple[bytes, str]:
-    """Phone photo -> upright JPEG no bigger than MAX_EDGE on its long side."""
+def prepare_photo(data: bytes, max_pixels: int = MAX_PIXELS) -> tuple[bytes, str]:
+    """Phone photo -> upright JPEG no bigger than MAX_EDGE on its long side.
+
+    Memory stays small (a hosted Next Box has 512 MB for everything): a JPEG is decoded straight at 1/2, 1/4
+    or 1/8 of its size (draft), and the picture is shrunk to MAX_EDGE before it's turned upright or
+    converted, so no full-size copy is ever made. A PNG or HEIC is decoded whole, so a hosted Next Box gives
+    those a lower pixel limit (HOSTED_MAX_PIXELS, passed in as max_pixels)."""
     import io
 
     from PIL import Image, ImageOps
@@ -239,8 +249,18 @@ def prepare_photo(data: bytes) -> tuple[bytes, str]:
     heic = heic_supported()
     try:
         img = Image.open(io.BytesIO(data))  # reads the header only; pixels aren't decoded yet
+        fmt = (img.format or "").upper()
+        limit = MAX_PIXELS if fmt in ("JPEG", "MPO") else min(max_pixels, MAX_PIXELS)
         if img.width * img.height > MAX_PIXELS:
             raise PhotoError("photo is far too large")
+        if img.width * img.height > limit:  # a hosted Next Box, a 48 MP HEIC or a huge PNG
+            raise PhotoError(TOO_MANY_PIXELS)
+        if fmt in ("JPEG", "MPO") and max(img.size) > MAX_EDGE:
+            s = MAX_EDGE / max(img.size)  # decoded at the smallest 1/2^n still at least MAX_EDGE long
+            img.draft("RGB", (max(1, round(img.width * s)), max(1, round(img.height * s))))
+        if img.mode in ("P", "1"):  # resized by colour, not by palette index
+            img = img.convert("RGBA" if "transparency" in img.info else "RGB")
+        img.thumbnail((MAX_EDGE, MAX_EDGE))  # decodes, then shrinks in place, keeping EXIF for the next line
         img = ImageOps.exif_transpose(img)  # phones store rotation separately
         img = img.convert("RGB")
     except PhotoError:
@@ -251,7 +271,6 @@ def prepare_photo(data: bytes) -> tuple[bytes, str]:
         if not heic and data[4:12] in (b"ftypheic", b"ftypheix", b"ftypmif1", b"ftypmsf1", b"ftyphevc"):
             raise PhotoError(HEIC_HELP) from exc
         raise PhotoError("That file isn't a photo Next Box can read. Try a JPEG or PNG.") from exc
-    img.thumbnail((MAX_EDGE, MAX_EDGE))
     out = io.BytesIO()
     img.save(out, "JPEG", quality=85)
     return out.getvalue(), "image/jpeg"

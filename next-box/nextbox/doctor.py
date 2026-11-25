@@ -16,7 +16,7 @@ import urllib.request
 
 from . import printer
 from .auth import Accounts
-from .config import Settings, app_version
+from .config import HOSTED_FORWARDED_ALLOW_IPS, Settings, app_version
 from .printers import EXAMPLE_PRINTER_IP, Printers
 
 OK, BAD, NOTE = "✓", "✗", "•"
@@ -245,6 +245,13 @@ def _hosted_checks(settings: Settings, accounts: Accounts | None, say) -> bool:
             say(OK, f"Sign in with {name} is on (sign-in comes back to {st['redirect_uri']})")
         else:
             say(NOTE, f"Sign in with {name} is off (needs {', '.join(st['missing'])} in {HOSTED_SETTINGS})")
+    if os.environ.get("NEXTBOX_ALLOW_PRIVATE_URLS", "").strip():
+        say(NOTE, "NEXTBOX_ALLOW_PRIVATE_URLS is ignored here: a hosted Next Box only fetches public https "
+                  "addresses (the private network is the hosting company's)",
+            f"delete it from {HOSTED_SETTINGS}")
+    if settings.forwarded_allow_ips.replace(" ", "") == "*":
+        say(NOTE, "NEXTBOX_FORWARDED_ALLOW_IPS is \"*\": anyone can make up the address sign-in limits count",
+            f"set it to {HOSTED_FORWARDED_ALLOW_IPS} (or delete it) in {HOSTED_SETTINGS} (the host's own proxies only)")
     say(NOTE, "no printer here: everyone prints from their own device (Print on paper, or Save label image)")
     return True
 

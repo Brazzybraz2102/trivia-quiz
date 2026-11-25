@@ -274,13 +274,15 @@ async function boot() {
   if (!me.consented || me.terms_ok === false) {  // new, or the notice or Terms changed since they agreed
     $("#noticeBody").textContent = me.data_notice;
     $("#noticeChanged").hidden = !me.notice_changed;
-    // What's new in the Privacy Policy and Terms (TERMS_VERSION 3, 4, 5 and 6), when that's what changed.
+    // What's new in the Privacy Policy and Terms (TERMS_VERSION 3, 4, 5 and 6; 7: hosted), when that's what changed.
     $("#noticeChanged").textContent = "This changed since you last agreed. " + (me.terms_ok === false
       ? "The Privacy Policy now says that Snap also sends the marks you use (each symbol and your own words for what it means) with your photo, so it can read them. "
         + "It says just what the AI helpers (Break it down and Look back on my week) send to Anthropic, and that they only do it when you tap them. "
         + "It also says that with Journal mode off, a photo with handwriting on it is still kept as that day's journal page. "
         + "New: Friends. You can add friends and send them notes, doodles, photos and hearts. Only you and that friend see a note (not even the admin), "
-        + "a note you don't keep is deleted 30 days after it arrives, and it prints only when you tap Print. The Terms say to send only what you're happy to have printed. " : "")
+        + "a note you don't keep is deleted 30 days after it arrives, and it prints only when you tap Print. The Terms say to send only what you're happy to have printed. "
+        + (hosted() ? `New: Next Box now runs at ${me.hosting || "a hosting company"}, which runs the server and keeps its database, so your list, journal and notes are stored there. `
+          + "The admin sees nothing more than before, and labels print from your own phone. " : "") : "")
       + "Have a quick look before you carry on.";
     $("#noticeMsg").textContent = "";
     if (!$("#noticeDialog").open) $("#noticeDialog").showModal();
@@ -3846,12 +3848,14 @@ async function openUser(name) {
   $("#udOff").checked = u.disabled; $("#udBeta").checked = u.beta; $("#udDebug").checked = u.debug; $("#udTemp").checked = u.must_change;
   const self = u.username === me.username, locked = self || u.protected;
   $("#udOff").disabled = locked; $("#udRole").disabled = locked;
-  // Only the Next Box computer changes the protected admin (the server refuses the rest too).
+  // Only the Next Box computer (hosted: a shell on the server) changes the protected admin (the server refuses the rest too).
   const guarded = u.protected && !self;
   for (const id of ["#udReset", "#udSignout", "#udHome", "#udTemp", "#udEmail", "#udPrefs"]) $(id).disabled = guarded;
   // Your own password and devices live in Profile; from here they'd only fail or sign you out.
   if (self) for (const id of ["#udReset", "#udSignout", "#udTemp"]) $(id).disabled = true;
-  if (u.protected) $("#udSub").textContent += " · protected admin: always a superadmin. Only the Next Box computer can change it";
+  // Hosted there's no Next Box computer: only a shell on the server (server.PROTECTED_HOSTED).
+  if (u.protected) $("#udSub").textContent += " · protected admin: always a superadmin. " + (hosted()
+    ? "Only a shell on the server can change it (your host's dashboard → the service → Shell)" : "Only the Next Box computer can change it");
   if (self) $("#udSub").textContent += " · This is you: change your password and sign out devices in Profile";
   $("#udMsg").textContent = ""; $("#udConfirm").value = ""; $("#udDelete").disabled = true;
   if (fresh) $("#udTempOut").innerHTML = "";  // a one-time password stays while you keep helping the same person

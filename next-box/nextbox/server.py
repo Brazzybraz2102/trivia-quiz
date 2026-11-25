@@ -297,11 +297,12 @@ class PrinterBody(BaseModel):
 # Shown to everyone once; their "I understand" is recorded. Bump the version if it changes.
 # (Saying the journal stays private shows the admin nothing more, so that line needed no bump; the same
 # goes for notes between friends, which the admin can't see either.)
-DATA_NOTICE_VERSION = 3
+# 4: "kept on this Next Box computer" became "kept by this Next Box": true at home and when hosted (SPEC §35).
+DATA_NOTICE_VERSION = 4
 DATA_NOTICE = ("The admin can see how you use Next Box: your printed tickets (including the tasks on "
                "them), photo read-backs, settings, activity, signed-in devices, and how many open tasks "
-               "are on your built-in list (not what they say). Tasks on your built-in list are kept on "
-               "this Next Box computer. Your journal stays private, even from the admin. So do the "
+               "are on your built-in list (not what they say). Tasks on your built-in list are kept by "
+               "this Next Box. Your journal stays private, even from the admin. So do the "
                "notes you send your friends: no admin screen shows them or who your friends are. Your password and "
                "your to-do app password or token are never visible to anyone, and feedback stays anonymous.")
 
@@ -344,7 +345,7 @@ class SignupBody(BaseModel):
     agree: bool = False  # the Terms of Use and Privacy Policy
 
 
-TERMS_VERSION = 6  # bump when terms.html or privacy.html change in a way people should re-read
+TERMS_VERSION = 7  # bump when terms.html or privacy.html change in a way people should re-read
 #   2: the Privacy Policy covers the Journal (photos and handwriting kept, private to you) and says
 #      Claude (Anthropic) reads your handwriting as well as your marks.
 #   3: with Journal mode off, a photo with handwriting (notes or a win) is still kept as a journal page.
@@ -352,6 +353,8 @@ TERMS_VERSION = 6  # bump when terms.html or privacy.html change in a way people
 #   5: Snap also sends the marks you use (each symbol, its action and your words for what it means).
 #   6: Friends: what's kept when you add friends and send notes, doodles, photos and hearts, who sees them
 #      (only the two of you), 30 days unless kept, and that a note prints only when you tap Print.
+#   7: hosted at a hosting company (Render), which runs the server and keeps the database, so everything
+#      Next Box keeps is stored there; the short version says "a server", not "a computer" (SPEC §35).
 DB_NAMES = {"sqlite": "SQLite", "postgresql": "PostgreSQL"}  # for the About page
 
 # Hosted mode (Settings.hosted, SPEC §35): the shared key has no home network to work on, and the owner adds the
@@ -359,6 +362,13 @@ DB_NAMES = {"sqlite": "SQLite", "postgresql": "PostgreSQL"}  # for the About pag
 KEY_HOSTED = "The shared Next Box key doesn't work on a hosted Next Box: sign in with an account instead."
 NO_KEY_OWNER_HOSTED = ("This needs an AI key. Add ANTHROPIC_API_KEY in your host's environment settings "
                        "(console.anthropic.com → API keys), then redeploy.")
+# There's no Next Box computer to run `nextbox ...` on: the host's own shell for the service is (DEPLOY.md §8).
+PROTECTED_HOSTED = ("That's the protected admin. Only a shell on the server can change it: your host's "
+                    "dashboard → the Next Box service → Shell, then nextbox user ….")
+NO_ACCOUNTS_HOSTED = ("no accounts yet: set NEXTBOX_FIRST_ADMIN=username:password in your host's environment "
+                      "settings, redeploy, sign in, then delete it")
+UPDATE_HINT = "(On the Next Box computer: scripts/update.sh)"
+UPDATE_HINT_HOSTED = "(Hosted: redeploy the latest code from your host's dashboard.)"
 
 
 class InviteBody(BaseModel):
@@ -523,8 +533,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         """The protected admin is changed only from the Next Box computer (`nextbox user ...`),
         so another superadmin can't reset, sign out, move or lock out the owner."""
         if target_name == accounts.protected() and caller.name != target_name:
-            raise HTTPException(400, "That's the protected admin. Only the Next Box computer can change it "
-                                     "(nextbox user …).")
+            raise HTTPException(400, PROTECTED_HOSTED if ctx.settings.hosted else
+                                "That's the protected admin. Only the Next Box computer can change it "
+                                "(nextbox user …).")
 
     # -------------------------------------------------------------- running
     def acting_as(caller: Caller) -> str:
@@ -748,6 +759,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         name = accounts.session_user(_token(request))
         if not name:
             raise HTTPException(401, "sign in required" if accounts.has_users()
+                                else NO_ACCOUNTS_HOSTED if ctx.settings.hosted
                                 else "no accounts yet: run `nextbox user add <name>` on the desktop")
         user = accounts.get(name)
         s = server_settings.get()
@@ -758,6 +770,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                 "household": (accounts.household(user["household_id"]) or {}).get("name", ""),
                 "prints_here": jobs.prints_here(user["household_id"], printers, ctx.settings.hosted),
                 "hosted": ctx.settings.hosted,  # runs at a hosting company: no printer here, nothing to add
+                "hosting": os.environ.get("NEXTBOX_HOSTING", "").strip()[:80] if ctx.settings.hosted else "",
                 # The same printing flags as GET /status, so the app's Preview only box is right as soon as
                 # this answers, before /status (which waits up to 2 s on whether the printer is online).
                 "printers": len(printers),
@@ -1794,15 +1807,22 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(415, scan.HEIC_HELP)
         if media_type not in {"image/jpeg", "image/png", "image/webp", "image/gif", *scan.HEIC_TYPES}:
             raise HTTPException(415, f"unsupported image type {media_type}")
+        # Decoding and the read-back both run in a worker thread, never on the event loop: one Snap (up to a
+        # minute with the AI) must not hold up everyone else's requests, /health included (a host restarts a
+        # server whose health check stops answering). The decode takes one of the picture slots, like a friend's
+        # photo, so memory stays bounded; the AI call holds none.
+        await _picture_slot()
         try:
-            data, media_type = scan.prepare_photo(data)  # upright, resized JPEG
+            data, media_type = await run_in_threadpool(scan.prepare_photo, data, max_photo_pixels)  # upright JPEG
         except scan.PhotoError as exc:
             raise HTTPException(415, str(exc)) from exc
         except ValueError as exc:  # something the person can fix: an empty list, a bad date
             raise HTTPException(400, str(exc)) from exc
+        finally:
+            picture_slots.release()
         c = rctx(caller)
         fn = vision or scan.claude_vision(ctx.settings, mark_styles.effective(c.prefs))  # their own marks
-        rec = run(caller, "scan", scan.scan_photo, c, fn, data, media_type, label_id or None)
+        rec = await run_in_threadpool(run, caller, "scan", scan.scan_photo, c, fn, data, media_type, label_id or None)
         return _scan_reply(caller, rec)
 
     def _scan_reply(caller: Caller, rec: dict) -> dict:
@@ -2300,8 +2320,20 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     note_preview_window = _Window(300, 3600)     # "how it prints" while composing
     note_photo_preview_window = _Window(120, 3600)  # ...of a photo: each one is decoded (the app sends a small copy)
     # Pictures are decoded and re-encoded off the server's event loop (in a worker thread), two at a time at
-    # most, so one big photo never holds up anyone else's requests and memory stays bounded.
-    picture_slots = threading.BoundedSemaphore(2)
+    # most (one when hosted), so one big photo never holds up anyone else's requests and memory stays bounded.
+    # Snap's photo too (do_scan). A hosted Next Box has 512 MB in all: one slot there (a 24 MP HEIC peaks near
+    # 180 MB while it decodes), and PNG and HEIC photos, which decode whole, are capped lower
+    # (scan.HOSTED_MAX_PIXELS); a JPEG decodes small at any size.
+    picture_slots = threading.BoundedSemaphore(1 if ctx.settings.hosted else 2)
+    max_photo_pixels = scan.HOSTED_MAX_PIXELS if ctx.settings.hosted else scan.MAX_PIXELS
+
+    async def _picture_slot() -> None:
+        """Wait (without a thread) for one of the picture slots; the caller releases it."""
+        deadline = time.monotonic() + 60
+        while not picture_slots.acquire(blocking=False):
+            if time.monotonic() > deadline:
+                raise HTTPException(503, "Next Box is busy with other pictures. Try again in a moment.")
+            await asyncio.sleep(0.05)
     TOO_MANY_NOTES = (f"That's {friendship.NOTES_PER_DAY} notes in the last 24 hours, the most for a day. "
                       "Try again later.")
 
@@ -2352,7 +2384,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             import qrcode
         except ImportError:  # updated without its packages: the link itself still works
             raise HTTPException(503, "The QR code isn't ready on this Next Box yet: copy or share the link instead. "
-                                     "(On the Next Box computer: scripts/update.sh)") from None
+                                     + (UPDATE_HINT_HOSTED if ctx.settings.hosted else UPDATE_HINT)) from None
         link = _friend_link(request, _privately(caller, "friend_qr", friendship.Friends(accounts.db, caller.name).code))
         qr = qrcode.QRCode(border=4, box_size=10, error_correction=qrcode.constants.ERROR_CORRECT_M)
         qr.add_data(link)
@@ -2442,11 +2474,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(400, "Pick a photo first." if kind == "photo" else "Draw something first.")
         limit = friendship.PHOTO_UPLOAD if kind == "photo" else friendship.DOODLE_UPLOAD
         # Wait for a picture slot first: a waiting upload holds neither a worker thread nor its 15 MB.
-        deadline = time.monotonic() + 60
-        while not picture_slots.acquire(blocking=False):
-            if time.monotonic() > deadline:
-                raise HTTPException(503, "Next Box is busy with other pictures. Try again in a moment.")
-            await asyncio.sleep(0.05)
+        await _picture_slot()
         try:
             chunks, size = [], 0
             while chunk := await image.read(1 << 20):
@@ -2463,9 +2491,11 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             picture_slots.release()
 
     def _clean_picture(kind: str, data: bytes) -> bytes:
-        """In a worker thread, never on the event loop (_upload holds one of the two picture slots)."""
+        """In a worker thread, never on the event loop (_upload holds a picture slot)."""
         try:
-            return friendship.clean_photo(data) if kind == "photo" else friendship.clean_doodle(data)
+            if kind == "photo":  # hosted: a PNG or HEIC at most scan.HOSTED_MAX_PIXELS (it decodes whole)
+                return friendship.clean_photo(data, max_photo_pixels if ctx.settings.hosted else None)
+            return friendship.clean_doodle(data)
         except friendship.FriendError as exc:
             raise HTTPException(exc.status, exc.message) from None
 

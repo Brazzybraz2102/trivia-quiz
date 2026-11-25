@@ -465,3 +465,133 @@ const { chromium } = require('playwright');
     assert out["settingsNext"] == jobs.PRINT_AWAY_HOSTED and out["settingsButtons"] == [True, True]
     assert out["adminAway"] == jobs.PRINT_AWAY_HOSTED and out["adminHidden"] == [True, True, True]
     assert out["toast"] == [False, True]  # the walkthrough stayed closed; the hosted words were shown instead
+
+
+# --- the second review: one small process, private addresses, the words a hosted owner sees ---------------------------
+def test_health_answers_while_a_snap_is_being_read(hosted):
+    """/scan decodes and reads back in a worker thread: a minute-long AI call must not stop /health (the host would
+    stop sending traffic after 15 s of failed checks and restart the server after 60)."""
+    from conftest import tiny_jpeg
+
+    from nextbox.scan import ReadBack
+    ctx, a, client, p, app = hosted
+    started, release = threading.Event(), threading.Event()
+
+    def slow_vision(image, media_type, manifest):
+        started.set()
+        release.wait(10)
+        return ReadBack(label_code=None, rows=[], notes="", win="")
+    slow = create_app(ctx, vision=slow_vision)
+    with TestClient(slow, base_url="https://testserver") as c:  # one event loop for every request, as in uvicorn
+        assert c.post("/auth/login", json={"username": "mike", "password": "mike password"}).status_code == 200
+        answers = {}
+        t = threading.Thread(target=lambda: answers.setdefault("scan", c.post(
+            "/scan", files={"photo": ("p.jpg", tiny_jpeg((800, 600)), "image/jpeg")})))
+        t.start()
+        try:
+            assert started.wait(10), "the read-back never started"
+            t0 = time.monotonic()
+            assert c.get("/health").json() == {"ok": True}
+            assert time.monotonic() - t0 < 2, "/health waited for the read-back"
+        finally:
+            release.set()
+            t.join(15)
+        assert answers["scan"].status_code == 200, answers["scan"].text
+
+
+def test_photos_decode_small_and_hosted_caps_whole_decodes():
+    """prepare_photo shrinks before turning upright (no full-size copy), a JPEG decodes small at any size, and a
+    hosted Next Box refuses a PNG or HEIC over HOSTED_MAX_PIXELS with words a person can act on."""
+    import io
+
+    from PIL import Image
+
+    from nextbox import friends, scan
+    exif = Image.Exif()
+    exif[0x0112] = 6  # stored sideways: turned upright after the shrink
+    jpeg = io.BytesIO()
+    Image.new("RGB", (6000, 4500), "white").save(jpeg, "JPEG", exif=exif.tobytes())
+    data, media = scan.prepare_photo(jpeg.getvalue(), scan.HOSTED_MAX_PIXELS)
+    assert media == "image/jpeg" and Image.open(io.BytesIO(data)).size == (1536, 2048)
+    png = io.BytesIO()
+    Image.new("1", (6000, 4500)).save(png, "PNG")  # 27 MP: fine at home, too many for a hosted Next Box
+    with pytest.raises(scan.PhotoError) as e:
+        scan.prepare_photo(png.getvalue(), scan.HOSTED_MAX_PIXELS)
+    assert str(e.value) == scan.TOO_MANY_PIXELS and "24 MP" in scan.TOO_MANY_PIXELS
+    assert max(Image.open(io.BytesIO(scan.prepare_photo(png.getvalue())[0])).size) == scan.MAX_EDGE  # at home
+    pal = io.BytesIO()
+    Image.new("P", (3000, 1000), 3).save(pal, "PNG")  # a palette picture is resized by colour
+    assert Image.open(io.BytesIO(scan.prepare_photo(pal.getvalue())[0])).size == (2048, 683)
+    # Friends' photos: the same cap for pictures that decode whole, none for a JPEG.
+    with pytest.raises(friends.FriendError) as e:
+        friends.clean_photo(png.getvalue(), scan.HOSTED_MAX_PIXELS)
+    assert e.value.status == 413 and "JPEG" in e.value.message
+    assert friends.clean_photo(jpeg.getvalue(), scan.HOSTED_MAX_PIXELS)
+    src = Path(server.__file__).read_text()
+    do_scan = src[src.index("async def do_scan("):src.index("def _scan_reply(")]
+    assert "run_in_threadpool(scan.prepare_photo" in do_scan and "run_in_threadpool(run," in do_scan
+    assert "_picture_slot()" in do_scan and "picture_slots.release()" in do_scan
+
+
+def test_private_addresses_stay_refused_when_hosted_whatever_the_env_says(monkeypatch, tmp_path, capsys):
+    from nextbox.providers import http
+    monkeypatch.setenv("NEXTBOX_ALLOW_PRIVATE_URLS", "1")
+    monkeypatch.delenv("NEXTBOX_HOSTED", raising=False)
+    assert http.allow_private() is True  # at home, for a CalDAV server on the LAN
+    monkeypatch.setenv("NEXTBOX_HOSTED", "1")
+    assert http.allow_private() is False
+    for url in ("http://10.0.0.5/dav", "https://10.0.0.5/dav", "https://169.254.169.254/latest", "https://localhost/x"):
+        with pytest.raises(Exception):
+            http.check_public_url(url)
+    # doctor says the setting is ignored here, and flags a "*" trust list.
+    monkeypatch.setenv("NEXTBOX_HOSTING", "Render")
+    settings = Settings(data_dir=tmp_path, hosted=True, forwarded_allow_ips="*")
+    doctor.run_doctor(settings, Accounts(tmp_path))
+    out = capsys.readouterr().out
+    assert "NEXTBOX_ALLOW_PRIVATE_URLS is ignored here" in out and 'NEXTBOX_FORWARDED_ALLOW_IPS is "*"' in out
+
+
+def test_spoofed_forwarded_addresses_dont_get_past_the_lockout(hosted):
+    """Through uvicorn's proxy middleware with the hosted trust list, a made-up X-Forwarded-For entry is ignored:
+    the address the host's proxy added is the one that's locked out."""
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    from nextbox.config import HOSTED_FORWARDED_ALLOW_IPS
+    ctx, a, client, p, app = hosted
+    inner = ProxyHeadersMiddleware(app, trusted_hosts=HOSTED_FORWARDED_ALLOW_IPS)
+
+    async def from_render(scope, receive, send):  # the test client connects as "testclient": stand in for 10.0.0.2
+        if scope["type"] == "http":
+            scope = {**scope, "client": ("10.0.0.2", 40000)}
+        await inner(scope, receive, send)
+    c = TestClient(from_render, base_url="https://testserver")
+    codes = []
+    for i in range(7):
+        h = {"X-Forwarded-For": f"203.0.113.{i}, 198.51.100.7", "X-Forwarded-Proto": "https"}
+        codes.append(c.post("/auth/login", json={"username": "nobody-check", "password": "wrong"}, headers=h).status_code)
+    assert codes[:5] == [401] * 5 and codes[5:] == [429, 429], codes
+
+
+def test_hosted_words_name_the_host_not_a_next_box_computer(hosted, monkeypatch):
+    ctx, a, client, p, app = hosted
+    src = Path(server.__file__).read_text()
+    assert "Shell" in server.PROTECTED_HOSTED and "Next Box computer" not in server.PROTECTED_HOSTED
+    assert "NEXTBOX_FIRST_ADMIN" in server.NO_ACCOUNTS_HOSTED and "desktop" not in server.NO_ACCOUNTS_HOSTED
+    assert "UPDATE_HINT_HOSTED if ctx.settings.hosted" in src
+    js = (WEB / "app.js").read_text()
+    assert "Only a shell on the server can change it" in js
+    # /auth/me names the host for the "what's new" line; the notice and the Terms changed for the move.
+    monkeypatch.setenv("NEXTBOX_HOSTING", "Render")
+    me = p["mike"].get("/auth/me").json()
+    assert me["hosting"] == "Render" and me["hosted"] is True
+    assert server.TERMS_VERSION == 7 and "#   7: hosted at a hosting company" in src
+    assert server.DATA_NOTICE_VERSION == 4 and "kept by this Next Box" in server.DATA_NOTICE
+    assert "computer" not in server.DATA_NOTICE
+    assert "Next Box now runs at ${me.hosting" in js
+    privacy = (WEB / "privacy.html").read_text()
+    assert "server run by <span data-operator>" in privacy
+    assert '<span data-needs="hosted" hidden> at <span data-hosting>' in privacy
+    # Someone who agreed to the Terms before the move is asked again.
+    a.record_consent("mike", server.DATA_NOTICE_VERSION, terms=6)
+    me = p["mike"].get("/auth/me").json()
+    assert me["terms_ok"] is False and me["notice_changed"] is True

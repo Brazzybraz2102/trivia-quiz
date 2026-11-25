@@ -16,6 +16,11 @@ from dotenv import load_dotenv
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 DEFAULT_FORWARDED_ALLOW_IPS = "127.0.0.1,::1"  # uvicorn: whose X-Forwarded-* headers to believe (cli.py serve)
+# Hosted, the host's own proxies hand each request over from its private network. Trusting only those
+# addresses, uvicorn reads X-Forwarded-For from the right and takes the first address that isn't one of them:
+# the one the host's front door added. Never "*": then it takes the leftmost entry, which the visitor
+# writes, and anyone could make up a new address for every guess past the per-address sign-in limits.
+HOSTED_FORWARDED_ALLOW_IPS = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1,::1"
 
 
 def _truthy(value: str | None) -> bool:
@@ -41,7 +46,8 @@ class Settings:
     # NEXTBOX_HOSTED=1: this Next Box runs at a hosting company. Every request comes from the internet, and
     # there's no printer, home network or systemd there (SPEC §35).
     hosted: bool = False
-    forwarded_allow_ips: str = DEFAULT_FORWARDED_ALLOW_IPS  # NEXTBOX_FORWARDED_ALLOW_IPS ("*" at a host)
+    # NEXTBOX_FORWARDED_ALLOW_IPS; hosted, HOSTED_FORWARDED_ALLOW_IPS when it isn't set
+    forwarded_allow_ips: str = DEFAULT_FORWARDED_ALLOW_IPS
 
     def redacted(self) -> dict:
         """Safe to print: never includes secret values."""
@@ -119,5 +125,6 @@ def load_settings(env_file: Path | None = None) -> Settings:
         retention_days=int(e("NEXTBOX_RETENTION_DAYS", "90")),
         credit=e("NEXTBOX_CREDIT", "Created by Mike")[:80],
         hosted=hosted,
-        forwarded_allow_ips=(e("NEXTBOX_FORWARDED_ALLOW_IPS") or "").strip() or DEFAULT_FORWARDED_ALLOW_IPS,
+        forwarded_allow_ips=((e("NEXTBOX_FORWARDED_ALLOW_IPS") or "").strip()
+                             or (HOSTED_FORWARDED_ALLOW_IPS if hosted else DEFAULT_FORWARDED_ALLOW_IPS)),
     )

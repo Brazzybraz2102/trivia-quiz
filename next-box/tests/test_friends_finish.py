@@ -131,7 +131,7 @@ def test_a_photo_is_decoded_only_when_it_can_be_sent_and_never_on_the_event_loop
     ctx, a, app, login = site
     where, real = [], friends.clean_photo
 
-    def spy(data):
+    def spy(data, *limit):
         try:
             asyncio.get_running_loop()
             where.append("event loop")

@@ -267,8 +267,9 @@ def test_the_script_checks_then_copies_through_stdin_and_says_the_next_steps(tmp
     assert PASSWORD not in shown and "oregon-postgres" not in shown and "SENTINEL-fernet-key" not in shown
     assert "Nothing shows while you paste" in r.stdout and "Type COPY to go ahead" in r.stdout
     assert "Done: your data is in the hosted database." in r.stdout
-    assert "Environment → NEXTBOX_SECRET_KEY" in r.stdout and f"cat {tmp_path}/data/secret.key" in r.stdout
-    assert "never into a chat, a note or a terminal on another computer" in r.stdout
+    # The key went into the Blueprint form in step 2; the end only says how to fix it, never `cat` it on screen.
+    assert "cloud-migrate.sh --copy secret" in r.stdout and "cat " not in r.stdout
+    assert "Never into a chat or a note." in r.stdout
     assert "Manual Deploy → Deploy latest commit" in r.stdout and "DEPLOY.md step 4" in r.stdout
     assert "https://nextbox.braznarkel.com/health" in r.stdout and "DEPLOY.md step 7" in r.stdout
 
@@ -298,6 +299,32 @@ def test_the_script_stops_when_the_check_fails_or_nothing_is_pasted_or_not_confi
     assert log.read_text() == f"nextbox db copy-to --check - <<< {AWAY}\n"
     r = run("--bogus")
     assert r.returncode == 1 and r.stdout.startswith("Usage:")
+    r = run("--copy", "nothing")
+    assert r.returncode == 1 and r.stdout.startswith("Usage:")
+
+
+def test_copy_puts_a_key_on_the_clipboard_and_never_on_screen(tmp_path):
+    """--copy secret / --copy anthropic: the value goes to the clipboard tool on stdin and is never printed. With no
+    clipboard (ssh), the script names the file to open instead, still without the value."""
+    run, log = _home_pc(tmp_path)
+    root = tmp_path / "nb"
+    (root / ".env").write_text('NEXTBOX_KEY=k\nANTHROPIC_API_KEY="SENTINEL-anthropic-1"\n')
+    got = tmp_path / "clipboard"
+    (tmp_path / "bin" / "xclip").write_text(f'#!/usr/bin/env bash\ncat > {got}\n')
+    (tmp_path / "bin" / "xclip").chmod(0o755)
+    r = run("--copy", "secret", DISPLAY=":0")
+    assert r.returncode == 0 and "Copied to your clipboard (not shown)" in r.stdout and "NEXTBOX_SECRET_KEY" in r.stdout
+    assert got.read_text() == "SENTINEL-fernet-key=" and "SENTINEL" not in r.stdout + r.stderr
+    assert log.read_text() == ""  # nothing asked for a database, nothing copied
+    r = run("--copy", "anthropic", DISPLAY=":0")
+    assert r.returncode == 0 and got.read_text() == "SENTINEL-anthropic-1" and "SENTINEL" not in r.stdout + r.stderr
+    # No display (over ssh): the file to open, never the value.
+    r = run("--copy", "secret")
+    assert r.returncode == 0 and "no clipboard" in r.stdout and f"{tmp_path}/data/secret.key" in r.stdout
+    assert "SENTINEL" not in r.stdout + r.stderr
+    (root / ".env").write_text("NEXTBOX_KEY=k\n")
+    r = run("--copy", "anthropic", DISPLAY=":0")
+    assert r.returncode == 1 and "There's no ANTHROPIC_API_KEY here" in r.stdout
 
 
 # --- the guide --------------------------------------------------------------------------------------------------

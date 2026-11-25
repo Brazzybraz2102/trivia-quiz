@@ -522,10 +522,13 @@ def main(argv: list[str] | None = None) -> int:
             # No access log: request lines (IP + time) would let someone match people to feedback.
             # proxy_headers: behind the Cloudflare tunnel (which connects from this computer), use the
             # visitor's real address for sign-in limits and https for cookies. Only trusted from localhost,
-            # unless NEXTBOX_FORWARDED_ALLOW_IPS says otherwise (at a hosting company, whose own proxy
-            # fronts every request, render.yaml sets "*").
+            # unless NEXTBOX_FORWARDED_ALLOW_IPS says otherwise; hosted, the host's private network only
+            # (config.HOSTED_FORWARDED_ALLOW_IPS), never "*" (the visitor writes the leftmost entry).
+            # Hosted, one process (the sign-in limits are counted in memory) behind the host's proxy: keep idle
+            # connections longer than the proxy does, and answer 503 to a burst instead of running out of memory.
+            extra = {"timeout_keep_alive": 65, "limit_concurrency": 50} if settings.hosted else {}
             uvicorn.run(build_default_app(), host=settings.host, port=settings.port, access_log=False,
-                        proxy_headers=True, forwarded_allow_ips=settings.forwarded_allow_ips)
+                        proxy_headers=True, forwarded_allow_ips=settings.forwarded_allow_ips, **extra)
             return 0
         if args.cmd == "printed":
             for r in ctx.store.list_printed(args.n, by=who):
