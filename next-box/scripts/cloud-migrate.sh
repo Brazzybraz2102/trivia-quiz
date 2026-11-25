@@ -70,7 +70,13 @@ if [[ "$MODE" == --copy ]]; then
     exit 0
   fi
   unset VALUE
-  echo "This terminal has no clipboard (over ssh, say), so open this file in a text editor and copy the value there:"
+  # A desktop without a clipboard command (Ubuntu's GNOME ships none): open the file in the text editor instead.
+  if [[ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]] && command -v xdg-open >/dev/null && xdg-open "$FILE" >/dev/null 2>&1; then
+    echo "This computer has no clipboard command, so the file is opening in your text editor instead. Copy the value"
+    echo "there, paste it into Render's form as $NAME, then close the editor without saving:"
+  else
+    echo "This terminal has no clipboard (over ssh, say), so open this file in a text editor and copy the value there:"
+  fi
   echo "  $FILE"
   if [[ "$FILE" == *.env ]]; then echo "  (the part after $NAME= on its line; close the editor without saving)"; fi
   echo "Paste it only into Render's form as $NAME, never into a chat. If it ever shows in this terminal, run: clear"

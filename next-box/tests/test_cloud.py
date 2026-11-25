@@ -325,5 +325,6 @@ def test_the_container_files_do_not_hold_a_secret_value():
         assert "token" not in text.lower() or name == "render.yaml"  # render.yaml explains what NEXTBOX_KEY is
 
 
-def test_version_is_not_bumped_by_the_container_work():
-    assert config.app_version() == "2.1.3"
+def test_this_is_the_release_that_can_be_hosted():
+    """2.2.0: the first version with hosted mode, the container and the Blueprint (DEPLOY.md)."""
+    assert config.app_version() == "2.2.0"

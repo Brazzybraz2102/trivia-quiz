@@ -322,6 +322,14 @@ def test_copy_puts_a_key_on_the_clipboard_and_never_on_screen(tmp_path):
     r = run("--copy", "secret")
     assert r.returncode == 0 and "no clipboard" in r.stdout and f"{tmp_path}/data/secret.key" in r.stdout
     assert "SENTINEL" not in r.stdout + r.stderr
+    # A desktop without a clipboard command (Ubuntu's GNOME): the file opens in the text editor, still without the value.
+    opened = tmp_path / "opened"
+    (tmp_path / "bin" / "xclip").write_text("#!/usr/bin/env bash\nexit 1\n")
+    (tmp_path / "bin" / "xdg-open").write_text(f'#!/usr/bin/env bash\necho "$1" > {opened}\n')
+    (tmp_path / "bin" / "xdg-open").chmod(0o755)
+    r = run("--copy", "secret", DISPLAY=":0")
+    assert r.returncode == 0 and "opening in your text editor" in r.stdout and f"{tmp_path}/data/secret.key" in r.stdout
+    assert opened.read_text().strip() == f"{tmp_path}/data/secret.key" and "SENTINEL" not in r.stdout + r.stderr
     (root / ".env").write_text("NEXTBOX_KEY=k\n")
     r = run("--copy", "anthropic", DISPLAY=":0")
     assert r.returncode == 1 and "There's no ANTHROPIC_API_KEY here" in r.stdout

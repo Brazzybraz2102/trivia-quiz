@@ -61,8 +61,8 @@ Check: the Dashboard shows an empty workspace and your GitHub name at the top ri
      ~/.local/share/nextbox/app/scripts/cloud-migrate.sh --copy secret
      ```
      It puts the line on the clipboard without showing it; click into Render's field and paste (Ctrl+V). It never
-     goes to Claude, a chat or a note. (Over ssh, without a clipboard, the script names the file to open in a text
-     editor instead; copy the line from there and close the editor.)
+     goes to Claude, a chat or a note. (If the computer has no clipboard command, the script opens the file in your
+     text editor instead: copy the line, paste it into the field, and close the editor without saving.)
    - `ANTHROPIC_API_KEY`: the same way, `~/.local/share/nextbox/app/scripts/cloud-migrate.sh --copy anthropic`,
      then paste. (Snap and the AI helpers; with no key at home, leave it empty and the app says so.)
    - `NEXTBOX_CONTACT`: how people reach you with questions (an email address, say), shown on the Privacy and About
@@ -230,7 +230,9 @@ sudo systemctl disable --now cloudflared
 ```
 The first line writes the same "moved away" marker `scripts/move-out.sh` writes, so Next Box refuses to start at
 home (also after a reboot, or an `update.sh` out of habit) and `doctor` says it moved. The tunnel stays
-installed but off; it was in a broken state anyway. Home Assistant's morning print stops (the key `NEXTBOX_KEY`
+installed but off; it was in a broken state anyway. The old desktop (`BraznarkelAI`) may still run the tunnel program
+too: there as well, `sudo systemctl disable --now cloudflared` (after step 4.2 its route is gone, so it reaches
+nothing either way). Home Assistant's morning print stops (the key `NEXTBOX_KEY`
 in Home Assistant is for the home network only, and a hosted Next Box refuses it from the internet); it comes
 back with the print helper. Changed your mind? `~/.local/share/nextbox/app/scripts/move-out.sh --undo` turns
 the home copy back on, but it refuses while Next Box answers at `nextbox.braznarkel.com`, so stop using the hosted
