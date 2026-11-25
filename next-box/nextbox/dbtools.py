@@ -536,22 +536,165 @@ def batch_for(table, batch: int) -> int:
     return batch
 
 
+# --- copying into another database: PostgreSQL at home (scripts/setup-postgres.sh) or at a hosting company
+# (scripts/cloud-migrate.sh, DEPLOY.md) -----------------------------------------------------------------------
+LOCAL_HOSTS = {"", "localhost", "127.0.0.1", "::1"}
+# Tables Next Box fills by itself the first time it starts: its one-time clean-up flags (upkeep, `_upkeep:*` in
+# server_settings), the activity log and the automatic print's day. A hosted Next Box that was started once but
+# never had an account holds only these; the copy replaces them with the home database's own.
+BOOKKEEPING = ("events", "server_settings", "auto_guard")
+PEOPLE_WORDS = {"users": "account", "households": "household", "tasks": "My list task", "journal": "journal page",
+                "tickets": "ticket", "scans": "read-back", "printers": "printer", "friend_notes": "friends' note",
+                "wins": "win", "invites": "invite", "sessions": "signed-in device", "tags": "tag"}
+NOT_A_URL = ("That doesn't look like a database address. It should start with postgresql:// "
+             "(on Render: the database page → Connect → External Database URL).")
+_URL_IN_TEXT = re.compile(r"(?:postgres(?:ql)?|sqlite)(?:\+\w+)?://\S+")
+_BACKGROUND = re.compile(r"\s*\(Background on this error at: \S+\)")
+
+
+def _plural(n: int, word: str) -> str:
+    return f"1 {word}" if n == 1 else f"{n} {word}s"
+
+
+def what_is_there(rows: dict) -> str:
+    """'3 accounts, 12 My list tasks and 1 journal page' from {table: rows}: accounts first, then the rest."""
+    parts = [_plural(rows[t], word) for t, word in PEOPLE_WORDS.items() if rows.get(t)]
+    parts += [f"{n} rows in {t}" for t, n in rows.items() if n and t not in PEOPLE_WORDS and t not in BOOKKEEPING]
+    if not parts:
+        return "nothing"
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
+def cloud_url(url: str) -> str:
+    """A database address as a hosting company gives it, ready for Next Box: `postgres://` (Render, Heroku) becomes
+    `postgresql://`, and `sslmode=require` is added when the server is on another computer and the address doesn't
+    say (hosting companies refuse unencrypted connections). An address that can't be read is refused with a plain
+    sentence that never repeats it (it holds the password)."""
+    url = (url or "").strip()
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    try:
+        parsed = make_url(url)
+        backend = parsed.get_backend_name()
+    except Exception:
+        raise ValueError(NOT_A_URL) from None
+    if backend == "postgresql":
+        if (parsed.host or "") not in LOCAL_HOSTS and "sslmode" not in parsed.query:
+            parsed = parsed.update_query_dict({"sslmode": "require"})
+    elif backend != "sqlite":
+        raise ValueError(f"That isn't a PostgreSQL address (it starts with {backend}). {NOT_A_URL}")
+    return parsed.render_as_string(hide_password=False)
+
+
+def mask_secret(message, url: str = "") -> str:
+    """An error's words with any database address and its password blanked, so what a server or a library said
+    can be shown without ever showing the password (SQLAlchemy's "Background on this error" link goes too)."""
+    words = str(getattr(message, "orig", None) or message)
+    if url:
+        words = words.replace(url, "<database address>")
+        try:
+            password = make_url(url).password
+        except Exception:
+            password = None
+        if password:
+            from urllib.parse import quote
+            for form in {password, quote(password, safe="")}:
+                words = words.replace(form, "<password>")
+    words = _URL_IN_TEXT.sub("<database address>", words)
+    return _BACKGROUND.sub("", words).strip()
+
+
+def check_target(url: str) -> dict:
+    """`nextbox db copy-to --check`: connect and look, copy nothing, create nothing. The answer:
+    reachable (bool) and, when not, problem (the server's words, masked); server ("PostgreSQL 16.15" or "SQLite");
+    ssl (True/False, None for SQLite); tables (how many of Next Box's exist); rows ({table: n} for those with rows);
+    bookkeeping (rows in BOOKKEEPING tables only: a Next Box that started once); empty (no people's data)."""
+    from sqlalchemy import create_engine
+    report = {"reachable": False, "server": "", "ssl": None, "tables": 0, "rows": {}, "bookkeeping": 0, "empty": True}
+    engine = create_engine(db._engine_url(url))
+    try:
+        with engine.connect() as conn:
+            report["reachable"] = True
+            if engine.dialect.name == "postgresql":
+                version = str(conn.execute(text("SELECT version()")).scalar() or "PostgreSQL")
+                report["server"] = " ".join(version.split()[:2])
+                try:
+                    report["ssl"] = bool(conn.execute(
+                        text("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")).scalar())
+                except Exception:
+                    report["ssl"] = None
+            else:
+                report["server"] = "SQLite"
+            have = set(inspect(engine).get_table_names())
+            for table in db.metadata.sorted_tables:
+                if table.name not in have:
+                    continue
+                report["tables"] += 1
+                n = conn.execute(select(func.count()).select_from(table)).scalar() or 0
+                if n:
+                    report["rows"][table.name] = n
+                    if table.name in BOOKKEEPING:
+                        report["bookkeeping"] += n
+                    else:
+                        report["empty"] = False
+    except Exception as exc:
+        report["problem"] = mask_secret(exc, url)
+    finally:
+        engine.dispose()
+    return report
+
+
+def describe_check(report: dict) -> list[str]:
+    """The --check report, one plain line per question. Never the address."""
+    if not report["reachable"]:
+        return [f"Reachable:  no. {report.get('problem', '')}".rstrip(),
+                "Check the address (on Render: the database page → Connect → External Database URL) and that this "
+                "computer is online. Nothing was copied."]
+    lines = [f"Reachable:  yes ({report['server']})"]
+    if report["ssl"] is None and report["server"] == "SQLite":
+        lines.append("Encrypted:  not needed (a file on this computer)")
+    elif report["ssl"]:
+        lines.append("Encrypted:  yes (SSL)")
+    elif report["ssl"] is None:
+        lines.append("Encrypted:  couldn't tell")
+    else:
+        lines.append("Encrypted:  NO. Add ?sslmode=require to the end of the address.")
+    if not report["empty"]:
+        lines.append(f"Empty:      NO. It already has {what_is_there(report['rows'])}. "
+                     "Copy only into an empty database: nothing would be copied.")
+    elif report["bookkeeping"]:
+        lines.append(f"Empty:      yes. Next Box started there once and left {report['bookkeeping']} bookkeeping "
+                     "rows (its own start-up notes, no accounts); the copy replaces them.")
+    elif report["tables"]:
+        lines.append("Empty:      yes. Next Box's tables are there with nothing in them.")
+    else:
+        lines.append("Empty:      yes. Next Box's tables aren't there yet; the copy makes them.")
+    return lines
+
+
 def copy_database(source_url: str, target_url: str, batch: int = 500) -> dict:
-    """Copy every row from one database to another (e.g. the SQLite file into a new, empty
-    PostgreSQL database). The target must be empty, so nothing is ever overwritten."""
+    """Copy every row of every table (pictures included: journal photos, friends' drawings and photos, ticket
+    images) from one database to another (e.g. the SQLite file into a new, empty PostgreSQL database, at home or at
+    a hosting company). The target must be empty, so nothing is ever overwritten: only a hosted Next Box's own
+    start-up rows (BOOKKEEPING) may be there, and they're replaced. All or nothing, and the copy is counted again on
+    the target before it's kept. Returns {table: rows copied}."""
     src, dst = db.database(source_url), db.database(target_url)
     with dst.connect() as conn:
-        busy = [t.name for t in db.metadata.sorted_tables
-                if conn.execute(select(func.count()).select_from(t)).scalar()]
+        there = {t.name: conn.execute(select(func.count()).select_from(t)).scalar() or 0
+                 for t in db.metadata.sorted_tables}
+    busy = {name: n for name, n in there.items() if n and name not in BOOKKEEPING}
     if busy:
-        raise RuntimeError(f"the target database isn't empty (it has {', '.join(busy)}); "
-                           "nothing was copied")
+        raise RuntimeError(f"That database isn't empty: it already has {what_is_there(busy)}, so nothing was "
+                           "copied. Copy only into an empty database.")
     counts = {}
     # PostgreSQL: every table is read from one snapshot (REPEATABLE READ), so a copy taken while Next Box
     # runs still fits together, and rows stream from the server instead of all sitting in memory.
     with src.connect() as s_conn, dst.begin() as d_conn:  # all or nothing
         if src.dialect.name == "postgresql":
             s_conn = s_conn.execution_options(isolation_level="REPEATABLE READ")
+        for name, n in there.items():
+            if n:  # a hosted Next Box's own start-up rows: the home database's come in their place
+                d_conn.execute(db.metadata.tables[name].delete())
         for table in db.metadata.sorted_tables:
             n = 0
             size = batch_for(table, batch)
@@ -569,4 +712,10 @@ def copy_database(source_url: str, target_url: str, batch: int = 500) -> dict:
                     d_conn.execute(text(
                         f"SELECT setval(pg_get_serial_sequence('\"{table.name}\"', '{col}'), "
                         f"COALESCE((SELECT MAX(\"{col}\") FROM \"{table.name}\"), 0) + 1, false)"))
+        # Count again on the target before anything is kept: a row that didn't arrive undoes the whole copy.
+        for table in db.metadata.sorted_tables:
+            got = d_conn.execute(select(func.count()).select_from(table)).scalar() or 0
+            if got != counts[table.name]:
+                raise RuntimeError(f"The copy didn't check out: {table.name} has {got} rows there but "
+                                   f"{counts[table.name]} here, so nothing was kept. Run it again.")
     return counts

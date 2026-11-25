@@ -2,7 +2,8 @@
 
 Print your to-do list on a thermal label printer. Mark it up with a pen, snap a photo, and the
 changes go back to your list. Everything runs on your desktop: on your home network, or online
-through your own Cloudflare Tunnel (see [Online](#online-at-nextboxbraznarkelcom-cloudflare-tunnel)).
+through your own Cloudflare Tunnel (see [Online](#online-at-nextboxbraznarkelcom-cloudflare-tunnel)),
+or at a hosting company (see [Hosted on Render](#hosted-on-render) and `DEPLOY.md`).
 
 **Printers:**
 - Brother QL / PT
@@ -281,11 +282,22 @@ From the command line:
 .venv/bin/nextbox doctor                      # checks the setup and says what to fix
 ```
 
+## Hosted on Render
+Next Box can run at a hosting company instead of on a computer at home: Render builds it from the
+code (the Blueprint `render.yaml`), gives it a PostgreSQL database, and `nextbox.braznarkel.com` points
+there. `DEPLOY.md` is the step-by-step guide: the Render account, the Blueprint, moving the data over
+from the home server (`scripts/cloud-migrate.sh`, which copies everything into the empty hosted
+database through a hidden prompt and never shows the address), the domain, testers, costs, and what to
+do with the home server afterwards. On a hosted Next Box (`NEXTBOX_HOSTED=1`) there is no printer and
+no home network: everyone prints from their phone with **Print on paper** or **Save label image**, and
+the shared `NEXTBOX_KEY` is refused.
+
 ## Online at nextbox.braznarkel.com (Cloudflare Tunnel)
-Testers open `https://nextbox.braznarkel.com` on their phones. A Cloudflare Tunnel carries it to
-this computer; nothing on your router changes. The shared `NEXTBOX_KEY` (Home Assistant) only works
-on the home network, the API explorer is off (`NEXTBOX_API_DOCS=1` turns it on), and sign-in limits
-use each visitor's real address.
+There are two ways to be online: a Cloudflare Tunnel from a computer at home (this section), or hosted
+at Render (`DEPLOY.md`, above). Either way testers open `https://nextbox.braznarkel.com` on their
+phones. With the tunnel, Cloudflare carries it to this computer; nothing on your router changes. The
+shared `NEXTBOX_KEY` (Home Assistant) only works on the home network, the API explorer is off
+(`NEXTBOX_API_DOCS=1` turns it on), and sign-in limits use each visitor's real address.
 
 Cloudflare renames things now and then. These are the names in late 2026, with the old ones in
 parentheses once: the tunnels are under **Zero Trust → Networks → Tunnels** (newer dashboards:

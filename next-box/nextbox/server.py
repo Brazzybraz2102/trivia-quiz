@@ -297,11 +297,12 @@ class PrinterBody(BaseModel):
 # Shown to everyone once; their "I understand" is recorded. Bump the version if it changes.
 # (Saying the journal stays private shows the admin nothing more, so that line needed no bump; the same
 # goes for notes between friends, which the admin can't see either.)
-DATA_NOTICE_VERSION = 3
+# 4: "kept on this Next Box computer" became "kept by this Next Box": true at home and when hosted (SPEC §35).
+DATA_NOTICE_VERSION = 4
 DATA_NOTICE = ("The admin can see how you use Next Box: your printed tickets (including the tasks on "
                "them), photo read-backs, settings, activity, signed-in devices, and how many open tasks "
-               "are on your built-in list (not what they say). Tasks on your built-in list are kept on "
-               "this Next Box computer. Your journal stays private, even from the admin. So do the "
+               "are on your built-in list (not what they say). Tasks on your built-in list are kept by "
+               "this Next Box. Your journal stays private, even from the admin. So do the "
                "notes you send your friends: no admin screen shows them or who your friends are. Your password and "
                "your to-do app password or token are never visible to anyone, and feedback stays anonymous.")
 
@@ -344,7 +345,7 @@ class SignupBody(BaseModel):
     agree: bool = False  # the Terms of Use and Privacy Policy
 
 
-TERMS_VERSION = 6  # bump when terms.html or privacy.html change in a way people should re-read
+TERMS_VERSION = 7  # bump when terms.html or privacy.html change in a way people should re-read
 #   2: the Privacy Policy covers the Journal (photos and handwriting kept, private to you) and says
 #      Claude (Anthropic) reads your handwriting as well as your marks.
 #   3: with Journal mode off, a photo with handwriting (notes or a win) is still kept as a journal page.
@@ -352,7 +353,22 @@ TERMS_VERSION = 6  # bump when terms.html or privacy.html change in a way people
 #   5: Snap also sends the marks you use (each symbol, its action and your words for what it means).
 #   6: Friends: what's kept when you add friends and send notes, doodles, photos and hearts, who sees them
 #      (only the two of you), 30 days unless kept, and that a note prints only when you tap Print.
+#   7: hosted at a hosting company (Render), which runs the server and keeps the database, so everything
+#      Next Box keeps is stored there; the short version says "a server", not "a computer" (SPEC §35).
 DB_NAMES = {"sqlite": "SQLite", "postgresql": "PostgreSQL"}  # for the About page
+
+# Hosted mode (Settings.hosted, SPEC §35): the shared key has no home network to work on, and the owner adds the
+# AI key where the host keeps its settings, not in a .env file (coach.NO_KEY_OWNER says .env and systemctl).
+KEY_HOSTED = "The shared Next Box key doesn't work on a hosted Next Box: sign in with an account instead."
+NO_KEY_OWNER_HOSTED = ("This needs an AI key. Add ANTHROPIC_API_KEY in your host's environment settings "
+                       "(console.anthropic.com → API keys), then redeploy.")
+# There's no Next Box computer to run `nextbox ...` on: the host's own shell for the service is (DEPLOY.md §8).
+PROTECTED_HOSTED = ("That's the protected admin. Only a shell on the server can change it: your host's "
+                    "dashboard → the Next Box service → Shell, then nextbox user ….")
+NO_ACCOUNTS_HOSTED = ("no accounts yet: set NEXTBOX_FIRST_ADMIN=username:password in your host's environment "
+                      "settings, redeploy, sign in, then delete it")
+UPDATE_HINT = "(On the Next Box computer: scripts/update.sh)"
+UPDATE_HINT_HOSTED = "(Hosted: redeploy the latest code from your host's dashboard.)"
 
 
 class InviteBody(BaseModel):
@@ -398,7 +414,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             # Always check for a newer copy, so an update shows up right away on phones and through
             # Cloudflare (which otherwise keeps .js files for hours).
             response.headers["Cache-Control"] = "no-cache"
-        if request.url.scheme == "https":  # reached through the Cloudflare address: https only from now on
+        # Reached through the Cloudflare address, or hosted (always behind the host's https): https only from now on.
+        if request.url.scheme == "https" or ctx.settings.hosted:
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault("Content-Security-Policy",
@@ -417,6 +434,11 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     build = _build_id()
     _migrate_feedback(events, feedback_store, accounts)
     upkeep.run_startup_fixes(accounts.db, ctx.store)
+    # NEXTBOX_FIRST_ADMIN="username:password": the first superadmin of an empty database (a hosted Next Box
+    # has nobody to run `nextbox user add` before the first sign-in). Nothing of the value is logged.
+    first = upkeep.first_admin(accounts, os.environ.get("NEXTBOX_FIRST_ADMIN"))
+    if first:
+        events.log(first, "first_admin", kind="audit", detail={"role": "superadmin"})
     # In memory, per person: photo read-backs cost money; calendar and app checks reach other servers.
     scan_window, calendar_window, connect_window = _Window(30, 3600), _Window(20, 3600), _Window(20, 3600)
     # Downloading the whole journal builds a big file: 10 an hour. One day's page to print: 60.
@@ -446,6 +468,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     def auth(request: Request, x_nextbox_key: str | None = Header(default=None)) -> Caller:
         if x_nextbox_key:
+            if ctx.settings.hosted:  # there is no home network: the key works nowhere
+                raise HTTPException(403, KEY_HOSTED)
             if from_internet(request):
                 # Home Assistant and scripts are on the home network. The shared key never works
                 # through the public address, so it can't be guessed from outside.
@@ -471,8 +495,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
                       household=user["household_id"])
 
     def from_internet(request: Request) -> bool:
-        """Came in through Cloudflare (it adds these headers; a home-network request never has them)."""
-        return any(h in request.headers for h in ("cf-connecting-ip", "cf-ray", "cdn-loop"))
+        """Came in through Cloudflare (it adds these headers; a home-network request never has them), or this
+        Next Box is hosted (SPEC §35): then every request is from the internet."""
+        return ctx.settings.hosted or any(h in request.headers for h in ("cf-connecting-ip", "cf-ray", "cdn-loop"))
 
     def require(min_role: str):
         def dep(caller: Caller = Depends(auth)) -> Caller:
@@ -508,8 +533,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         """The protected admin is changed only from the Next Box computer (`nextbox user ...`),
         so another superadmin can't reset, sign out, move or lock out the owner."""
         if target_name == accounts.protected() and caller.name != target_name:
-            raise HTTPException(400, "That's the protected admin. Only the Next Box computer can change it "
-                                     "(nextbox user …).")
+            raise HTTPException(400, PROTECTED_HOSTED if ctx.settings.hosted else
+                                "That's the protected admin. Only the Next Box computer can change it "
+                                "(nextbox user …).")
 
     # -------------------------------------------------------------- running
     def acting_as(caller: Caller) -> str:
@@ -525,8 +551,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     def prints_here(household: str) -> bool:
         """Labels go straight to a label printer: Home, or a household with a printer of its own. Anyone
-        else prints from their own device for now (jobs.PRINT_AWAY), and the app words things to match."""
-        return jobs.prints_here(household, registry.all(household))
+        else prints from their own device for now (jobs.PRINT_AWAY), and the app words things to match.
+        Nobody on a hosted Next Box (jobs.PRINT_AWAY_HOSTED)."""
+        return jobs.prints_here(household, registry.all(household), ctx.settings.hosted)
 
     def rctx(caller: Caller) -> Context:
         s = server_settings.get()
@@ -712,8 +739,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def _set_cookie(response: Response, request: Request, token: str) -> None:
         # Lax (not Strict) so coming back from "Sign in with Google" keeps you signed in. Cross-site
         # writes are still refused: browsers don't send Lax cookies on them, and auth() checks Origin.
+        # Secure through the public address (the proxy's X-Forwarded-Proto, trusted by `nextbox serve`), and
+        # always when hosted: a hosted Next Box is only ever reached over the host's https.
         response.set_cookie(COOKIE, token, max_age=30 * 86400, httponly=True, samesite="lax",
-                            secure=request.url.scheme == "https", path="/")
+                            secure=ctx.settings.hosted or request.url.scheme == "https", path="/")
 
     @app.post("/auth/logout")
     def logout(request: Request, response: Response):
@@ -730,6 +759,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         name = accounts.session_user(_token(request))
         if not name:
             raise HTTPException(401, "sign in required" if accounts.has_users()
+                                else NO_ACCOUNTS_HOSTED if ctx.settings.hosted
                                 else "no accounts yet: run `nextbox user add <name>` on the desktop")
         user = accounts.get(name)
         s = server_settings.get()
@@ -738,7 +768,9 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return {"username": name, "role": user["role"], "beta": user["beta"], "debug": user["debug"],
                 "household_id": user["household_id"], "email": user.get("email"), "version": _version(),
                 "household": (accounts.household(user["household_id"]) or {}).get("name", ""),
-                "prints_here": jobs.prints_here(user["household_id"], printers),
+                "prints_here": jobs.prints_here(user["household_id"], printers, ctx.settings.hosted),
+                "hosted": ctx.settings.hosted,  # runs at a hosting company: no printer here, nothing to add
+                "hosting": os.environ.get("NEXTBOX_HOSTING", "").strip()[:80] if ctx.settings.hosted else "",
                 # The same printing flags as GET /status, so the app's Preview only box is right as soon as
                 # this answers, before /status (which waits up to 2 s on whether the printer is online).
                 "printers": len(printers),
@@ -793,14 +825,18 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def about(request: Request):
         """Public facts for the About, Privacy and Terms pages (no sign-in needed)."""
         # Through the public address, Cloudflare carries the traffic even if NEXTBOX_HOSTING was never set.
-        hosting = os.environ.get("NEXTBOX_HOSTING", "").strip()[:80] or ("Cloudflare" if from_internet(request) else "")
+        # Hosted (SPEC §35): NEXTBOX_HOSTING names the company that runs the server and keeps the database.
+        hosted = ctx.settings.hosted
+        hosting = os.environ.get("NEXTBOX_HOSTING", "").strip()[:80] or (
+            "the hosting company" if hosted else "Cloudflare" if from_internet(request) else "")
         return {"name": "Next Box", "version": _version(), "build": build,
                 "operator": os.environ.get("NEXTBOX_OPERATOR", "").strip() or "Braznarkel",
                 "contact": os.environ.get("NEXTBOX_CONTACT", "").strip(),
                 "retention_days": ctx.settings.retention_days, "terms_version": TERMS_VERSION,
                 # What this copy really runs on, so the pages never name a database or host it doesn't use.
                 "database": DB_NAMES.get(accounts.db.dialect.name, accounts.db.dialect.name),
-                "hosting": hosting}
+                "hosting": hosting,
+                "hosted": hosted}  # privacy.html adds "also runs the server and keeps its database"
 
     @app.get("/version")
     def version():
@@ -980,9 +1016,13 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
         def as_tuple(v):
             return tuple(int(x) for x in re.findall(r"\d+", v or "0")[:3])
+        if ctx.settings.hosted:  # the host builds the branch it watches: nothing to run by hand
+            how = f"{os.environ.get('NEXTBOX_HOSTING', '').strip() or 'The host'} redeploys when the branch is pushed."
+        else:
+            how = "On the Next Box computer: ~/.local/share/nextbox/app/scripts/update.sh"
         return {"current": current, "latest": latest,
                 "update_available": bool(latest) and as_tuple(latest) > as_tuple(current),
-                "how": "On the Next Box computer: ~/.local/share/nextbox/app/scripts/update.sh"}
+                "how": how}
 
     @app.get("/auth/sessions")
     def my_sessions(caller: Caller = Depends(person)):
@@ -1112,9 +1152,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             "printing_paused": s["printing_paused"],
             "prints_here": prints_here(household_of(caller)),
             # How many printers this household has (0: "No printer added"), and whether this person can
-            # add one in Admin → Printers. Who may add printers is unchanged: admins and staff.
+            # add one in Admin → Printers. Who may add printers is unchanged: admins and staff, never when hosted.
             "printers": len(everyone),
-            "can_add_printer": rank(caller.role) >= rank("admin"),
+            "can_add_printer": rank(caller.role) >= rank("admin") and not ctx.settings.hosted,
+            "hosted": ctx.settings.hosted,  # the app's hosted wording, and no "Add a printer" anywhere
         }
 
     @app.get("/tasks")
@@ -1126,6 +1167,8 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     def p_today(body: TodayBody, caller: Caller = Depends(auth)):
         if body.source not in {"manual", "auto"}:
             raise HTTPException(400, "source must be manual or auto")
+        if body.source == "auto" and ctx.settings.hosted:  # Home Assistant's walk-in print: nothing here to print to
+            raise HTTPException(403, jobs.AUTO_PRINT_HOSTED)
         return run(caller, f"print_today_{body.source}", jobs.print_today, rctx(caller),
                    source=body.source, dry_run=body.dry_run)
 
@@ -1255,7 +1298,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         steps = [{"key": k, "done": bool(done.get(k)) or k in dismissed, "skipped": k in dismissed and not done.get(k)}
                  for k in SETUP_STEPS]
         return {"steps": steps, "hidden": bool(caller.prefs.get("setup_hidden")),
-                "can_add_printer": rank(caller.role) >= rank("admin"),
+                "can_add_printer": rank(caller.role) >= rank("admin") and not ctx.settings.hosted,
                 "printers": len(registry.all(caller.household)),  # 0: the printer step says "No printer added."
                 "all_done": all(s["done"] for s in steps)}
 
@@ -1764,15 +1807,22 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(415, scan.HEIC_HELP)
         if media_type not in {"image/jpeg", "image/png", "image/webp", "image/gif", *scan.HEIC_TYPES}:
             raise HTTPException(415, f"unsupported image type {media_type}")
+        # Decoding and the read-back both run in a worker thread, never on the event loop: one Snap (up to a
+        # minute with the AI) must not hold up everyone else's requests, /health included (a host restarts a
+        # server whose health check stops answering). The decode takes one of the picture slots, like a friend's
+        # photo, so memory stays bounded; the AI call holds none.
+        await _picture_slot()
         try:
-            data, media_type = scan.prepare_photo(data)  # upright, resized JPEG
+            data, media_type = await run_in_threadpool(scan.prepare_photo, data, max_photo_pixels)  # upright JPEG
         except scan.PhotoError as exc:
             raise HTTPException(415, str(exc)) from exc
         except ValueError as exc:  # something the person can fix: an empty list, a bad date
             raise HTTPException(400, str(exc)) from exc
+        finally:
+            picture_slots.release()
         c = rctx(caller)
         fn = vision or scan.claude_vision(ctx.settings, mark_styles.effective(c.prefs))  # their own marks
-        rec = run(caller, "scan", scan.scan_photo, c, fn, data, media_type, label_id or None)
+        rec = await run_in_threadpool(run, caller, "scan", scan.scan_photo, c, fn, data, media_type, label_id or None)
         return _scan_reply(caller, rec)
 
     def _scan_reply(caller: Caller, rec: dict) -> dict:
@@ -1939,8 +1989,10 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         return vision is not None or bool(ctx.settings.anthropic_api_key)
 
     def no_key(caller: Caller) -> str:
-        """No AI key: the owner is told how to add one, everyone else who to ask."""
-        return coaching.NO_KEY_OWNER if caller.role == "superadmin" else coaching.NO_KEY
+        """No AI key: the owner is told how to add one (where, depends on where Next Box runs), everyone else who to ask."""
+        if caller.role != "superadmin":
+            return coaching.NO_KEY
+        return NO_KEY_OWNER_HOSTED if ctx.settings.hosted else coaching.NO_KEY_OWNER
 
     def helper(caller: Caller) -> coaching.Coach:
         if not caller.prefs.get("ai_helpers", True):
@@ -2268,8 +2320,20 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     note_preview_window = _Window(300, 3600)     # "how it prints" while composing
     note_photo_preview_window = _Window(120, 3600)  # ...of a photo: each one is decoded (the app sends a small copy)
     # Pictures are decoded and re-encoded off the server's event loop (in a worker thread), two at a time at
-    # most, so one big photo never holds up anyone else's requests and memory stays bounded.
-    picture_slots = threading.BoundedSemaphore(2)
+    # most (one when hosted), so one big photo never holds up anyone else's requests and memory stays bounded.
+    # Snap's photo too (do_scan). A hosted Next Box has 512 MB in all: one slot there (a 24 MP HEIC peaks near
+    # 180 MB while it decodes), and PNG and HEIC photos, which decode whole, are capped lower
+    # (scan.HOSTED_MAX_PIXELS); a JPEG decodes small at any size.
+    picture_slots = threading.BoundedSemaphore(1 if ctx.settings.hosted else 2)
+    max_photo_pixels = scan.HOSTED_MAX_PIXELS if ctx.settings.hosted else scan.MAX_PIXELS
+
+    async def _picture_slot() -> None:
+        """Wait (without a thread) for one of the picture slots; the caller releases it."""
+        deadline = time.monotonic() + 60
+        while not picture_slots.acquire(blocking=False):
+            if time.monotonic() > deadline:
+                raise HTTPException(503, "Next Box is busy with other pictures. Try again in a moment.")
+            await asyncio.sleep(0.05)
     TOO_MANY_NOTES = (f"That's {friendship.NOTES_PER_DAY} notes in the last 24 hours, the most for a day. "
                       "Try again later.")
 
@@ -2320,7 +2384,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             import qrcode
         except ImportError:  # updated without its packages: the link itself still works
             raise HTTPException(503, "The QR code isn't ready on this Next Box yet: copy or share the link instead. "
-                                     "(On the Next Box computer: scripts/update.sh)") from None
+                                     + (UPDATE_HINT_HOSTED if ctx.settings.hosted else UPDATE_HINT)) from None
         link = _friend_link(request, _privately(caller, "friend_qr", friendship.Friends(accounts.db, caller.name).code))
         qr = qrcode.QRCode(border=4, box_size=10, error_correction=qrcode.constants.ERROR_CORRECT_M)
         qr.add_data(link)
@@ -2410,11 +2474,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             raise HTTPException(400, "Pick a photo first." if kind == "photo" else "Draw something first.")
         limit = friendship.PHOTO_UPLOAD if kind == "photo" else friendship.DOODLE_UPLOAD
         # Wait for a picture slot first: a waiting upload holds neither a worker thread nor its 15 MB.
-        deadline = time.monotonic() + 60
-        while not picture_slots.acquire(blocking=False):
-            if time.monotonic() > deadline:
-                raise HTTPException(503, "Next Box is busy with other pictures. Try again in a moment.")
-            await asyncio.sleep(0.05)
+        await _picture_slot()
         try:
             chunks, size = [], 0
             while chunk := await image.read(1 << 20):
@@ -2431,9 +2491,11 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
             picture_slots.release()
 
     def _clean_picture(kind: str, data: bytes) -> bytes:
-        """In a worker thread, never on the event loop (_upload holds one of the two picture slots)."""
+        """In a worker thread, never on the event loop (_upload holds a picture slot)."""
         try:
-            return friendship.clean_photo(data) if kind == "photo" else friendship.clean_doodle(data)
+            if kind == "photo":  # hosted: a PNG or HEIC at most scan.HOSTED_MAX_PIXELS (it decodes whole)
+                return friendship.clean_photo(data, max_photo_pixels if ctx.settings.hosted else None)
+            return friendship.clean_doodle(data)
         except friendship.FriendError as exc:
             raise HTTPException(exc.status, exc.message) from None
 
@@ -2637,8 +2699,15 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
     # Both only listen or read, never print. Only staff, or an admin of Home: the Next Box computer's network is
     # Home's, so a friend's household can't find (or read) their own printers from here (jobs.PRINT_AWAY).
     def _may_look(caller: Caller) -> None:
+        if ctx.settings.hosted:  # the host has no home network to look at (SPEC §35): off for everyone
+            raise HTTPException(403, jobs.NO_NETWORK_HOSTED)
         if _restricted(caller):
             raise HTTPException(403, jobs.PRINT_AWAY)
+
+    def _no_printers_here() -> None:
+        """Hosted: nothing prints at the host, so there's no printer to add or change there."""
+        if ctx.settings.hosted:
+            raise HTTPException(403, jobs.NO_PRINTER_HERE_HOSTED)
 
     @app.post("/admin/printers/discover")
     def discover_printers(caller: Caller = Depends(admin_only)):
@@ -2663,6 +2732,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.post("/admin/printers")
     def add_printer(body: PrinterBody, caller: Caller = Depends(admin_only)):
+        _no_printers_here()
         try:
             cfg = registry.add(body.model_dump(exclude_none=True), caller.household, restricted=_restricted(caller))
         except PrinterError as exc:
@@ -2672,6 +2742,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
 
     @app.patch("/admin/printers/{pid}")
     def edit_printer(pid: str, body: PrinterBody, caller: Caller = Depends(admin_only)):
+        _no_printers_here()
         changes = body.model_dump(exclude_none=True)
         try:
             cfg = registry.update(pid, changes, caller.household, restricted=_restricted(caller))
@@ -2759,7 +2830,7 @@ def create_app(ctx: Context, vision: scan.VisionFn | None = None,
         response = RedirectResponse(url, status_code=303)
         # Only this browser can finish it: a consent link sent to someone else fails at the callback.
         response.set_cookie(OAUTH_COOKIE, nonce, max_age=600, httponly=True, samesite="lax",
-                            secure=request.url.scheme == "https", path="/connect/")
+                            secure=ctx.settings.hosted or request.url.scheme == "https", path="/connect/")
         return response
 
     @app.get("/connect/{app_name}/callback")
@@ -3652,7 +3723,7 @@ def build_default_app() -> FastAPI:
     if marker is not None:  # moved to another PC (scripts/move-out.sh): this copy's data is old
         print(moved_away_message(marker), file=sys.stderr)
         raise SystemExit(MOVED_EXIT)
-    if not settings.server_key:
+    if not settings.server_key and not settings.hosted:  # hosted: the shared key works nowhere, so it's optional
         raise SystemExit("NEXTBOX_KEY is not set in .env; refusing to start an unauthenticated server")
     store = Store(settings.data_dir)
     store.prune(settings.retention_days)

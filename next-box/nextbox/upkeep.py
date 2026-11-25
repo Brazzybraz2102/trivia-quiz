@@ -20,6 +20,7 @@ answered fade after 30 days, and friends' rows naming an account that's gone are
 """
 from __future__ import annotations
 
+import sys
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import func, insert, select, update
@@ -28,11 +29,37 @@ from sqlalchemy.exc import IntegrityError
 
 from . import db
 from . import friends
+from .auth import AuthError
 from .journal import Journal, Slides, Wins
 from .mylist import LocalTasks, Tags, is_local
 
 # Not people: what the CLI and Home Assistant print as before any account exists. Left alone.
 NOT_ACCOUNTS = frozenset({"", "cli", "key"})
+
+# NEXTBOX_FIRST_ADMIN was set but isn't usable. Says what the shape is, never what was typed.
+FIRST_ADMIN_BAD = ("NEXTBOX_FIRST_ADMIN must be username:password (a username of 2-32 small letters, digits, . _ -, "
+                   "then a password of 8 or more characters), so no account was made")
+
+
+def first_admin(accounts, spec: str | None) -> str | None:
+    """NEXTBOX_FIRST_ADMIN="username:password" (SPEC §35): on a database with no accounts at all, make that
+    account the first superadmin, so a hosted Next Box can be signed in to before anyone has a shell to run
+    `nextbox user add`. With any account already there it does nothing, however long the variable stays set
+    (the deploy guide says to delete it afterwards). The password is a one-time one: the first sign-in asks for
+    a new one, since the host's settings page showed it. Nothing of the value is logged or printed. Returns the
+    username made, or None."""
+    if not spec or not spec.strip() or accounts.has_users():
+        return None
+    username, sep, password = spec.strip().partition(":")
+    if not sep:
+        print(FIRST_ADMIN_BAD, file=sys.stderr)
+        return None
+    try:
+        accounts.create(username, password, role="superadmin", must_change=True)
+    except AuthError:
+        print(FIRST_ADMIN_BAD, file=sys.stderr)
+        return None
+    return username.strip().lower()
 
 
 def forget_data(engine: Engine, store, username: str) -> None:

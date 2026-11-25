@@ -471,7 +471,9 @@ class Friends:
 
 
 # --- pictures ------------------------------------------------------------------------------------
-def _open(data: bytes, formats: set[str], what: str, max_pixels: int, edge: int | None = None):
+def _open(data: bytes, formats: set[str], what: str, max_pixels: int, edge: int | None = None,
+          whole_max: int | None = None):
+    """whole_max: a lower pixel limit for pictures that decode whole (not a JPEG): a hosted Next Box's."""
     from PIL import Image
 
     from .scan import HEIC_HELP, MAX_PIXELS, heic_supported
@@ -484,6 +486,8 @@ def _open(data: bytes, formats: set[str], what: str, max_pixels: int, edge: int 
             raise FriendError(f"That file isn't a {what} Next Box can use. Try a JPEG or PNG.", 415)
         if img.width * img.height > max_pixels:
             raise FriendError(f"That {what} is far too large.", 413)
+        if whole_max and fmt not in ("JPEG", "MPO") and img.width * img.height > whole_max:
+            raise FriendError(f"That {what} is too big for Next Box. Share it as a JPEG, or take a smaller one.", 413)
         if edge and fmt in ("JPEG", "MPO") and max(img.size) > edge:
             # A big JPEG is decoded at 1/2, 1/4 or 1/8 of its size, still at least `edge` on its long side:
             # a phone's 12 MP photo decodes about four times faster, and it's shrunk to `edge` anyway.
@@ -512,7 +516,7 @@ def _flatten(img):
     return img.convert("RGB")
 
 
-def clean_photo(data: bytes) -> bytes:
+def clean_photo(data: bytes, whole_max: int | None = None) -> bytes:
     """A photo as Next Box keeps it: turned upright, at most PHOTO_EDGE on its long side, re-encoded as a
     plain JPEG of about PHOTO_BYTES, with nothing of the original file kept (no EXIF, so no location, no
     camera details, no ICC profile, no XMP). Anything that isn't a picture is refused."""
@@ -521,7 +525,7 @@ def clean_photo(data: bytes) -> bytes:
         raise FriendError("That photo is too big. Pick one under 15 MB.", 413)
     if not data:
         raise FriendError("Pick a photo first.")
-    img = _open(data, PHOTO_FORMATS, "photo", 50_000_000, edge=PHOTO_EDGE)
+    img = _open(data, PHOTO_FORMATS, "photo", 50_000_000, edge=PHOTO_EDGE, whole_max=whole_max)
     img = _flatten(ImageOps.exif_transpose(img))
     img.thumbnail((PHOTO_EDGE, PHOTO_EDGE))
     fresh = Image.new("RGB", img.size, "white")

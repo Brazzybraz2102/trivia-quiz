@@ -204,7 +204,7 @@ def test_the_app_says_the_same_words_from_one_constant():
                           ("Settings printers", '$("#noPrinterNext").textContent'),
                           ("Get started", "  printer: { title:"),
                           ("setup answer", "function quizSummary"),
-                          ("Admin printers", '$("#prAway").textContent = PRINT_AWAY')):
+                          ("Admin printers", '$("#prAway").textContent = hosted() ? PRINT_AWAY_HOSTED : PRINT_AWAY')):
         chunk = js[js.index(marker):js.index(marker) + 900]
         assert "PRINT_AWAY" in chunk and ("printsHere()" in chunk or "printerAway()" in chunk), where
     # The header. Home without a printer said "Previews · print on paper"; it says "No printer added" now

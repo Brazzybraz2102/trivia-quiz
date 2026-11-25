@@ -367,8 +367,8 @@ def test_spec_names_every_table_and_what_export_and_wins_really_do():
     assert "journal photos (`journal/*.jpg`)" in spec
     assert "`task_done` events + My list `done_at`" not in spec and "(`wins` table, `journal.Wins`" in spec
     assert "Label colors, Printing" in spec and "`scan_ready: false`" in spec and "NO_KEY_OWNER" in spec
-    # §1 rule 6 and the top line (LAN only) are Mike's to change: not edited here.
-    assert "6. **LAN only**" in spec
+    # §1 rule 6: "LAN only" became "home network or hosted" (SPEC §35), at Mike's request for the hosted move.
+    assert "6. **Home network or hosted, nothing in between**" in spec and "LAN only" not in spec.split("## 2.")[0]
 
 
 def test_claude_md_records_the_ai_and_wins_rules():

@@ -1,0 +1,106 @@
+# Next Box on Render: one Docker web service plus one PostgreSQL database, as a Render Blueprint.
+# This file lives in next-box/, not at the repository root. When you create the Blueprint in the Render
+# Dashboard (New → Blueprint → the trivia-quiz repo, branch claude/ticket-todoist-printer-nldz8a), type
+# next-box/render.yaml in the "Blueprint Path" field. Render has taken a custom path since February 9, 2026,
+# and an existing Blueprint's path can be changed under its Settings; without one it looks for render.yaml at
+# the repository root: https://render.com/changelog/blueprints-now-support-custom-filenames-and-paths
+#
+# Checked on 2026-11-24 against Render's own pages through a web search. The pages themselves could not be
+# opened from the machine that wrote this, so each fact below is what the search engine quoted from the page
+# named, and "unverified" marks what no result settled. Open the page to check any of it.
+# - The Blueprint YAML reference, https://render.com/docs/blueprint-spec (its JSON schema:
+#   https://render.com/schema/render.yaml.json; `render blueprints validate` checks a file against it): a
+#   service has type, name, runtime, plan, branch, rootDir, dockerfilePath (default ./Dockerfile),
+#   dockerContext, healthCheckPath, autoDeploy, domains ("web services and static sites only: a list of custom
+#   domains"; the .onrender.com address keeps working) and envVars, each with value, generateValue ("a random
+#   256-bit value", made once), sync: false (you type the value in the Dashboard; it never goes in this file) or
+#   fromDatabase; a top-level databases list has name, plan, databaseName and user (both optional; "Render may
+#   add a suffix").
+# - fromDatabase with property connectionString = the database's internal connection string:
+#   https://render.com/tutorials/postgres-on-render/wiring-with-fromdatabase
+# - rootDir says where a service's code lives in the repository; dockerfilePath and dockerContext are then
+#   relative to it: https://render.com/docs/monorepo-support
+# - Plans: "starter" is 512 MB RAM and 0.5 CPU and runs without sleeping; since August 26, 2026 its new id is
+#   0.5c-512mb, and Blueprints "continue to support legacy plan names" at the same price:
+#   https://render.com/docs/compute-plans-update, https://render.com/docs/compute-plans. Its price: paid web
+#   services "start at $7 a month for 512 MB", per https://render.com/docs/compute-plans and
+#   https://render.com/hosting/python ("Always On from $7/mo"), as quoted by the search engine. The free web
+#   service (512 MB, 0.1 CPU) "sleeps after 15 minutes without inbound traffic", wakes on the next request,
+#   "which takes about a minute", may be restarted at any time, and loses its disk every time:
+#   https://render.com/docs/free, which lists custom domains among what a free web service supports (each domain
+#   beyond a workspace's included number costs $0.25/month; the included number: unverified).
+# - PostgreSQL: basic-256mb is $6/month for 0.1 CPU, 256 MB and 100 connections, with storage billed on top at
+#   $0.30 per GB per month (a Render article, https://render.com/articles/saas-hosting-cost, which puts a Starter
+#   service plus a basic-256mb database at about $13/month): https://render.com/pricing,
+#   https://render.com/docs/postgresql-refresh. A free
+#   database has 1 GB, "expires 30 days after creation", then gives 14 days to upgrade before it is deleted with
+#   its data, and a workspace gets one at a time: https://render.com/docs/free
+# - A web service must listen on 0.0.0.0 and the port in PORT, 10000 by default: https://render.com/docs/web-services
+# - healthCheckPath: a check passes on a 2xx or 3xx answer within five seconds; a new deploy that keeps failing
+#   for 15 minutes is cancelled and the old version keeps running; a running instance that fails for 15 seconds
+#   gets no traffic, and after 60 seconds Render restarts it: https://render.com/docs/health-checks
+# - Custom domain on Cloudflare DNS: a CNAME to the service's onrender.com address with Proxy status "DNS only",
+#   so Render can verify the domain and issue its certificate (Render makes and renews it):
+#   https://render.com/docs/configure-cloudflare-dns, https://render.com/docs/custom-domains. Switching the
+#   record to Proxied afterwards: unverified, so leave it on DNS only.
+# - From outside Render (the one-time data copy, DEPLOY.md): the database's External URL, and Render "rejects
+#   external connections that set sslmode=disable", so add ?sslmode=require to it:
+#   https://render.com/docs/postgresql-creating-connecting
+# Unverified tonight: the region names (none is set, so Render's default applies), the postgresMajorVersion
+# values (Render's default applies), and whether a sync: false variable may be left empty on the first sync.
+
+services:
+  - type: web
+    name: nextbox
+    runtime: docker
+    plan: starter                       # $7/month, always on; its new id is 0.5c-512mb. "free" sleeps after 15 idle minutes.
+    branch: claude/ticket-todoist-printer-nldz8a
+    autoDeploy: true                    # every push to that branch deploys (it goes live only once /health answers)
+    rootDir: next-box                   # this folder; the two paths below are relative to it
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    domains:
+      - nextbox.braznarkel.com          # then, in Cloudflare DNS: CNAME nextbox → the onrender.com address, "DNS only"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nextbox-db
+          property: connectionString
+      - key: NEXTBOX_KEY                # the shared X-NextBox-Key (Home Assistant, scripts). A hosted Next Box
+        generateValue: true             # refuses it (SPEC §35), so nothing here uses it; it may be left out. Kept
+                                        # so the same image also starts at home, where the server insists on one.
+      - key: NEXTBOX_SECRET_KEY         # locks people's saved to-do app connections: the one line of the home
+        sync: false                     # PC's secret.key, pasted into the Blueprint form (DEPLOY.md step 2; the
+                                        # migration script puts it on the clipboard, never on screen). Starting
+                                        # from nothing: any 32+ random characters. Asked for once, so a later
+                                        # Blueprint sync never puts a different value over it.
+      - key: NEXTBOX_HOSTED
+        value: "1"                      # at a hosting company: no printer here, every request is from the internet
+      - key: NEXTBOX_FORWARDED_ALLOW_IPS  # whose X-Forwarded-For to believe: Render's proxies, which reach the
+        value: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1,::1"  # service from private addresses
+                                        # (unverified which). Never "*": the visitor writes the leftmost entry
+                                        # and could dodge the per-address sign-in limits. DEPLOY.md step 4 checks it.
+      - key: NEXTBOX_HOSTING
+        value: Render                   # named on the Privacy and About pages
+      - key: NEXTBOX_PUBLIC_URL
+        value: https://nextbox.braznarkel.com
+      - key: NEXTBOX_OPERATOR
+        value: Braznarkel               # who runs this Next Box, on the Privacy and About pages
+      - key: NEXTBOX_CONTACT            # NEEDS MIKE: the support address the Privacy and About pages show. Asked
+        sync: false                     # for in the Dashboard on the first sync; left empty, the pages say
+                                        # "ask the person who invited you". Never an address in this public file.
+      - key: TZ
+        value: America/New_York         # "today" and due dates turn over at Mike's midnight, not UTC's
+      - key: ANTHROPIC_API_KEY          # Snap and the AI helpers. Asked for on the first sync; leave it
+        sync: false                     # empty if you don't have one yet (Snap and the helpers say so).
+
+databases:
+  - name: nextbox-db
+    plan: basic-256mb                   # $6/month plus storage. "free" is deleted 30 + 14 days after creation (see above).
+    databaseName: nextbox
+    user: nextbox
+    # ipAllowList is left at Render's default (every address, with the database's password and TLS) so the
+    # one-time copy from the home PC works (DEPLOY.md step 3). Afterwards DEPLOY.md step 3 closes it:
+    # Dashboard → nextbox-db → Access Control. (Starting from nothing instead of copying? NEXTBOX_FIRST_ADMIN,
+    # DEPLOY.md "Starting from nothing", made by hand on the Environment page, not here.)

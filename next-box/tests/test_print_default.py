@@ -259,7 +259,7 @@ def test_every_real_print_still_asks_first(js):
 def dry_script(js, body):
     return f"""
 const RANK = {{ user: 0, admin: 1, superadmin: 2 }};
-{const(js, "PRINT_AWAY")}
+{const(js, "PRINT_AWAY")}{const(js, "PRINT_AWAY_HOSTED")}{const(js, "hosted")}
 let me = null, statusNow = null;
 const els = {{}};
 const $ = (id) => (els[id] ||= {{ checked: false, disabled: false, dataset: {{}}, textContent: "", changes: 0,
@@ -379,7 +379,7 @@ def test_the_settings_card_says_no_printer_added(html, js):
 def labels_script(js, body):
     return f"""
 const RANK = {{ user: 0, admin: 1, superadmin: 2 }};
-{const(js, "PRINT_AWAY")}
+{const(js, "PRINT_AWAY")}{const(js, "PRINT_AWAY_HOSTED")}{const(js, "hosted")}
 let me = null, printOpts = null, opts = null;
 const els = {{}};
 const $ = (id) => (els[id] ||= {{ hidden: false, textContent: "", innerHTML: "", value: "", classList: {{ toggle() {{}} }} }});
